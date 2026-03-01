@@ -74,9 +74,9 @@ class VideoSettings:
 class AudioSettings:
     include_audio: bool = True
     amplify_audio: bool = True
+    amplify_db: float = 6.0             # Verstärkung in dB (volume-Filter)
     audio_suffix: str = ""
     audio_bitrate: str = "192k"
-    compand_points: str = "-70/-60|-30/-10"
 
 
 @dataclass

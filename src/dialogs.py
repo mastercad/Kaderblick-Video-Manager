@@ -2,7 +2,8 @@
 
 from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QVBoxLayout,
-    QHBoxLayout, QSpinBox, QComboBox, QCheckBox, QLineEdit, QLabel,
+    QHBoxLayout, QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QLineEdit,
+    QLabel,
 )
 
 from .settings import AppSettings, PROFILES
@@ -245,9 +246,23 @@ class AudioSettingsDialog(QDialog):
         self.include_cb.setChecked(aus.include_audio)
         form.addRow("", self.include_cb)
 
-        self.amplify_cb = QCheckBox("Audio verstärken (compand + loudnorm)")
+        self.amplify_cb = QCheckBox("Audio verstärken")
         self.amplify_cb.setChecked(aus.amplify_audio)
         form.addRow("", self.amplify_cb)
+
+        self.amplify_db_spin = QDoubleSpinBox()
+        self.amplify_db_spin.setRange(-10.0, 30.0)
+        self.amplify_db_spin.setSingleStep(1.0)
+        self.amplify_db_spin.setDecimals(1)
+        self.amplify_db_spin.setSuffix(" dB")
+        self.amplify_db_spin.setValue(aus.amplify_db)
+        self.amplify_db_spin.setToolTip(
+            "Verstärkung in Dezibel.\n"
+            "+6 dB ≈ doppelte Lautstärke, 0 = unverändert.\n"
+            "Anschließend wird loudnorm (EBU R128) angewendet.")
+        self.amplify_db_spin.setEnabled(aus.amplify_audio)
+        self.amplify_cb.toggled.connect(self.amplify_db_spin.setEnabled)
+        form.addRow("Verstärkung:", self.amplify_db_spin)
 
         self.suffix_edit = QLineEdit(aus.audio_suffix)
         self.suffix_edit.setPlaceholderText('z.B. "_normalized"')
@@ -257,9 +272,6 @@ class AudioSettingsDialog(QDialog):
         self.bitrate_combo.addItems(["96k", "128k", "192k", "256k", "320k"])
         self.bitrate_combo.setCurrentText(aus.audio_bitrate)
         form.addRow("Audio-Bitrate:", self.bitrate_combo)
-
-        self.compand_edit = QLineEdit(aus.compand_points)
-        form.addRow("Compand-Punkte:", self.compand_edit)
 
         group.setLayout(form)
         layout.addWidget(group)
@@ -276,9 +288,9 @@ class AudioSettingsDialog(QDialog):
         aus = self.settings.audio
         aus.include_audio = self.include_cb.isChecked()
         aus.amplify_audio = self.amplify_cb.isChecked()
+        aus.amplify_db = self.amplify_db_spin.value()
         aus.audio_suffix = self.suffix_edit.text()
         aus.audio_bitrate = self.bitrate_combo.currentText()
-        aus.compand_points = self.compand_edit.text()
         self.settings.save()
         self.accept()
 

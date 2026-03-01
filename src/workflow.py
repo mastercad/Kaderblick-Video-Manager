@@ -64,7 +64,8 @@ class WorkflowSource:
 
     # ── Etappe 2: Verarbeitung (wird VOR Download konfiguriert) ─
     merge_audio_video: bool = True    # Audio + Video zusammenführen
-    amplify_audio: bool = False       # Audioverstärkung (compand+loudnorm)
+    amplify_audio: bool = False       # Audioverstärkung
+    amplify_db: float = 6.0           # Verstärkung in dB
     audio_sync: bool = False          # Frame-Drop-Korrektur
     output_filename: str = ""         # "{name}" → wird beim Konvertieren ersetzt
 

@@ -1,9 +1,11 @@
 # Fussballverein – Video Manager
 
-Grafische Oberfläche für die MJPEG-Konvertierung und den Download von Videos von Raspberry Pi
-Kamera-Systemen (Kaderblick). Bietet eine komfortable Qt-GUI (PySide6) mit Jobliste, Profilen,
-GPU-Beschleunigung, Raspberry Pi Download, Halbzeit-Zusammenführung, persistenten Einstellungen,
-Hintergrund-Verarbeitung und einem **Workflow-Assistenten** für zusammengesetzte Aufträge.
+Grafische Oberfläche für die Video-Konvertierung und den Download von Videos von Raspberry Pi
+Kamera-Systemen (Kaderblick). Unterstützt sowohl MJPEG-Rohstreams (Pi-Kameras) als auch reguläre
+Video-Container (MP4, MKV, AVI, MOV) mit eingebetteter Tonspur. Bietet eine komfortable Qt-GUI
+(PySide6) mit Jobliste, Profilen, GPU-Beschleunigung, Raspberry Pi Download,
+Halbzeit-Zusammenführung, persistenten Einstellungen, Hintergrund-Verarbeitung und einem
+**Workflow-Assistenten** für zusammengesetzte Aufträge.
 
 Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_credentials.md)
 
@@ -26,6 +28,7 @@ Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_cred
 - **Abbruch-Funktion** – Laufende Konvertierungen oder Downloads abbrechen
 - **YouTube-Upload** – Automatischer Upload mit Playlist-Verwaltung (Playlist wird bei Bedarf angelegt)
 - **Download → Konvertierung → Upload** – Durchgängige Pipeline: Pi-Downloads, Konvertierung und YouTube-Upload in einem Durchlauf
+- **Container-Unterstützung** – Neben MJPEG-Rohstreams auch MP4/MKV/AVI/MOV mit eingebetteter Tonspur. Leise Aufnahmen können direkt verstärkt werden (konfigurierbar in dB)
 - **Workflow-Assistent** – Zwei-Etappen-Baukasten: Quellen zusammenstellen (Pi-Kameras, lokale Dateien/Ordner) und pro Quelle die Verarbeitung vorkonfigurieren (Encoding-Profile, Audio, YouTube-Upload, Ausgabedateiname) – auch bevor die Dateien existieren
 
 ---
@@ -70,6 +73,30 @@ sudo pacman -S ffmpeg
 python main.py
 ```
 
+### Kommandozeilen-Optionen
+
+| Option | Beschreibung |
+|---|---|
+| `--cameras-config PFAD` | Importiert die Kamera-Konfiguration aus einer `cameras.yaml` und überschreibt die gespeicherten Kameradaten. |
+| `--workflow PFAD` | Lädt eine Workflow-JSON-Datei und führt sie nach dem Start automatisch aus. |
+| `--add DATEI [DATEI …]` | Fügt die angegebenen Dateien (oder alle Dateien in Ordnern) beim Start in die Jobliste ein. |
+| `--restore-session` | Erzwingt die Wiederherstellung der letzten Jobliste (unabhängig von der Einstellung). |
+| `--no-restore-session` | Unterdrückt die Session-Wiederherstellung. |
+| `-h`, `--help` | Zeigt die Hilfe mit allen Optionen an. |
+
+**Beispiele:**
+
+```bash
+# Workflow direkt aus der Kommandozeile starten
+python main.py --workflow data/workflows/spieltag.json
+
+# Kamera-YAML importieren und Session erzwingen
+python main.py --cameras-config config/cameras.yaml --restore-session
+
+# Dateien vorladen
+python main.py --add /pfad/zu/video1.mjpg /pfad/zu/video2.mjpeg
+```
+
 ---
 
 ## Projektstruktur
@@ -93,7 +120,7 @@ video-manager/
 ├── src/                            <- Anwendungspaket
 │   ├── __init__.py
 │   ├── app.py                      <- Hauptfenster (QMainWindow)
-│   ├── converter.py                <- Konvertierungslogik und Job-Datenklasse
+│   ├── converter.py                <- Konvertierungslogik (MJPEG + Container) und Job-Datenklasse
 │   ├── delegates.py                <- Fortschrittsbalken in der Tabelle
 │   ├── diagnostics.py              <- GPU- und System-Diagnose
 │   ├── dialogs.py                  <- Einstellungs- und Bearbeitungsdialoge
@@ -101,7 +128,7 @@ video-manager/
 │   ├── download_worker.py          <- Worker-Thread: Download (rsync/SFTP)
 │   ├── downloader.py               <- Download-Logik (rsync primär, SFTP Fallback)
 │   ├── encoder.py                  <- Encoder-Auflösung und ffmpeg-Argumente
-│   ├── ffmpeg_runner.py            <- ffmpeg-Prozesssteuerung
+│   ├── ffmpeg_runner.py            <- ffmpeg-Prozesssteuerung und ffprobe-Helfer
 │   ├── merge.py                    <- Halbzeiten zusammenführen
 │   ├── settings.py                 <- Einstellungen, Profile, Persistenz
 │   ├── worker.py                   <- Worker-Thread: Konvertierung
@@ -304,12 +331,17 @@ so angepasst, dass Video-Dauer = Audio-Dauer.
 | Einstellung | Standard | Beschreibung |
 |-------------|----------|--------------|
 | **Audio einbinden** | an | Ob die WAV-Datei eingebunden werden soll |
-| **Audio verstärken** | an | Wendet compand+loudnorm Filterchain an |
+| **Audio verstärken** | an | Wendet volume + loudnorm Filterchain an |
+| **Verstärkung** | 6.0 dB | Verstärkung in Dezibel (+6 dB ≈ doppelte Lautstärke, 0 = unverändert). Anschließend wird loudnorm (EBU R128) angewendet |
 | **Audio-Suffix** | _(leer)_ | Suffix für alternative WAV-Dateien (z. B. `_normalized`) |
 | **Audio-Bitrate** | 192k | AAC-Bitrate (96k, 128k, 192k, 256k, 320k) |
-| **Compand-Punkte** | `-70/-60\|-30/-10` | Dynamische Kompressions-Kennlinie |
 
 Wenn die WAV-Datei einen abweichenden Namen hat: MJPG `aufnahme.mjpg` + Suffix `_norm` → sucht `aufnahme_norm.wav`.
+
+> **Eingebettete Tonspur:** Bei Videodateien mit bereits enthaltener Audiospur (z. B. MP4, MKV)
+wird keine externe WAV-Datei benötigt. Die eingebettete Tonspur wird automatisch erkannt und
+kann mit dem konfigurierbaren dB-Wert verstärkt werden. Ohne Verstärkung wird die Audiospur
+1:1 übernommen (`-c:a copy`).
 
 ### Einstellungen → YouTube
 
@@ -387,13 +419,13 @@ Zeigt eine kompakte **Übersichtstabelle** aller Quellen mit den wichtigsten Ver
 |--------|--------|
 | **Name** | Quellname mit Typ-Icon |
 | **Encoding** | Encoder, Preset und CRF |
-| **Audio** | Merge- und Verstärkungs-Status |
+| **Audio** | Merge-, Verstärkungs-Status (inkl. dB-Wert) und Sync |
 | **YouTube** | YouTube-Version und Upload-Status |
 | **Ausgabe** | Ausgabedateiname (falls konfiguriert) |
 
 Per **Doppelklick** auf eine Zeile öffnet sich ein **Bearbeitungsdialog** mit allen Optionen:
 
-- **Verarbeitung:** Audio+Video zusammenführen, Audio verstärken, Audio-Sync (für alle Quelltypen verfügbar –
+- **Verarbeitung:** Audio+Video zusammenführen, Audio verstärken (mit konfigurierbarem dB-Wert), Audio-Sync (für alle Quelltypen verfügbar –
   auch für lokale Quellen, z. B. Pi-Aufnahmen über NAS oder externe Platte)
 - **Profil-Schnellauswahl:** Buttons für jedes Profil (KI Auswertung, YouTube, Benutzerdefiniert) –
   setzt Encoder, Preset, CRF und Format mit einem Klick
@@ -474,9 +506,9 @@ Die Datei kann manuell bearbeitet werden – ungültige Werte werden durch Stand
   "audio": {
     "include_audio": true,
     "amplify_audio": true,
+    "amplify_db": 6.0,
     "audio_suffix": "",
-    "audio_bitrate": "192k",
-    "compand_points": "-70/-60|-30/-10"
+    "audio_bitrate": "192k"
   },
   "youtube": {
     "create_youtube": false,

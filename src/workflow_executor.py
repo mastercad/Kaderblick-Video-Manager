@@ -373,8 +373,8 @@ class WorkflowExecutor(QObject):
         """Erzeugt eine AppSettings-Kopie mit quellenspezifischen Werten.
 
         Die globalen Settings werden als Basis genommen und die pro-Quelle
-        Werte darüber geschrieben. So bleiben Einstellungen wie Audio-Bitrate,
-        Compand-Punkte etc. erhalten, während Encoder/CRF/Preset pro Quelle
+        Werte darüber geschrieben. So bleiben Einstellungen wie Audio-Bitrate
+        etc. erhalten, während Encoder/CRF/Preset pro Quelle
         unterschiedlich sein können.
         """
         from dataclasses import replace
@@ -402,6 +402,7 @@ class WorkflowExecutor(QObject):
         # Audio
         s.audio.include_audio = src.merge_audio_video
         s.audio.amplify_audio = src.amplify_audio
+        s.audio.amplify_db = src.amplify_db
 
         # YouTube
         s.youtube.create_youtube = src.create_youtube

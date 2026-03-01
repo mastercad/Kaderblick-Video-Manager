@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QVBoxLayout, QHBoxLayout, QFormLayout,
     QGroupBox, QLabel, QPushButton, QStackedWidget, QWidget,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QCheckBox, QComboBox, QSpinBox, QLineEdit, QFileDialog,
+    QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit, QFileDialog,
     QMessageBox, QScrollArea, QFrame, QSizePolicy, QRadioButton,
     QButtonGroup,
 )
@@ -377,9 +377,27 @@ class _ProcessingEditDialog(QDialog):
             "Bei Einzeldateien wird der explizit angegebene Audio-Pfad genutzt.")
         proc_form.addRow("", self._merge_cb)
 
-        self._amplify_cb = QCheckBox("Audio verstärken (compand + loudnorm)")
+        self._amplify_cb = QCheckBox("Audio verstärken")
         self._amplify_cb.setChecked(source.amplify_audio)
-        proc_form.addRow("", self._amplify_cb)
+
+        self._amplify_db_spin = QDoubleSpinBox()
+        self._amplify_db_spin.setRange(-10.0, 30.0)
+        self._amplify_db_spin.setSingleStep(1.0)
+        self._amplify_db_spin.setDecimals(1)
+        self._amplify_db_spin.setSuffix(" dB")
+        self._amplify_db_spin.setValue(source.amplify_db)
+        self._amplify_db_spin.setToolTip(
+            "Verstärkung in Dezibel.\n"
+            "+6 dB ≈ doppelte Lautstärke, 0 = unverändert.\n"
+            "Anschließend wird loudnorm (EBU R128) angewendet.")
+        self._amplify_db_spin.setEnabled(source.amplify_audio)
+        self._amplify_cb.toggled.connect(self._amplify_db_spin.setEnabled)
+
+        amplify_row = QHBoxLayout()
+        amplify_row.addWidget(self._amplify_cb)
+        amplify_row.addWidget(self._amplify_db_spin)
+        amplify_row.addStretch()
+        proc_form.addRow("", amplify_row)
 
         self._sync_cb = QCheckBox("Audio-Video-Sync (Frame-Drop-Korrektur)")
         self._sync_cb.setChecked(source.audio_sync)
@@ -403,7 +421,7 @@ class _ProcessingEditDialog(QDialog):
                 cb.setToolTip(_no_audio_tip)
             self._amplify_cb.setToolTip(
                 "Verstärkt die eingebettete Tonspur der Videodatei\n"
-                "mit compand + loudnorm (ffmpeg Audio-Filter).")
+                "mit volume + loudnorm (ffmpeg Audio-Filter).")
 
         layout.addLayout(proc_form)
 
@@ -549,6 +567,7 @@ class _ProcessingEditDialog(QDialog):
         s = self._source
         s.merge_audio_video = self._merge_cb.isChecked()
         s.amplify_audio = self._amplify_cb.isChecked()
+        s.amplify_db = self._amplify_db_spin.value()
         s.audio_sync = self._sync_cb.isChecked()
         s.encoder = self._encoder_combo.currentData()
         s.preset = self._preset_combo.currentText()
@@ -823,7 +842,7 @@ class WorkflowWizard(QDialog):
             if src.merge_audio_video:
                 audio_parts.append("Merge")
             if src.amplify_audio:
-                audio_parts.append("Verstärken")
+                audio_parts.append(f"Verstärken ({src.amplify_db:+.0f} dB)")
             if src.audio_sync:
                 audio_parts.append("Sync")
             self._proc_table.setItem(
@@ -997,6 +1016,7 @@ class WorkflowWizard(QDialog):
         src.preset = self._settings.video.preset
         src.fps = self._settings.video.fps
         src.amplify_audio = self._settings.audio.amplify_audio
+        src.amplify_db = self._settings.audio.amplify_db
 
         dlg = _SourceEditDialog(self, self._settings, src)
         if dlg.exec():
@@ -1038,6 +1058,7 @@ class WorkflowWizard(QDialog):
                     preset=self._settings.video.preset,
                     fps=self._settings.video.fps,
                     amplify_audio=self._settings.audio.amplify_audio,
+                    amplify_db=self._settings.audio.amplify_db,
                 )
                 self._workflow.sources.append(src)
                 added += 1

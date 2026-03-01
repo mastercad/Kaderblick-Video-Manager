@@ -170,7 +170,7 @@ def run_convert(job: ConvertJob, settings: AppSettings,
     elif has_embedded_audio:
         log(f"Audio:    eingebettete Tonspur")
         if aus.amplify_audio:
-            log(f"          → wird verstärkt (compand + loudnorm)")
+            log(f"          → wird verstärkt (volume +{aus.amplify_db:.0f} dB + loudnorm)")
 
     # Dauer der Eingabedatei ermitteln (für Fortschrittsanzeige)
     # Bevorzugt: Audio-Datei (hat zuverlässige Dauer)
@@ -238,9 +238,8 @@ def run_convert(job: ConvertJob, settings: AppSettings,
         cmd += ["-c:v", "mjpeg", "-q:v", "2", "-r", str(vs.fps)]
 
     # Audio-Handling
-    _amplify_filter = (
-        f"compand=attacks=0.3:decays=0.8"
-        f":points={aus.compand_points},loudnorm")
+    # Filter-Kette: volume (Verstärkung) → loudnorm (EBU R128)
+    _amplify_filter = f"volume={aus.amplify_db}dB,loudnorm"
 
     if wav_path:
         # Externe Audio-Datei → re-encode zu AAC

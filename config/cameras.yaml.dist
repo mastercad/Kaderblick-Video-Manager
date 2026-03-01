@@ -1,5 +1,6 @@
 # Konfiguration: Raspberry Pi Kamera-Quellen und Download-Ziel
-# Pfad kann in der GUI oder per --cameras-config überschrieben werden
+# Diese Datei kann per --cameras-config PFAD beim Start importiert werden,
+# oder über Einstellungen → Kameras → „cameras.yaml importieren" in der GUI.
 
 # Zielverzeichnis auf dem lokalen Rechner
 destination: /media/andreas/Seagate Expansion Drive/Videos/Fussballverein Wurgwitz/

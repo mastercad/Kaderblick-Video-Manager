@@ -1,5 +1,6 @@
 """Haupt-GUI des MJPEG Converters (QMainWindow)."""
 
+import argparse
 import time
 from pathlib import Path
 from typing import Optional
@@ -30,7 +31,7 @@ from .workflow_executor import WorkflowExecutor
 
 
 class ConverterApp(QMainWindow):
-    def __init__(self):
+    def __init__(self, cli_args: argparse.Namespace | None = None):
         super().__init__()
         self.setWindowTitle("MJPEG Converter")
         self.resize(960, 640)
@@ -42,6 +43,11 @@ class ConverterApp(QMainWindow):
             self.setWindowIcon(QIcon(str(_icon_path)))
 
         self.settings = AppSettings.load()
+
+        # --cameras-config: YAML importieren und Kameradaten überschreiben
+        if cli_args and cli_args.cameras_config:
+            self._apply_cameras_config(cli_args.cameras_config)
+
         self.jobs: list[ConvertJob] = []
         self._worker: Optional[ConvertWorker] = None
         self._thread: Optional[QThread] = None
@@ -57,9 +63,86 @@ class ConverterApp(QMainWindow):
         self._build_central()
         self._build_statusbar()
 
-        # Session wiederherstellen
-        if self.settings.restore_session:
+        # Session wiederherstellen (CLI-Flags überschreiben Einstellung)
+        restore = self.settings.restore_session
+        if cli_args and cli_args.restore_session:
+            restore = True
+        elif cli_args and cli_args.no_restore_session:
+            restore = False
+        if restore:
             self._restore_session()
+
+        # --add: Dateien in die Jobliste laden
+        if cli_args and cli_args.add:
+            self._apply_add_files(cli_args.add)
+
+        # --workflow: Workflow laden und automatisch starten
+        self._cli_workflow: str | None = (
+            cli_args.workflow if cli_args else None)
+
+    def showEvent(self, event):  # noqa: N802
+        """Startet CLI-Workflow beim ersten show (UI muss bereit sein)."""
+        super().showEvent(event)
+        if self._cli_workflow:
+            wf_path = self._cli_workflow
+            self._cli_workflow = None  # nur einmal ausführen
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: self._apply_workflow(wf_path))
+
+    # ──────────────────────────────────────────────────────────
+    #  CLI-Helfer
+    # ──────────────────────────────────────────────────────────
+    def _apply_cameras_config(self, yaml_path: str):
+        """Importiert Kamera-Daten aus YAML und überschreibt gespeicherte."""
+        from .downloader import import_from_yaml
+        p = Path(yaml_path)
+        if not p.exists():
+            print(f"[WARN] --cameras-config: Datei nicht gefunden: {p}")
+            return
+        try:
+            cam = import_from_yaml(str(p))
+            self.settings.cameras = cam
+            self.settings.save()
+        except Exception as exc:
+            print(f"[WARN] --cameras-config: Import fehlgeschlagen: {exc}")
+
+    def _apply_add_files(self, paths: list[str]):
+        """Fügt CLI-übergebene Dateien als Jobs ein."""
+        added = 0
+        for raw in paths:
+            p = Path(raw)
+            if p.is_file():
+                self.jobs.append(ConvertJob(source_path=p))
+                added += 1
+            elif p.is_dir():
+                found = sorted(p.rglob("*"))
+                for f in found:
+                    if f.is_file():
+                        self.jobs.append(ConvertJob(source_path=f))
+                        added += 1
+            else:
+                print(f"[WARN] --add: Nicht gefunden: {p}")
+        if added:
+            self._refresh_table()
+            self._update_count()
+            self._append_log(
+                f"CLI: {added} Datei(en) aus --add hinzugefügt")
+
+    def _apply_workflow(self, wf_path: str):
+        """Lädt und startet einen Workflow aus CLI-Argument."""
+        p = Path(wf_path)
+        if not p.exists():
+            self._append_log(
+                f"[FEHLER] --workflow: Datei nicht gefunden: {p}")
+            return
+        try:
+            wf = Workflow.load(p)
+        except Exception as exc:
+            self._append_log(
+                f"[FEHLER] --workflow: Laden fehlgeschlagen: {exc}")
+            return
+        self._append_log(f"CLI: Workflow geladen aus {p.name}")
+        self._run_workflow(wf)
 
     # ══════════════════════════════════════════════════════════
     #  Menü
