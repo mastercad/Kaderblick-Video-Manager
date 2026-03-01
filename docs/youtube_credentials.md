@@ -12,22 +12,24 @@ Der Upload verwendet die **YouTube Data API v3** mit **OAuth 2.0 (Desktop-App)**
 
 | Datei | Beschreibung | Erstellt von |
 |-------|-------------|--------------|
-| `client_secret.json` | API-Zugangsdaten (einmalig aus Google Cloud) | Du (manuell) |
-| `youtube_token.json` | OAuth-Token (wird automatisch erzeugt) | Das Programm |
+| `config/client_secret.json` | API-Zugangsdaten (einmalig aus Google Cloud) | Du (manuell) |
+| `data/youtube_token.json` | OAuth-Token (wird automatisch erzeugt) | Das Programm |
 
-Beide Dateien liegen im Projektverzeichnis (neben `main.py`):
+Die Dateien liegen in den Unterverzeichnissen `config/` und `data/`:
 
 ```
 video-manager/
 ├── main.py                     ← GUI-Einstiegspunkt
 ├── src/                        ← Anwendungspaket
-├── client_secret.json          ← manuell hinterlegen
-├── youtube_token.json          ← wird automatisch erstellt
-├── settings.json
+├── config/
+│   └── client_secret.json      ← manuell hinterlegen
+├── data/
+│   ├── youtube_token.json      ← wird automatisch erstellt
+│   └── settings.json
 └── …
 ```
 
-> **Wichtig:** `client_secret.json` und `youtube_token.json` enthalten sensible Zugangsdaten und dürfen **nicht** in Git eingecheckt werden. Beide sind in `.gitignore` eingetragen.
+> **Wichtig:** `config/client_secret.json` und `data/youtube_token.json` enthalten sensible Zugangsdaten und dürfen **nicht** in Git eingecheckt werden. Beide sind in `.gitignore` eingetragen.
 
 ---
 
@@ -63,7 +65,7 @@ video-manager/
 4. **Erstellen** klicken
 5. Im Dialog auf **JSON herunterladen** klicken
 6. Die heruntergeladene Datei umbenennen in **`client_secret.json`**
-7. Die Datei in das `video-manager/`-Verzeichnis verschieben (neben `main.py`)
+7. Die Datei in das `video-manager/config/`-Verzeichnis verschieben
 
 ## Schritt 5: Erster Upload (Token-Erstellung)
 
@@ -74,7 +76,7 @@ video-manager/
 5. Beim ersten Upload öffnet sich ein **Browser-Fenster** zur Google-Anmeldung
 6. Mit dem Google-Konto anmelden, das als Testnutzer hinterlegt ist
 7. Zugriff gewähren
-8. Das Token wird automatisch als `youtube_token.json` gespeichert
+8. Das Token wird automatisch als `data/youtube_token.json` gespeichert
 9. Ab jetzt läuft der Upload **ohne erneute Anmeldung** (bis das Token abläuft)
 
 ---
@@ -83,8 +85,8 @@ video-manager/
 
 | Problem | Lösung |
 |---------|--------|
-| `client_secret.json nicht gefunden` | Datei muss im Projektverzeichnis liegen (neben `main.py`) |
-| `Token abgelaufen / ungültig` | `youtube_token.json` löschen und erneut anmelden |
+| `client_secret.json nicht gefunden` | Datei muss unter `config/client_secret.json` liegen |
+| `Token abgelaufen / ungültig` | `data/youtube_token.json` löschen und erneut anmelden |
 | `Access blocked: App not verified` | Dein Google-Konto muss als Testnutzer eingetragen sein (Schritt 3.6) |
 | `Quota exceeded` | YouTube API hat ein tägliches Limit von 10.000 Einheiten. Ein Upload kostet 1.600 Einheiten → max. ~6 Uploads/Tag mit Standard-Quota |
 | `403 Forbidden` | Prüfe, ob die YouTube Data API v3 im Projekt aktiviert ist (Schritt 2) |
@@ -97,7 +99,7 @@ Das gespeicherte Token wird automatisch erneuert (Refresh-Token). Falls es trotz
 
 ```bash
 # Token löschen und beim nächsten Upload neu anmelden
-rm youtube_token.json
+rm data/youtube_token.json
 ```
 
 ---

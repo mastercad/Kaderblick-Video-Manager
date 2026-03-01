@@ -415,6 +415,14 @@ class ConverterApp(QMainWindow):
         if SESSION_FILE.exists():
             try:
                 self.jobs = load_jobs(SESSION_FILE)
+                # Unfertige Jobs zurücksetzen, damit sie erneut gestartet
+                # werden können (z. B. nach App-Neustart während Download).
+                _reset_stati = {
+                    "Herunterladen", "Heruntergeladen", "Läuft",
+                }
+                for job in self.jobs:
+                    if job.status in _reset_stati:
+                        job.status = "Wartend"
                 self._refresh_table()
                 self._update_count()
                 self._append_log(
@@ -498,13 +506,26 @@ class ConverterApp(QMainWindow):
         self._dl_worker.finished.connect(self._on_all_downloads_done)
         self._dl_thread.start()
 
-    @Slot(str, str, int, int)
+    @Slot(str, str, float, float, float)
     def _on_dl_file_progress(self, device: str, filename: str,
-                             transferred: int, total: int):
+                             transferred: float, total: float,
+                             speed_bps: float):
         if total > 0:
             pct = int(transferred / total * 100)
-            self.status_label.setText(
-                f"⬇ {device}: {filename}  {pct} %")
+            # Geschwindigkeit + ETA berechnen
+            info = f"⬇ {device}: {filename}  {pct} %"
+            if speed_bps > 0:
+                speed_mb = speed_bps / 1048576
+                remaining = total - transferred
+                eta_s = remaining / speed_bps
+                if eta_s >= 3600:
+                    eta_str = f"{int(eta_s // 3600)}h {int((eta_s % 3600) // 60)}min"
+                elif eta_s >= 60:
+                    eta_str = f"{int(eta_s // 60)}min {int(eta_s % 60)}s"
+                else:
+                    eta_str = f"{int(eta_s)}s"
+                info += f"  –  {speed_mb:.1f} MB/s  ETA {eta_str}"
+            self.status_label.setText(info)
         else:
             self.status_label.setText(f"⬇ {device}: {filename}")
 
@@ -526,11 +547,17 @@ class ConverterApp(QMainWindow):
         self._dl_thread = None
         self._dl_worker = None
 
-        # Download-Jobs abschließen
+        # Download-Jobs abschließen – nur Geräte, die tatsächlich
+        # Ergebnisse geliefert haben, als "Fertig" markieren.
+        # Abgebrochene / fehlgeschlagene Jobs zurück auf "Wartend".
+        successful_devices = {name for name, _path in mjpg_paths}
         for job in self.jobs:
             if job.job_type == "download" and job.status in (
                     "Herunterladen", "Heruntergeladen"):
-                job.status = "Fertig"
+                if job.device_name in successful_devices:
+                    job.status = "Fertig"
+                else:
+                    job.status = "Wartend"
 
         self._append_log(f"\n⬇ Downloads abgeschlossen: {total} Aufnahme(n)")
 

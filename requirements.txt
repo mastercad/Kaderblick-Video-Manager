@@ -1,5 +1,5 @@
-# Ball Tracking System - Dependencies
-# Python 3.8+ erforderlich
+# Videofile Manager - Dependencies
+# Python 3.10+ erforderlich
 
 # Computer Vision & ML
 opencv-python>=4.8.0
@@ -17,6 +17,9 @@ PySide6>=6.5.0
 google-api-python-client>=2.100.0
 google-auth-oauthlib>=1.1.0
 
-# Raspberry Pi Video-Download (SSH/SFTP)
+# Raspberry Pi Video-Download
+# paramiko wird für Verzeichnislisting und Metadaten-Abfragen genutzt.
+# Der eigentliche Dateitransfer läuft bevorzugt über rsync (System-Paket).
+# Systemabhängigkeiten (optional): rsync, sshpass (sudo apt install rsync sshpass)
 paramiko>=2.11.0
 PyYAML>=6.0

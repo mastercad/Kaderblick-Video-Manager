@@ -67,6 +67,7 @@ def get_youtube_service(log_callback=None):
                 log(f"OAuth-Anmeldung fehlgeschlagen: {e}")
                 return None
 
+        TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
         TOKEN_FILE.write_text(creds.to_json())
         log("YouTube-Token gespeichert.")
 

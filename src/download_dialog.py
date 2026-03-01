@@ -125,7 +125,7 @@ class DownloadDialog(QDialog):
         self._file_progress.setTextVisible(True)
         self._file_progress.setMaximumHeight(18)
         self._file_progress.setValue(0)
-        self._file_progress.setFormat("%v / %m Bytes  (%p%)")
+        self._file_progress.setFormat("%v / %m KB  (%p%)")
         progress_layout.addWidget(self._file_progress)
         progress_group.setLayout(progress_layout)
         main.addWidget(progress_group)
@@ -276,7 +276,7 @@ class DownloadDialog(QDialog):
         if self._worker:
             self._worker.cancel()
         self._cancel_btn.setEnabled(False)
-        self._log.append("Abbruch angefordert …")
+        self._log.append("Abbruch angefordert – warte auf aktuellen Block …")
 
     # ── Slots ─────────────────────────────────────────────────────────────────
 
@@ -284,12 +284,34 @@ class DownloadDialog(QDialog):
     def _on_log(self, msg: str) -> None:
         self._log.append(msg)
 
-    @Slot(str, str, int, int)
+    @Slot(str, str, float, float, float)
     def _on_file_progress(self, device: str, filename: str,
-                          transferred: int, total: int) -> None:
+                          transferred: float, total: float,
+                          speed_bps: float) -> None:
         self._current_label.setText(f"{device} – {filename}")
-        self._file_progress.setMaximum(max(total, 1))
-        self._file_progress.setValue(transferred)
+        # Scale to KB to avoid QProgressBar int32 overflow on large files
+        total_kb = max(int(total / 1024), 1)
+        transferred_kb = int(transferred / 1024)
+        self._file_progress.setMaximum(total_kb)
+        self._file_progress.setValue(min(transferred_kb, total_kb))
+
+        # Geschwindigkeits- und ETA-Anzeige
+        remaining = total - transferred
+        if speed_bps > 0:
+            eta_s = remaining / speed_bps
+            if eta_s >= 3600:
+                eta_str = f"{int(eta_s // 3600)}h {int((eta_s % 3600) // 60)}min"
+            elif eta_s >= 60:
+                eta_str = f"{int(eta_s // 60)}min {int(eta_s % 60)}s"
+            else:
+                eta_str = f"{int(eta_s)}s"
+            speed_mb = speed_bps / 1048576
+            self._file_progress.setFormat(
+                f"{transferred / 1048576:.1f} / {total / 1048576:.1f} MB  "
+                f"(%p%)  {speed_mb:.1f} MB/s  ETA {eta_str}")
+        else:
+            self._file_progress.setFormat(
+                f"{transferred / 1048576:.1f} / {total / 1048576:.1f} MB  (%p%)")
 
     @Slot(str, int)
     def _on_device_done(self, device_name: str, count: int) -> None:
@@ -338,9 +360,16 @@ class DownloadDialog(QDialog):
             if reply != QMessageBox.Yes:
                 event.ignore()
                 return
+            # Cancel setzen – readv()-Batch bricht innerhalb von ~64 KB ab
             if self._worker:
                 self._worker.cancel()
+            self._log.append("Warte auf Beendigung des Downloads …")
+            # Warten bis der Worker-Thread tatsächlich beendet ist
             if self._thread:
-                self._thread.quit()
-                self._thread.wait(5000)
+                if not self._thread.wait(15000):   # 15 Sekunden
+                    self._log.append("Thread reagiert nicht – erzwinge Beendigung.")
+                    self._thread.terminate()
+                    self._thread.wait(3000)
+                self._thread = None
+                self._worker = None
         event.accept()

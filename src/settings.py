@@ -7,11 +7,13 @@ from typing import Any
 
 # ─── Pfade (relativ zum Projekt-Stammverzeichnis) ────────────────
 _BASE_DIR = Path(__file__).resolve().parent.parent
+_CONFIG_DIR = _BASE_DIR / "config"
+_DATA_DIR = _BASE_DIR / "data"
 
-SETTINGS_FILE = _BASE_DIR / "settings.json"
-SESSION_FILE = _BASE_DIR / "session.json"
-CLIENT_SECRET_FILE = _BASE_DIR / "client_secret.json"
-TOKEN_FILE = _BASE_DIR / "youtube_token.json"
+SETTINGS_FILE = _DATA_DIR / "settings.json"
+SESSION_FILE = _DATA_DIR / "session.json"
+CLIENT_SECRET_FILE = _CONFIG_DIR / "client_secret.json"
+TOKEN_FILE = _DATA_DIR / "youtube_token.json"
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -126,6 +128,7 @@ class AppSettings:
     restore_session: bool = False      # Beim Start letzte Jobliste laden
 
     def save(self):
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
         SETTINGS_FILE.write_text(
             json.dumps(asdict(self), indent=2, ensure_ascii=False))
 

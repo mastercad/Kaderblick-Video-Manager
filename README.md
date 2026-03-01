@@ -15,12 +15,13 @@ Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_cred
 - **Profile** – Vorkonfigurierte Einstellungen: *KI Auswertung*, *YouTube*, *Benutzerdefiniert*
 - **Hardware-Encoding** – NVIDIA NVENC-Beschleunigung mit automatischer Erkennung und Fallback auf CPU
 - **GPU-Diagnose** – Detaillierte Statusanzeige mit Lösungsvorschlägen bei Problemen
-- **Raspberry Pi Download** – Videos direkt von angebundenen Kamera-Systemen per SFTP herunterladen
+- **Raspberry Pi Download** – Videos direkt von angebundenen Kamera-Systemen herunterladen (rsync mit nativem SSH, SFTP als Fallback)
 - **Halbzeiten zusammenführen** – Automatische Erkennung und Zusammenführung mit Titelkarten
 - **Einstellungs-Dialoge** – Video, Audio und YouTube werden in separaten Dialogen konfiguriert
-- **Persistente Einstellungen** – Alle Settings werden in `settings.json` gespeichert
+- **Persistente Einstellungen** – Alle Settings werden in `data/settings.json` gespeichert
 - **Hintergrund-Verarbeitung** – ffmpeg läuft in einem Worker-Thread, die GUI bleibt bedienbar
-- **Fortschrittsanzeige** – Statusbar mit Fortschrittsbalken und ETA-Anzeige
+- **Fortschrittsanzeige** – Statusbar mit Fortschrittsbalken, Geschwindigkeit (MB/s) und ETA-Anzeige
+- **Resume-Unterstützung** – Abgebrochene Downloads werden beim nächsten Start automatisch fortgesetzt
 - **Protokoll** – Scrollbares Log mit detaillierten Meldungen
 - **Abbruch-Funktion** – Laufende Konvertierungen oder Downloads abbrechen
 - **YouTube-Upload** – Automatischer Upload mit Playlist-Verwaltung (Playlist wird bei Bedarf angelegt)
@@ -34,6 +35,8 @@ Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_cred
 - **ffmpeg** und **ffprobe** (für die Video-Konvertierung)
 - *Optional:* **NVIDIA-GPU** mit Treiber ≥ 550.54 für Hardware-Encoding (NVENC)
 - *Optional:* SSH-Zugang zu den Raspberry Pi Kameras (für den Download)
+- *Optional:* **rsync** – wird als primäre Transfermethode genutzt (hardware-beschleunigte AES-NI, ~100 MB/s auf 1 Gbit)
+- *Optional:* **sshpass** – wird für rsync mit Passwort-Auth benötigt (`sudo apt install sshpass`)
 
 ---
 
@@ -73,9 +76,14 @@ python main.py
 ```
 video-manager/
 ├── README.md                       <- Diese Datei
-├── cameras.yaml                    <- Kamera-Konfiguration (Raspberry Pis)
-├── settings.json                   <- Persistente GUI-Einstellungen (automatisch)├── session.json                    ← Letzte Jobliste (automatisch, für Session-Restore)├── client_secret.json              <- YouTube OAuth (manuell, nicht im Git)
-├── youtube_token.json              <- YouTube OAuth-Token (automatisch, nicht im Git)
+├── config/                         <- Konfigurationsdateien
+│   ├── cameras.yaml                <- Kamera-Konfiguration (benutzerspezifisch, nicht im Git)
+│   ├── cameras.yaml.dist           <- Vorlage für cameras.yaml
+│   └── client_secret.json          <- YouTube OAuth (manuell, nicht im Git)
+├── data/                           <- Laufzeitdaten (automatisch erzeugt)
+│   ├── settings.json               <- Persistente GUI-Einstellungen
+│   ├── session.json                <- Letzte Jobliste (für Session-Restore)
+│   └── youtube_token.json          <- YouTube OAuth-Token (automatisch)
 ├── docs/
 │   └── youtube_credentials.md     <- Doku: YouTube-API-Setup
 ├── main.py                         <- GUI-Einstiegspunkt
@@ -87,8 +95,8 @@ video-manager/
 │   ├── diagnostics.py              <- GPU- und System-Diagnose
 │   ├── dialogs.py                  <- Einstellungs- und Bearbeitungsdialoge
 │   ├── download_dialog.py          <- Dialog: Raspberry Pi Download
-│   ├── download_worker.py          <- Worker-Thread: SFTP-Download
-│   ├── downloader.py               <- SFTP-Download-Logik (paramiko)
+│   ├── download_worker.py          <- Worker-Thread: Download (rsync/SFTP)
+│   ├── downloader.py               <- Download-Logik (rsync primär, SFTP Fallback)
 │   ├── encoder.py                  <- Encoder-Auflösung und ffmpeg-Argumente
 │   ├── ffmpeg_runner.py            <- ffmpeg-Prozesssteuerung
 │   ├── merge.py                    <- Halbzeiten zusammenführen
@@ -196,8 +204,25 @@ Zusätzlich werden in den Kamera-Einstellungen **Quellverzeichnis** (auf den Pis
 
 - Es werden nur **vollständige Aufnahmen** heruntergeladen (`.mjpg` **und** `.wav` müssen vorhanden sein)
 - Bereits vorhandene Dateien werden per **Größenvergleich** geprüft und ggf. übersprungen
+- **Resume:** Abgebrochene Downloads werden beim nächsten Start automatisch fortgesetzt (partielle Dateien bleiben erhalten)
 - Fehler bei einem Gerät unterbrechen **nicht** den Download der anderen Geräte
 - Jede Kamera erhält einen eigenen Unterordner (`<Ziel>/<Kameraname>/`)
+
+### Transfermethode
+
+| Methode | Bedingung | Geschwindigkeit |
+|---------|-----------|----------------|
+| **rsync** (bevorzugt) | `rsync` installiert; bei Passwort-Auth zusätzlich `sshpass` | ~100–110 MB/s (1 Gbit) |
+| **SFTP** (Fallback) | Automatisch, wenn rsync nicht verfügbar | ~14–50 MB/s |
+
+rsync nutzt den **nativen SSH-Client** mit hardware-beschleunigter AES-NI Verschlüsselung und
+bietet eingebautes Resume (`--append --partial --inplace`). Die gewählte Transfermethode wird im
+Protokoll angezeigt.
+
+> **Empfehlung:** Für große Dateien (> 10 GB) `rsync` und `sshpass` installieren:
+> ```bash
+> sudo apt install rsync sshpass
+> ```
 
 ---
 
@@ -318,15 +343,18 @@ So lassen sich vorbereitete Joblisten teilen oder für wiederkehrende Aufgaben w
 
 ## Session wiederherstellen
 
-Beim Beenden der App wird die aktuelle Jobliste automatisch als `session.json` gespeichert.
+Beim Beenden der App wird die aktuelle Jobliste automatisch als `data/session.json` gespeichert.
 Unter **Einstellungen → Allgemein** kann die Option **„Letzte Jobliste beim Start wiederherstellen"**
 aktiviert werden. Dann wird beim nächsten Programmstart die gespeicherte Jobliste automatisch geladen.
 
-| Datei | Beschreibung |
-|-------|-------------|
-| `session.json` | Wird beim Beenden automatisch geschrieben; enthält die Jobliste als JSON |
+Beim Wiederherstellen werden **unfertige Jobs** (Status *Herunterladen*, *Heruntergeladen*, *Läuft*)
+automatisch auf **Wartend** zurückgesetzt, damit sie erneut gestartet werden können.
 
-> **Tipp:** Auch ohne aktivierte Option bleibt `session.json` erhalten und kann jederzeit manuell
+| Datei | Beschreibung |
+|-------|-----------|
+| `data/session.json` | Wird beim Beenden automatisch geschrieben; enthält die Jobliste als JSON |
+
+> **Tipp:** Auch ohne aktivierte Option bleibt `data/session.json` erhalten und kann jederzeit manuell
 > über **Datei → Jobliste importieren** geladen werden.
 
 ---
@@ -345,9 +373,9 @@ aktiviert werden. Dann wird beim nächsten Programmstart die gespeicherte Joblis
 
 ---
 
-## Einstellungen-Datei `settings.json`
+## Einstellungen-Datei `data/settings.json`
 
-Alle Einstellungen werden automatisch in `settings.json` gespeichert und beim Starten geladen.
+Alle Einstellungen werden automatisch in `data/settings.json` gespeichert und beim Starten geladen.
 Die Datei kann manuell bearbeitet werden – ungültige Werte werden durch Standardwerte ersetzt.
 
 ```json
@@ -414,8 +442,10 @@ Die Datei kann manuell bearbeitet werden – ungültige Werte werden durch Stand
 
 | Problem | Lösung |
 |---------|--------|
-| Verbindung fehlgeschlagen | IP und Port in `cameras.yaml` prüfen; SSH-Zugang testen: `ssh user@ip` |
-| Authentifizierungsfehler | Benutzername/Passwort prüfen oder `ssh_key` in `cameras.yaml` eintragen |
+| Verbindung fehlgeschlagen | IP und Port in den Kamera-Einstellungen prüfen; SSH-Zugang testen: `ssh user@ip` |
+| Authentifizierungsfehler | Benutzername/Passwort prüfen oder `ssh_key` eintragen |
 | Keine Aufnahmen gefunden | `source`-Pfad prüfen; auf jedem Pi muss je Aufnahme `.mjpg` + `.wav` vorhanden sein |
-| Download bricht ab | Netzwerkverbindung prüfen; partiell heruntergeladene Dateien werden automatisch gelöscht |
-| `cameras.yaml` nicht gefunden | Datei muss im Projektverzeichnis liegen oder im Dialog manuell auswählen |
+| Download bricht ab | Partielle Dateien bleiben für Resume erhalten; beim nächsten Start wird automatisch fortgesetzt |
+| Download langsam (< 50 MB/s) | `rsync` und `sshpass` installieren: `sudo apt install rsync sshpass` |
+| rsync nicht genutzt trotz Installation | Bei Passwort-Auth muss auch `sshpass` installiert sein; SSH-Key empfohlen |
+| SSH fragt nach Passwort | Passwort in den Kamera-Einstellungen hinterlegen oder SSH-Key konfigurieren |

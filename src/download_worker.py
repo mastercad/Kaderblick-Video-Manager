@@ -1,6 +1,7 @@
 """QThread-Worker für den Download von Raspberry Pi Videos."""
 
 import threading
+import time
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -27,9 +28,9 @@ class DownloadWorker(QObject):
     """
 
     log_message   = Signal(str)
-    file_progress = Signal(str, str, int, int)   # (device, filename, transferred, total)
-    device_done   = Signal(str, int)              # (device_name, downloaded_count)
-    finished      = Signal(int, list)            # (total_count, list[str] mjpg_paths)
+    file_progress = Signal(str, str, float, float, float)  # (device, filename, transferred, total, speed_bps)
+    device_done   = Signal(str, int)                 # (device_name, downloaded_count)
+    finished      = Signal(int, list)                # (total_count, list[str] mjpg_paths)
 
     def __init__(
         self,
@@ -46,6 +47,11 @@ class DownloadWorker(QObject):
         self._dest_override = destination_override
         self._delete = delete_after_download
         self._cancel = threading.Event()
+        self._last_progress_time: float = 0.0
+        self._last_transferred: int = 0
+        self._speed_bps: float = 0.0
+        self._speed_update_time: float = 0.0
+        self._current_filename: str = ""
 
     # ── Steuerung ──────────────────────────────────────────────
 
@@ -92,5 +98,36 @@ class DownloadWorker(QObject):
         transferred: int,
         total: int,
     ) -> None:
-        self.file_progress.emit(device_name, filename, transferred, total)
+        # Neue Datei? → Speed-Tracking zurücksetzen
+        if filename != self._current_filename:
+            self._current_filename = filename
+            self._speed_bps = 0.0
+            self._speed_update_time = 0.0
+            self._last_transferred = 0
+
+        # Throttle: max ~4 updates per second to avoid flooding the event queue
+        now = time.monotonic()
+        if transferred < total and (now - self._last_progress_time) < 0.25:
+            return
+
+        # Geschwindigkeit berechnen (gleitender Durchschnitt ueber ~1 s)
+        dt = now - self._speed_update_time
+        if dt >= 1.0 and self._speed_update_time > 0:
+            speed = (transferred - self._last_transferred) / dt
+            # Exponentielles Glätten
+            self._speed_bps = (
+                speed if self._speed_bps == 0
+                else 0.3 * speed + 0.7 * self._speed_bps
+            )
+            self._last_transferred = transferred
+            self._speed_update_time = now
+        elif self._speed_update_time == 0:
+            self._last_transferred = transferred
+            self._speed_update_time = now
+
+        self._last_progress_time = now
+        self.file_progress.emit(
+            device_name, filename,
+            float(transferred), float(total), self._speed_bps,
+        )
 

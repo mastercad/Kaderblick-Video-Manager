@@ -1,6 +1,6 @@
 # YouTube API Credentials (sensibel – nicht committen!)
-client_secret.json
-youtube_token.json
+config/client_secret.json
+data/youtube_token.json
 
 # Python
 __pycache__/
@@ -8,6 +8,6 @@ __pycache__/
 .venv/
 
 # Settings (benutzerspezifisch)
-settings.json
-cameras.yaml
-session.json
+data/settings.json
+config/cameras.yaml
+data/session.json

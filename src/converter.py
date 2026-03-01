@@ -58,6 +58,7 @@ class ConvertJob:
 
 def save_jobs(jobs: list[ConvertJob], path: Path) -> None:
     """Speichert eine Jobliste als JSON-Datei."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     data = [j.to_dict() for j in jobs]
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
 
