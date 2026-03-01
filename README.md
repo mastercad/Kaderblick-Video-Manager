@@ -2,8 +2,8 @@
 
 Grafische Oberfläche für die MJPEG-Konvertierung und den Download von Videos von Raspberry Pi
 Kamera-Systemen (Kaderblick). Bietet eine komfortable Qt-GUI (PySide6) mit Jobliste, Profilen,
-GPU-Beschleunigung, Raspberry Pi Download, Halbzeit-Zusammenführung, persistenten Einstellungen
-und Hintergrund-Verarbeitung.
+GPU-Beschleunigung, Raspberry Pi Download, Halbzeit-Zusammenführung, persistenten Einstellungen,
+Hintergrund-Verarbeitung und einem **Workflow-Assistenten** für zusammengesetzte Aufträge.
 
 Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_credentials.md)
 
@@ -26,12 +26,13 @@ Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_cred
 - **Abbruch-Funktion** – Laufende Konvertierungen oder Downloads abbrechen
 - **YouTube-Upload** – Automatischer Upload mit Playlist-Verwaltung (Playlist wird bei Bedarf angelegt)
 - **Download → Konvertierung → Upload** – Durchgängige Pipeline: Pi-Downloads, Konvertierung und YouTube-Upload in einem Durchlauf
+- **Workflow-Assistent** – Zwei-Etappen-Baukasten: Quellen zusammenstellen (Pi-Kameras, lokale Dateien/Ordner) und pro Quelle die Verarbeitung vorkonfigurieren (Encoding-Profile, Audio, YouTube-Upload, Ausgabedateiname) – auch bevor die Dateien existieren
 
 ---
 
 ## Voraussetzungen
 
-- **Python** ≥ 3.10
+- **Python** ≥ 3.11
 - **ffmpeg** und **ffprobe** (für die Video-Konvertierung)
 - *Optional:* **NVIDIA-GPU** mit Treiber ≥ 550.54 für Hardware-Encoding (NVENC)
 - *Optional:* SSH-Zugang zu den Raspberry Pi Kameras (für den Download)
@@ -83,6 +84,8 @@ video-manager/
 ├── data/                           <- Laufzeitdaten (automatisch erzeugt)
 │   ├── settings.json               <- Persistente GUI-Einstellungen
 │   ├── session.json                <- Letzte Jobliste (für Session-Restore)
+│   ├── last_workflow.json          <- Letzter Workflow (für Schnell-Wiederholung)
+│   ├── workflows/                  <- Gespeicherte Workflows (JSON)
 │   └── youtube_token.json          <- YouTube OAuth-Token (automatisch)
 ├── docs/
 │   └── youtube_credentials.md     <- Doku: YouTube-API-Setup
@@ -102,6 +105,9 @@ video-manager/
 │   ├── merge.py                    <- Halbzeiten zusammenführen
 │   ├── settings.py                 <- Einstellungen, Profile, Persistenz
 │   ├── worker.py                   <- Worker-Thread: Konvertierung
+│   ├── workflow.py                 <- Workflow-Datenmodell (Quellen + Verarbeitung)
+│   ├── workflow_executor.py        <- Workflow-Ausführung (Transfer → Konvertierung)
+│   ├── workflow_wizard.py          <- Workflow-Assistent (Zwei-Etappen-Dialog)
 │   └── youtube.py                  <- YouTube-Upload und OAuth
 └── requirements.txt                <- Python-Abhängigkeiten
 ```
@@ -117,6 +123,7 @@ video-manager/
 |  Menü: Datei | Einstellungen                                    |
 +-----------------------------------------------------------------+
 |  Toolbar: [＋ Dateien] [＋ Ordner] [＋ Pi-Download]              |
+|           [🧩 Workflow]                                         |
 |           [▶ Starten] [■ Abbrechen] [Bearbeiten] [Entfernen]   |
 +-----------------------------------------------------------------+
 |  Auftragsliste                                                  |
@@ -143,6 +150,7 @@ video-manager/
 | **＋ Dateien** | Öffnet Dateidialog zum Auswählen von `.mjpg`/`.mjpeg`-Dateien |
 | **＋ Ordner** | Fügt alle MJPEG-Dateien eines Ordners hinzu |
 | **＋ Pi-Download** | Legt Download-Jobs für alle konfigurierten Kameras an |
+| **🧩 Workflow** | Öffnet den Workflow-Assistenten (Zwei-Etappen-Baukasten) |
 | **▶ Starten** | Startet die gesamte Pipeline (Downloads → Konvertierung → Upload) |
 | **■ Abbrechen** | Bricht laufende Verarbeitung ab |
 | **Bearbeiten** | Öffnet YouTube-Metadaten für den ausgewählten Job (Download oder Konvertierung) |
@@ -157,6 +165,7 @@ video-manager/
 | Datei | Dateien hinzufügen … (Strg+O) | MJPEG-Dateien einzeln auswählen |
 | Datei | Ordner hinzufügen … (Strg+D) | Ordner mit MJPEG-Dateien hinzufügen |
 | Datei | Pi-Downloads hinzufügen (Strg+P) | Download-Jobs für konfigurierte Kameras anlegen |
+| Datei | Workflow-Assistent … (Strg+W) | Workflow-Baukasten öffnen (Quellen + Verarbeitung konfigurieren) |
 | Datei | Jobliste exportieren … (Strg+E) | Aktuelle Jobliste als JSON-Datei speichern |
 | Datei | Jobliste importieren … (Strg+I) | Jobliste aus einer JSON-Datei laden (Einträge werden angehängt) |
 | Datei | Alle Jobs entfernen | Jobliste leeren |
@@ -338,6 +347,73 @@ Die gesamte Jobliste kann als JSON-Datei gespeichert und wieder geladen werden:
 - **Datei → Jobliste importieren … (Strg+I)** – Lädt Jobs aus einer `.json`-Datei und hängt sie an die bestehende Liste an
 
 So lassen sich vorbereitete Joblisten teilen oder für wiederkehrende Aufgaben wiederverwenden.
+
+---
+
+## Workflow-Assistent
+
+Der **Workflow-Assistent** (Strg+W) ist ein Zwei-Etappen-Dialog zum Zusammenstellen komplexer
+Verarbeitungs-Aufträge – ein Baukasten, in dem Quellen und deren Verarbeitung vorkonfiguriert
+werden, auch bevor die Dateien existieren.
+
+### Seite 1: Quellen
+
+Über **＋ Quelle hinzufügen** wird ein Bearbeitungsdialog geöffnet, in dem der Quelltyp
+gewählt und konfiguriert wird. Der **Name** wird automatisch abgeleitet (Gerätename bei
+Pi-Kameras, Ordner- oder Dateiname bei lokalen Quellen):
+
+| Quelltyp | Beschreibung |
+|----------|-------------|
+| **Pi-Kamera** (📷) | Raspberry Pi Kamera-System – Video wird per rsync/SSH heruntergeladen |
+| **Lokale Quelle** (📁) | Ordner oder Einzeldatei(en) von Festplatte/SSD/NAS/USB |
+
+Bei **lokalen Quellen** kann zwischen zwei Modi gewählt werden:
+
+| Modus | Beschreibung |
+|-------|-------------|
+| **Ordner** | Verarbeitet alle Dateien eines Ordners (mit Glob-Pattern, z. B. `*.mp4`, `*.mjpg`) |
+| **Datei(en)** | Wählt eine einzelne Videodatei aus – optional mit separater Audiodatei für das Zusammenführen |
+
+Weitere Optionen:
+
+- **Dateien ins Zielverzeichnis verschieben** – für externe Medien (DJI-SSD, USB-Stick), deren Dateien erst kopiert werden müssen
+- **Alle konfigurierten Kameras** – fügt alle Pi-Kameras aus den Einstellungen auf einmal hinzu
+
+### Seite 2: Verarbeitung
+
+Zeigt eine kompakte **Übersichtstabelle** aller Quellen mit den wichtigsten Verarbeitungsparametern:
+
+| Spalte | Inhalt |
+|--------|--------|
+| **Name** | Quellname mit Typ-Icon |
+| **Encoding** | Encoder, Preset und CRF |
+| **Audio** | Merge- und Verstärkungs-Status |
+| **YouTube** | YouTube-Version und Upload-Status |
+| **Ausgabe** | Ausgabedateiname (falls konfiguriert) |
+
+Per **Doppelklick** auf eine Zeile öffnet sich ein **Bearbeitungsdialog** mit allen Optionen:
+
+- **Verarbeitung:** Audio+Video zusammenführen, Audio verstärken, Audio-Sync (für alle Quelltypen verfügbar –
+  auch für lokale Quellen, z. B. Pi-Aufnahmen über NAS oder externe Platte)
+- **Profil-Schnellauswahl:** Buttons für jedes Profil (KI Auswertung, YouTube, Benutzerdefiniert) –
+  setzt Encoder, Preset, CRF und Format mit einem Klick
+- **Encoding:** Encoder, Preset, CRF, FPS, Format – alles einzeln einstellbar
+- **Ausgabe:** Dateiname für die erzeugte Datei (leer = automatisch aus Quelldatei)
+- **YouTube:** Version erstellen, Upload, Titel und Playlist
+
+> **Profile** können sowohl **pro Quelle** im Bearbeitungsdialog als auch **global für alle Quellen**
+> über die Schnell-Profil-Leiste oben auf Seite 2 angewendet werden.
+
+### Workflow speichern / laden
+
+Über die Buttons auf Seite 1 können Workflows als JSON-Datei gespeichert und wieder geladen werden.
+Gespeicherte Workflows liegen unter `data/workflows/`.
+
+### Globale Optionen
+
+| Option | Beschreibung |
+|--------|-------------|
+| **Rechner nach Abschluss herunterfahren** | System-Shutdown nach Abschluss aller Jobs |
 
 ---
 

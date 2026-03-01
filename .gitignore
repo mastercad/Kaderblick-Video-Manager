@@ -11,3 +11,4 @@ __pycache__/
 data/settings.json
 config/cameras.yaml
 data/session.json
+data/workflows/

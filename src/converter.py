@@ -1,4 +1,8 @@
-"""MJPEG-Konvertierung: Job-Datenklasse und Konvertierungsfunktionen."""
+"""Video-Konvertierung: Job-Datenklasse und Konvertierungsfunktionen.
+
+Unterstützt sowohl MJPEG-Rohstreams (Pi-Kameras) als auch reguläre
+Video-Container (MP4, MKV, AVI, MOV) mit eingebetteter Tonspur.
+"""
 
 import json
 import threading
@@ -10,8 +14,12 @@ from .settings import AppSettings
 from .encoder import resolve_encoder, build_encoder_args
 from .ffmpeg_runner import (
     find_audio, get_duration, estimate_duration_from_filesize,
-    count_frames, run_ffmpeg,
+    count_frames, run_ffmpeg, has_audio_stream,
 )
+
+# Rohe MJPEG-Streams benötigen -framerate/-f mjpeg Input-Flags.
+# Alles andere ist ein regulärer Container.
+_MJPEG_EXTS = {".mjpg", ".mjpeg"}
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -24,6 +32,7 @@ class ConvertJob:
     job_type: str = "convert"          # "convert" | "download"
     status: str = "Wartend"
     output_path: Optional[Path] = None
+    audio_override: Optional[Path] = None  # Explizite Audio-Datei
     youtube_title: str = ""
     youtube_playlist: str = ""
     error_msg: str = ""
@@ -37,6 +46,7 @@ class ConvertJob:
             "job_type": self.job_type,
             "status": self.status,
             "output_path": str(self.output_path) if self.output_path else "",
+            "audio_override": str(self.audio_override) if self.audio_override else "",
             "youtube_title": self.youtube_title,
             "youtube_playlist": self.youtube_playlist,
             "device_name": self.device_name,
@@ -50,6 +60,7 @@ class ConvertJob:
             job_type=d.get("job_type", "convert"),
             status=d.get("status", "Wartend"),
             output_path=Path(d["output_path"]) if d.get("output_path") else None,
+            audio_override=Path(d["audio_override"]) if d.get("audio_override") else None,
             youtube_title=d.get("youtube_title", ""),
             youtube_playlist=d.get("youtube_playlist", ""),
             device_name=d.get("device_name", ""),
@@ -77,7 +88,13 @@ def run_convert(job: ConvertJob, settings: AppSettings,
                 cancel_flag: Optional[threading.Event] = None,
                 log_callback=None,
                 progress_callback=None) -> bool:
-    """Konvertiert eine MJPEG-Datei gemäß den Einstellungen."""
+    """Konvertiert eine Video-Datei gemäß den Einstellungen.
+
+    Unterstützt zwei Input-Modi:
+    - MJPEG-Rohstrom (.mjpg/.mjpeg): framerate + format flags
+    - Container-Format (MP4/MKV/…): Standard-Input, eingebettete
+      Tonspur wird erkannt und kann verstärkt werden.
+    """
     vs = settings.video
     aus = settings.audio
     yt = settings.youtube
@@ -93,8 +110,13 @@ def run_convert(job: ConvertJob, settings: AppSettings,
         log(f"FEHLER: {src} existiert nicht!")
         return False
 
+    is_raw_mjpeg = src.suffix.lower() in _MJPEG_EXTS
+
     ext = "mp4" if vs.output_format == "mp4" else "avi"
-    out_path = src.with_suffix(f".{ext}")
+    out_path = job.output_path or src.with_suffix(f".{ext}")
+    # Kollision vermeiden: Input = Output (z. B. input.mp4 → output.mp4)
+    if out_path == src:
+        out_path = src.with_stem(f"{src.stem}_converted").with_suffix(f".{ext}")
     job.output_path = out_path
 
     if out_path.exists() and not vs.overwrite:
@@ -126,11 +148,29 @@ def run_convert(job: ConvertJob, settings: AppSettings,
                 return False
     job.output_path = out_path
 
-    wav_path = find_audio(src, aus.audio_suffix) if aus.include_audio else None
+    # ── Externe Audio-Datei suchen ───────────────────────────
+    wav_path = None
+    if aus.include_audio:
+        if job.audio_override and job.audio_override.exists():
+            wav_path = job.audio_override
+        else:
+            wav_path = find_audio(src, aus.audio_suffix)
+
+    # ── Eingebettete Tonspur erkennen (nur Container-Formate) ─
+    has_embedded_audio = False
+    if not is_raw_mjpeg and not wav_path:
+        has_embedded_audio = has_audio_stream(src)
+
     log(f"Eingabe:  {src.name}")
+    if not is_raw_mjpeg:
+        log(f"Format:   Container ({src.suffix})")
     log(f"Ausgabe:  {out_path.name}")
     if wav_path:
-        log(f"Audio:    {wav_path.name}")
+        log(f"Audio:    {wav_path.name} (extern)")
+    elif has_embedded_audio:
+        log(f"Audio:    eingebettete Tonspur")
+        if aus.amplify_audio:
+            log(f"          → wird verstärkt (compand + loudnorm)")
 
     # Dauer der Eingabedatei ermitteln (für Fortschrittsanzeige)
     # Bevorzugt: Audio-Datei (hat zuverlässige Dauer)
@@ -143,18 +183,19 @@ def run_convert(job: ConvertJob, settings: AppSettings,
         input_duration = audio_duration
     if not input_duration:
         input_duration = get_duration(src)
-    if not input_duration:
+    if not input_duration and is_raw_mjpeg:
         input_duration = estimate_duration_from_filesize(src, vs.fps)
         if input_duration and log_callback:
             log(f"Dauer geschätzt: ~{input_duration:.0f}s (aus Dateigröße)")
 
-    # ── Audio-Video-Sync bei Frame-Drops (optional) ──────────
+    # ── Audio-Video-Sync bei Frame-Drops (nur MJPEG) ─────────
     # MJPEG-Aufnahmen können Frame-Drops haben: weniger Frames
     # als erwartet → Video kürzer als Audio → zunehmender Versatz.
     # Lösung: tatsächliche Frames zählen und Input-Framerate so
     # anpassen, dass Video-Dauer = Audio-Dauer.
     effective_fps = vs.fps
-    if vs.audio_sync and wav_path and audio_duration and audio_duration > 0:
+    if (is_raw_mjpeg and vs.audio_sync and wav_path
+            and audio_duration and audio_duration > 0):
         frame_count = count_frames(src, cancel_flag=cancel_flag,
                                    log_callback=log_callback)
         if cancel_flag and cancel_flag.is_set():
@@ -175,13 +216,19 @@ def run_convert(job: ConvertJob, settings: AppSettings,
                 log(f"Audio-Sync: OK ({frame_count} Frames, "
                     f"Δ {drift:.1f}s)")
 
-    # ffmpeg-Kommando aufbauen
+    # ── ffmpeg-Kommando aufbauen ──────────────────────────────
     cmd = ["ffmpeg", "-hide_banner", "-y"]
-    cmd += ["-framerate", f"{effective_fps:.6f}", "-f", "mjpeg",
-            "-i", str(src)]
+
+    # Input: MJPEG-Rohstrom benötigt framerate + format
+    if is_raw_mjpeg:
+        cmd += ["-framerate", f"{effective_fps:.6f}", "-f", "mjpeg",
+                "-i", str(src)]
+    else:
+        cmd += ["-i", str(src)]
     if wav_path:
         cmd += ["-i", str(wav_path)]
 
+    # Video-Encoder
     if vs.output_format == "mp4":
         encoder = resolve_encoder(vs.encoder, log_callback=log_callback)
         log(f"Encoder:  {encoder}")
@@ -190,13 +237,27 @@ def run_convert(job: ConvertJob, settings: AppSettings,
     else:
         cmd += ["-c:v", "mjpeg", "-q:v", "2", "-r", str(vs.fps)]
 
+    # Audio-Handling
+    _amplify_filter = (
+        f"compand=attacks=0.3:decays=0.8"
+        f":points={aus.compand_points},loudnorm")
+
     if wav_path:
+        # Externe Audio-Datei → re-encode zu AAC
         cmd += ["-c:a", "aac", "-b:a", aus.audio_bitrate]
         if aus.amplify_audio:
-            cmd += ["-af",
-                    f"compand=attacks=0.3:decays=0.8"
-                    f":points={aus.compand_points},loudnorm"]
+            cmd += ["-af", _amplify_filter]
         cmd += ["-shortest"]
+    elif has_embedded_audio:
+        # Eingebettete Tonspur im Container
+        if aus.amplify_audio:
+            cmd += ["-c:a", "aac", "-b:a", aus.audio_bitrate,
+                    "-af", _amplify_filter]
+        else:
+            cmd += ["-c:a", "copy"]
+    else:
+        # Kein Audio vorhanden
+        cmd += ["-an"]
 
     cmd += [str(out_path)]
     log("Starte ffmpeg …")

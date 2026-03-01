@@ -69,6 +69,20 @@ def get_resolution(filepath: Path) -> Optional[tuple[int, int]]:
     return None
 
 
+def has_audio_stream(filepath: Path) -> bool:
+    """Prüft ob eine Mediendatei eine Audio-Spur enthält (ffprobe)."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "a",
+             "-show_entries", "stream=codec_type",
+             "-of", "csv=p=0", str(filepath)],
+            capture_output=True, text=True, timeout=30,
+        )
+        return "audio" in result.stdout.strip().lower()
+    except Exception:
+        return False
+
+
 def estimate_duration_from_filesize(filepath: Path, fps: int) -> Optional[float]:
     """Schätzt die Dauer einer MJPEG-Datei anhand Dateigröße + Auflösung.
 

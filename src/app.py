@@ -24,6 +24,9 @@ from .dialogs import (
     CameraSettingsDialog,
 )
 from .download_dialog import DownloadDialog
+from .workflow import Workflow
+from .workflow_wizard import WorkflowWizard
+from .workflow_executor import WorkflowExecutor
 
 
 class ConverterApp(QMainWindow):
@@ -44,6 +47,8 @@ class ConverterApp(QMainWindow):
         self._thread: Optional[QThread] = None
         self._dl_worker: Optional[DownloadWorker] = None
         self._dl_thread: Optional[QThread] = None
+        self._wf_executor: Optional[WorkflowExecutor] = None
+        self._wf_thread: Optional[QThread] = None
         self._file_start_time: float = 0.0
         self._job_start_time: float = 0.0
 
@@ -72,6 +77,10 @@ class ConverterApp(QMainWindow):
         a = file_menu.addAction("Pi-Download hinzufügen")
         a.setShortcut(QKeySequence("Ctrl+P"))
         a.triggered.connect(self._add_download_jobs)
+        file_menu.addSeparator()
+        a = file_menu.addAction("Workflow-Assistent …")
+        a.setShortcut(QKeySequence("Ctrl+W"))
+        a.triggered.connect(self._open_workflow_wizard)
         file_menu.addSeparator()
         a = file_menu.addAction("Jobliste exportieren …")
         a.setShortcut(QKeySequence("Ctrl+E"))
@@ -104,6 +113,9 @@ class ConverterApp(QMainWindow):
         tb.addAction("＋ Dateien", self._add_files)
         tb.addAction("＋ Ordner", self._add_directory)
         tb.addAction("＋ Pi-Download", self._add_download_jobs)
+        tb.addSeparator()
+
+        tb.addAction("🧩 Workflow", self._open_workflow_wizard)
         tb.addSeparator()
 
         self.act_start = tb.addAction("▶  Starten", self._start_jobs)
@@ -710,6 +722,8 @@ class ConverterApp(QMainWindow):
             self._dl_worker.cancel()
         if self._worker:
             self._worker.cancel()
+        if self._wf_executor:
+            self._wf_executor.cancel()
         self._append_log("Abbruch angefordert …")
 
     def _set_busy(self, busy: bool):
@@ -717,11 +731,124 @@ class ConverterApp(QMainWindow):
         self.act_cancel.setEnabled(busy)
 
     # ══════════════════════════════════════════════════════════
+    #  Workflow-Assistent
+    # ══════════════════════════════════════════════════════════
+    def _open_workflow_wizard(self):
+        """Öffnet den Workflow-Assistenten."""
+        running = ((self._thread and self._thread.isRunning())
+                   or (self._dl_thread and self._dl_thread.isRunning())
+                   or (self._wf_thread and self._wf_thread.isRunning()))
+        if running:
+            QMessageBox.warning(
+                self, "Beschäftigt",
+                "Es läuft bereits ein Download oder eine Konvertierung.\n"
+                "Bitte zuerst abbrechen oder abwarten.")
+            return
+
+        # Letzten Workflow laden als Vorlage
+        last_wf = Workflow.load_last()
+        wizard = WorkflowWizard(self, self.settings, last_wf)
+        if wizard.exec():
+            self._run_workflow(wizard.workflow)
+
+    def _run_workflow(self, workflow: Workflow):
+        """Startet die Ausführung eines Workflows."""
+        self._set_busy(True)
+        self._append_log(
+            f"\n{'═'*60}"
+            f"\n  🧩 Workflow gestartet"
+            f"  ({len([s for s in workflow.sources if s.enabled])} Quellen)"
+            f"\n{'═'*60}")
+
+        self._wf_thread = QThread(self)
+        self._wf_executor = WorkflowExecutor(workflow, self.settings)
+        self._wf_executor.moveToThread(self._wf_thread)
+
+        self._wf_thread.started.connect(self._wf_executor.run)
+        self._wf_executor.log_message.connect(self._append_log)
+        self._wf_executor.file_progress.connect(self._on_wf_dl_progress)
+        self._wf_executor.convert_progress.connect(self._on_wf_convert_progress)
+        self._wf_executor.phase_changed.connect(self._on_wf_phase)
+        self._wf_executor.overall_progress.connect(self._on_wf_overall)
+        self._wf_executor.finished.connect(self._on_wf_done)
+
+        self._wf_start_time = time.monotonic()
+        self._wf_workflow = workflow
+        self._wf_thread.start()
+
+    @Slot(int)
+    def _on_wf_phase(self, phase: int):
+        if phase == 1:
+            self.status_label.setText("Workflow: Phase 1 – Downloads …")
+        elif phase == 2:
+            self.status_label.setText("Workflow: Phase 2 – Konvertierung …")
+
+    @Slot(int, int)
+    def _on_wf_overall(self, done: int, total: int):
+        self.progress.setMaximum(total)
+        self.progress.setValue(done)
+
+    @Slot(str, str, float, float, float)
+    def _on_wf_dl_progress(self, device: str, filename: str,
+                           transferred: float, total: float,
+                           speed_bps: float):
+        if total > 0:
+            pct = int(transferred / total * 100)
+            info = f"⬇ {device}: {filename}  {pct} %"
+            if speed_bps > 0:
+                speed_mb = speed_bps / 1048576
+                remaining = total - transferred
+                eta_s = remaining / speed_bps
+                if eta_s >= 3600:
+                    eta_str = f"{int(eta_s // 3600)}h {int((eta_s % 3600) // 60)}min"
+                elif eta_s >= 60:
+                    eta_str = f"{int(eta_s // 60)}min {int(eta_s % 60)}s"
+                else:
+                    eta_str = f"{int(eta_s)}s"
+                info += f"  –  {speed_mb:.1f} MB/s  ETA {eta_str}"
+            self.status_label.setText(info)
+
+    @Slot(int, int)
+    def _on_wf_convert_progress(self, conv_idx: int, pct: int):
+        elapsed = time.monotonic() - self._wf_start_time
+        self.status_label.setText(
+            f"Workflow: Konvertiere #{conv_idx+1} – {pct}%"
+            f"  (Gesamt: {self._format_duration(elapsed)})")
+
+    @Slot(int, int, int)
+    def _on_wf_done(self, ok: int, skip: int, fail: int):
+        if self._wf_thread:
+            self._wf_thread.quit()
+            self._wf_thread.wait()
+            self._wf_thread = None
+            self._wf_executor = None
+
+        elapsed = time.monotonic() - self._wf_start_time
+        msg = (f"Workflow abgeschlossen: {ok} OK, {skip} übersprungen, "
+               f"{fail} Fehler  ({self._format_duration(elapsed)})")
+        self._append_log(f"\n{msg}")
+        self.status_label.setText(msg)
+        self._set_busy(False)
+
+        # Rechner herunterfahren wenn gewünscht
+        shutdown = (hasattr(self, '_wf_workflow')
+                    and self._wf_workflow
+                    and self._wf_workflow.shutdown_after)
+        if shutdown and fail == 0:
+            self._append_log("\n⏻ Rechner wird in 30 Sekunden heruntergefahren …")
+            import subprocess
+            subprocess.Popen(["shutdown", "+0.5"])
+        elif shutdown and fail > 0:
+            self._append_log(
+                "\n⚠ Herunterfahren übersprungen wegen Fehlern.")
+
+    # ══════════════════════════════════════════════════════════
     #  Beenden
     # ══════════════════════════════════════════════════════════
     def closeEvent(self, event):
         running = ((self._thread and self._thread.isRunning())
-                   or (self._dl_thread and self._dl_thread.isRunning()))
+                   or (self._dl_thread and self._dl_thread.isRunning())
+                   or (self._wf_thread and self._wf_thread.isRunning()))
         if running:
             if QMessageBox.question(
                     self, "Verarbeitung läuft",
@@ -731,7 +858,7 @@ class ConverterApp(QMainWindow):
                 event.ignore()
                 return
             self._cancel_all()
-            for t in (self._thread, self._dl_thread):
+            for t in (self._thread, self._dl_thread, self._wf_thread):
                 if t:
                     t.quit()
                     if not t.wait(10_000):
