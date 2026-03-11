@@ -5,7 +5,11 @@ Kamera-Systemen (Kaderblick). Unterstützt sowohl MJPEG-Rohstreams (Pi-Kameras) 
 Video-Container (MP4, MKV, AVI, MOV) mit eingebetteter Tonspur. Bietet eine komfortable Qt-GUI
 (PySide6) mit Jobliste, Profilen, GPU-Beschleunigung, Raspberry Pi Download,
 Halbzeit-Zusammenführung, persistenten Einstellungen, Hintergrund-Verarbeitung und einem
-**Workflow-Assistenten** für zusammengesetzte Aufträge.
+**Job-Editor** für die komfortable Konfiguration einzelner Verarbeitungs-Aufträge.
+
+<p align="center">
+  <img src="assets/application_main.png" alt="Video Manager — Hauptbildschirm" width="600">
+</p>
 
 Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_credentials.md)
 
@@ -13,7 +17,8 @@ Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_cred
 
 ## Features
 
-- **Jobliste** – Dateien und Ordner per Dialog hinzufügen, als Queue abarbeiten
+- **Jobliste** – Aufträge anlegen, bearbeiten, duplizieren und als Queue abarbeiten
+- **Job-Editor** – Ein-Dialog-Baukasten: Quelle, Verarbeitung, Audio und YouTube in einem einzigen, scrollbaren Dialog konfigurieren; beim Anlegen stehen vorgefertigte **Pipeline-Vorlagen** zur Auswahl
 - **Profile** – Vorkonfigurierte Einstellungen: *KI Auswertung*, *YouTube*, *Benutzerdefiniert*
 - **Hardware-Encoding** – NVIDIA NVENC-Beschleunigung mit automatischer Erkennung und Fallback auf CPU
 - **GPU-Diagnose** – Detaillierte Statusanzeige mit Lösungsvorschlägen bei Problemen
@@ -29,7 +34,6 @@ Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_cred
 - **YouTube-Upload** – Automatischer Upload mit Playlist-Verwaltung (Playlist wird bei Bedarf angelegt)
 - **Download → Konvertierung → Upload** – Durchgängige Pipeline: Pi-Downloads, Konvertierung und YouTube-Upload in einem Durchlauf
 - **Container-Unterstützung** – Neben MJPEG-Rohstreams auch MP4/MKV/AVI/MOV mit eingebetteter Tonspur. Leise Aufnahmen können direkt verstärkt werden (konfigurierbar in dB)
-- **Workflow-Assistent** – Zwei-Etappen-Baukasten: Quellen zusammenstellen (Pi-Kameras, lokale Dateien/Ordner) und pro Quelle die Verarbeitung vorkonfigurieren (Encoding-Profile, Audio, YouTube-Upload, Ausgabedateiname) – auch bevor die Dateien existieren
 
 ---
 
@@ -87,7 +91,7 @@ python main.py
 **Beispiele:**
 
 ```bash
-# Workflow direkt aus der Kommandozeile starten
+# Workflow direkt aus der Kommandozeile laden und starten
 python main.py --workflow data/workflows/spieltag.json
 
 # Kamera-YAML importieren und Session erzwingen
@@ -129,12 +133,14 @@ video-manager/
 │   ├── downloader.py               <- Download-Logik (rsync primär, SFTP Fallback)
 │   ├── encoder.py                  <- Encoder-Auflösung und ffmpeg-Argumente
 │   ├── ffmpeg_runner.py            <- ffmpeg-Prozesssteuerung und ffprobe-Helfer
+│   ├── file_list_widget.py         <- Wiederverwendbares Dateilisten-Widget
+│   ├── job_editor.py               <- Job-Editor-Dialog (Quelle, Verarbeitung, Audio, YouTube)
 │   ├── merge.py                    <- Halbzeiten zusammenführen
 │   ├── settings.py                 <- Einstellungen, Profile, Persistenz
 │   ├── worker.py                   <- Worker-Thread: Konvertierung
-│   ├── workflow.py                 <- Workflow-Datenmodell (Quellen + Verarbeitung)
+│   ├── workflow.py                 <- Workflow-Datenmodell (Aufträge + Einträge)
+│   ├── workflow_dialog.py          <- Auftragslisten-Dialog (Verwalten, Laden, Speichern, Starten)
 │   ├── workflow_executor.py        <- Workflow-Ausführung (Transfer → Konvertierung)
-│   ├── workflow_wizard.py          <- Workflow-Assistent (Zwei-Etappen-Dialog)
 │   └── youtube.py                  <- YouTube-Upload und OAuth
 └── requirements.txt                <- Python-Abhängigkeiten
 ```
@@ -149,9 +155,10 @@ video-manager/
 +-----------------------------------------------------------------+
 |  Menü: Datei | Einstellungen                                    |
 +-----------------------------------------------------------------+
-|  Toolbar: [＋ Dateien] [＋ Ordner] [＋ Pi-Download]              |
-|           [🧩 Workflow]                                         |
-|           [▶ Starten] [■ Abbrechen] [Bearbeiten] [Entfernen]   |
+|  Toolbar: [＋ Auftrag] [＋ Alle Kameras]                        |
+|           [Bearbeiten] [Duplizieren] [Entfernen]               |
+|           [▶ Starten] [■ Abbrechen]                            |
+|           [Laden] [Speichern]  ☐ Rechner herunterfahren        |
 +-----------------------------------------------------------------+
 |  Auftragsliste                                                  |
 |  #  | Typ            | Beschreibung          | Status | YT-Titel|
@@ -174,28 +181,27 @@ video-manager/
 
 | Button | Funktion |
 |--------|----------|
-| **＋ Dateien** | Öffnet Dateidialog zum Auswählen von `.mjpg`/`.mjpeg`-Dateien |
-| **＋ Ordner** | Fügt alle MJPEG-Dateien eines Ordners hinzu |
-| **＋ Pi-Download** | Legt Download-Jobs für alle konfigurierten Kameras an |
-| **🧩 Workflow** | Öffnet den Workflow-Assistenten (Zwei-Etappen-Baukasten) |
+| **＋ Auftrag** | Öffnet den Job-Editor zum Anlegen eines neuen Auftrags |
+| **＋ Alle Kameras** | Legt für alle konfigurierten Pi-Kameras sofort je einen Download+Konvertierungs-Auftrag an |
+| **Bearbeiten** | Öffnet den Job-Editor für den ausgewählten Auftrag |
+| **Duplizieren** | Erstellt eine Kopie des ausgewählten Auftrags |
+| **Entfernen** | Entfernt ausgewählte Aufträge aus der Liste (Mehrfachauswahl möglich) |
 | **▶ Starten** | Startet die gesamte Pipeline (Downloads → Konvertierung → Upload) |
 | **■ Abbrechen** | Bricht laufende Verarbeitung ab |
-| **Bearbeiten** | Öffnet YouTube-Metadaten für den ausgewählten Job (Download oder Konvertierung) |
-| **Entfernen** | Entfernt ausgewählte Jobs aus der Liste (Mehrfachauswahl möglich) |
+| **Laden** | Lädt eine gespeicherte Workflow-JSON-Datei in die Auftragsliste |
+| **Speichern** | Speichert die aktuelle Auftragsliste als Workflow-JSON-Datei |
+| **Rechner herunterfahren** | System-Shutdown nach Abschluss aller Aufträge |
 
-> **Tipp:** Jobs können auch über **Datei → Alle Jobs entfernen** komplett gelöscht werden.
+> **Tipp:** Aufträge können auch über **Datei → Alle Aufträge entfernen** komplett gelöscht werden.
 
 ### Menü
 
 | Menü | Eintrag | Funktion |
 |------|---------|----------|
-| Datei | Dateien hinzufügen … (Strg+O) | MJPEG-Dateien einzeln auswählen |
-| Datei | Ordner hinzufügen … (Strg+D) | Ordner mit MJPEG-Dateien hinzufügen |
-| Datei | Pi-Downloads hinzufügen (Strg+P) | Download-Jobs für konfigurierte Kameras anlegen |
-| Datei | Workflow-Assistent … (Strg+W) | Workflow-Baukasten öffnen (Quellen + Verarbeitung konfigurieren) |
-| Datei | Jobliste exportieren … (Strg+E) | Aktuelle Jobliste als JSON-Datei speichern |
-| Datei | Jobliste importieren … (Strg+I) | Jobliste aus einer JSON-Datei laden (Einträge werden angehängt) |
-| Datei | Alle Jobs entfernen | Jobliste leeren |
+| Datei | Workflow laden … (Strg+I) | Workflow-JSON laden und Aufträge in die Liste einfügen |
+| Datei | Workflow speichern … (Strg+E) | Aktuelle Auftragsliste als Workflow-JSON speichern |
+| Datei | Alle Aufträge entfernen | Auftragsliste leeren |
+| Datei | Beenden | Anwendung beenden |
 | Einstellungen | Video … | Video-Kodierung konfigurieren |
 | Einstellungen | Audio … | Audio-Verarbeitung konfigurieren |
 | Einstellungen | YouTube … | YouTube-Upload konfigurieren |
@@ -206,8 +212,10 @@ video-manager/
 
 ## Raspberry Pi Download
 
-Über **＋ Pi-Download** in der Toolbar oder **Datei → Pi-Downloads hinzufügen** werden
-Download-Jobs für alle konfigurierten Kameras in die Jobliste eingetragen.
+Pi-Kamera-Downloads werden als Aufträge über den **Job-Editor** angelegt:
+
+- **＋ Auftrag** → Quellmodus *Pi-Kamera herunterladen* → Kamera wählen und Pipeline konfigurieren
+- **＋ Alle Kameras** → legt für jede konfigurierte Kamera sofort einen fertig konfigurierten Auftrag an
 
 ### Kamera-Konfiguration
 
@@ -230,10 +238,10 @@ Zusätzlich werden in den Kamera-Einstellungen **Quellverzeichnis** (auf den Pis
 
 ### Download-Workflow
 
-1. **＋ Pi-Download** → Download-Jobs erscheinen in der Jobliste (Typ: ⬇ Download)
-2. Jobs **bearbeiten** → YouTube-Titel und Playlist-Name setzen
-3. **▶ Starten** → Downloads laufen, anschließend werden automatisch Konvertier-Jobs erzeugt
-4. Konvertier-Jobs **erben** YouTube-Titel und Playlist vom zugehörigen Download-Job
+1. **＋ Auftrag** (oder **＋ Alle Kameras**) → Kamera-Auftrag in der Auftragsliste anlegen
+2. Auftrag **bearbeiten** → YouTube-Titel, Playlist und Verarbeitungsoptionen setzen
+3. **▶ Starten** → Downloads laufen, anschließend werden automatisch Konvertier-Aufträge erzeugt
+4. Konvertier-Aufträge **erben** YouTube-Titel und Playlist vom zugehörigen Download-Auftrag
 5. Konvertierung und ggf. YouTube-Upload laufen automatisch durch
 
 ### Download-Verhalten
@@ -356,114 +364,100 @@ kann mit dem konfigurierbaren dB-Wert verstärkt werden. Ohne Verstärkung wird 
 
 ---
 
-## Jobs bearbeiten
+## Job-Editor
 
-Per Doppelklick auf einen Job oder über **Bearbeiten** öffnet sich ein Dialog zur Eingabe von
-YouTube-Metadaten. Beide Job-Typen (Download und Konvertierung) können bearbeitet werden.
+Über **＋ Auftrag** in der Toolbar oder per Doppelklick auf einen vorhandenen Auftrag öffnet sich
+der **Job-Editor-Dialog**. Er fasst Quelle, Verarbeitung, Audio und YouTube in einem einzigen,
+scrollbaren Dialog zusammen.
 
-| Feld | Beschreibung |
-|------|-------------|
-| **YouTube-Titel** | Titel des Videos auf YouTube (max. 100 Zeichen). Bei Download-Jobs wird der Titel auf alle daraus erzeugten Konvertier-Jobs übertragen. |
-| **Playlist** | **Name** der YouTube-Playlist (nicht die ID). Die App sucht automatisch nach einer existierenden Playlist mit diesem Namen. Wird keine gefunden, wird sie als *nicht gelistet* neu angelegt. |
+### Pipeline-Vorlage
 
-> **Hinweis:** Bei Download-Jobs fungieren die Metadaten als Vorlage – alle automatisch erzeugten
-> Konvertier-Jobs erben YouTube-Titel und Playlist-Name vom jeweiligen Download-Job.
+Beim Anlegen eines neuen Auftrags erscheint oben eine **Pipeline-Vorlage**-Auswahl. Die gewählte
+Vorlage befüllt alle Felder automatisch; anschließend kann alles frei angepasst werden:
+
+| Vorlage | Beschreibung |
+|---------|-------------|
+| **Benutzerdefiniert** | Leeres Formular, alle Felder frei konfigurierbar |
+| **Pi-Kamera → Konvertieren** | Download von Raspberry Pi + Konvertierung |
+| **Pi-Kamera → Konvertieren → YouTube** | Download + Konvertierung + YouTube-Upload |
+| **Ordner → Konvertieren** | Alle Dateien eines Ordners konvertieren |
+| **Ordner → Konvertieren → YouTube** | Ordner konvertieren + YouTube-Upload |
+| **Dateien → YouTube hochladen** | Fertige Dateien direkt hochladen |
+| **Dateien → Konvertieren → YouTube** | Dateien konvertieren + YouTube-Upload |
+
+### Abschnitt: Quelle
+
+| Quellmodus | Beschreibung |
+|------------|-------------|
+| **Dateien auswählen** | Einzelne Videodateien direkt auswählen; jede Datei kann eigenen YT-Titel und Playlist erhalten |
+| **Ordner scannen** | Alle Dateien eines Ordners mit passendem Glob-Muster verarbeiten; optionaler Zielordner, Ausgabe-Präfix und Verschieben-Option |
+| **Pi-Kamera herunterladen** | Aufnahmen einer konfigurierten Raspberry-Pi-Kamera per rsync/SSH herunterladen und verarbeiten |
+
+### Abschnitt: Verarbeitung
+
+Kann komplett deaktiviert werden (z. B. für reinen YouTube-Upload ohne Neu-Kodierung).
+
+| Einstellung | Beschreibung |
+|-------------|-------------|
+| **Encoding aktivieren** | Schalter – deaktiviert alle Encoding-Optionen |
+| **Profil-Schnellauswahl** | Buttons *KI Auswertung*, *YouTube*, *Benutzerdefiniert* – setzt Encoder, Preset, CRF und Format |
+| **Encoder** | `auto`, `h264_nvenc` (NVIDIA) oder `libx264` (CPU) |
+| **Preset** | ffmpeg-Preset (ultrafast … veryslow) |
+| **CRF** | Qualität; 0 = verlustfrei, 18 = sehr gut, 23 = Standard |
+| **FPS** | Eingabe-Framerate |
+| **Format** | `mp4` oder `avi` |
+| **Halbzeiten zusammenführen** | Erkennt zusammengehörige Halbzeiten und fügt sie zusammen |
+
+### Abschnitt: Audio
+
+| Einstellung | Beschreibung |
+|-------------|-------------|
+| **Audio zusammenführen** | Externe WAV-Datei in die Ausgabe einbinden (für MJPEG-Rohaufnahmen) |
+| **Audio verstärken** | Verstärkung in dB + EBU R128 Loudnorm |
+| **Audio-Sync** | Frame-Drop-Korrektur (MJPEG): passt Input-FPS an Audio-Dauer an |
+
+### Abschnitt: YouTube
+
+| Einstellung | Beschreibung |
+|-------------|-------------|
+| **YouTube-Version erstellen** | Zusätzlich eine `*_youtube.mp4` mit YouTube-optimierten Einstellungen erzeugen |
+| **YouTube hochladen** | Datei nach der Konvertierung automatisch hochladen |
+| **Titel** | YouTube-Videotitel (max. 100 Zeichen) |
+| **Playlist** | Name der Ziel-Playlist (wird automatisch angelegt, falls nicht vorhanden) |
 
 ---
 
-## Jobliste importieren / exportieren
+## Workflow laden / speichern
 
-Die gesamte Jobliste kann als JSON-Datei gespeichert und wieder geladen werden:
+Die gesamte Auftragsliste kann als JSON-Datei gespeichert und wieder geladen werden:
 
-- **Datei → Jobliste exportieren … (Strg+E)** – Speichert alle aktuellen Jobs in eine `.json`-Datei
-- **Datei → Jobliste importieren … (Strg+I)** – Lädt Jobs aus einer `.json`-Datei und hängt sie an die bestehende Liste an
+- **Datei → Workflow speichern … (Strg+E)** – Speichert alle aktuellen Aufträge in eine `.json`-Datei  
+- **Datei → Workflow laden … (Strg+I)** – Lädt Aufträge aus einer `.json`-Datei
+- **Toolbar: Laden / Speichern** – dieselben Funktionen direkt über die Toolbar
 
-So lassen sich vorbereitete Joblisten teilen oder für wiederkehrende Aufgaben wiederverwenden.
+Gespeicherte Workflows liegen standardmäßig unter `data/workflows/`. So lassen sich vorbereitete
+Auftragslisten teilen oder für wiederkehrende Aufgaben (z. B. Spieltag) wiederverwenden.
 
----
-
-## Workflow-Assistent
-
-Der **Workflow-Assistent** (Strg+W) ist ein Zwei-Etappen-Dialog zum Zusammenstellen komplexer
-Verarbeitungs-Aufträge – ein Baukasten, in dem Quellen und deren Verarbeitung vorkonfiguriert
-werden, auch bevor die Dateien existieren.
-
-### Seite 1: Quellen
-
-Über **＋ Quelle hinzufügen** wird ein Bearbeitungsdialog geöffnet, in dem der Quelltyp
-gewählt und konfiguriert wird. Der **Name** wird automatisch abgeleitet (Gerätename bei
-Pi-Kameras, Ordner- oder Dateiname bei lokalen Quellen):
-
-| Quelltyp | Beschreibung |
-|----------|-------------|
-| **Pi-Kamera** (📷) | Raspberry Pi Kamera-System – Video wird per rsync/SSH heruntergeladen |
-| **Lokale Quelle** (📁) | Ordner oder Einzeldatei(en) von Festplatte/SSD/NAS/USB |
-
-Bei **lokalen Quellen** kann zwischen zwei Modi gewählt werden:
-
-| Modus | Beschreibung |
-|-------|-------------|
-| **Ordner** | Verarbeitet alle Dateien eines Ordners (mit Glob-Pattern, z. B. `*.mp4`, `*.mjpg`) |
-| **Datei(en)** | Wählt eine einzelne Videodatei aus – optional mit separater Audiodatei für das Zusammenführen |
-
-Weitere Optionen:
-
-- **Dateien ins Zielverzeichnis verschieben** – für externe Medien (DJI-SSD, USB-Stick), deren Dateien erst kopiert werden müssen
-- **Alle konfigurierten Kameras** – fügt alle Pi-Kameras aus den Einstellungen auf einmal hinzu
-
-### Seite 2: Verarbeitung
-
-Zeigt eine kompakte **Übersichtstabelle** aller Quellen mit den wichtigsten Verarbeitungsparametern:
-
-| Spalte | Inhalt |
-|--------|--------|
-| **Name** | Quellname mit Typ-Icon |
-| **Encoding** | Encoder, Preset und CRF |
-| **Audio** | Merge-, Verstärkungs-Status (inkl. dB-Wert) und Sync |
-| **YouTube** | YouTube-Version und Upload-Status |
-| **Ausgabe** | Ausgabedateiname (falls konfiguriert) |
-
-Per **Doppelklick** auf eine Zeile öffnet sich ein **Bearbeitungsdialog** mit allen Optionen:
-
-- **Verarbeitung:** Audio+Video zusammenführen, Audio verstärken (mit konfigurierbarem dB-Wert), Audio-Sync (für alle Quelltypen verfügbar –
-  auch für lokale Quellen, z. B. Pi-Aufnahmen über NAS oder externe Platte)
-- **Profil-Schnellauswahl:** Buttons für jedes Profil (KI Auswertung, YouTube, Benutzerdefiniert) –
-  setzt Encoder, Preset, CRF und Format mit einem Klick
-- **Encoding:** Encoder, Preset, CRF, FPS, Format – alles einzeln einstellbar
-- **Ausgabe:** Dateiname für die erzeugte Datei (leer = automatisch aus Quelldatei)
-- **YouTube:** Version erstellen, Upload, Titel und Playlist
-
-> **Profile** können sowohl **pro Quelle** im Bearbeitungsdialog als auch **global für alle Quellen**
-> über die Schnell-Profil-Leiste oben auf Seite 2 angewendet werden.
-
-### Workflow speichern / laden
-
-Über die Buttons auf Seite 1 können Workflows als JSON-Datei gespeichert und wieder geladen werden.
-Gespeicherte Workflows liegen unter `data/workflows/`.
-
-### Globale Optionen
-
-| Option | Beschreibung |
-|--------|-------------|
-| **Rechner nach Abschluss herunterfahren** | System-Shutdown nach Abschluss aller Jobs |
+> **CLI:** Mit `--workflow PFAD` kann ein gespeicherter Workflow beim Start automatisch geladen und
+> sofort ausgeführt werden.
 
 ---
 
 ## Session wiederherstellen
 
-Beim Beenden der App wird die aktuelle Jobliste automatisch als `data/session.json` gespeichert.
+Beim Beenden der App wird die aktuelle Auftragsliste automatisch als `data/session.json` gespeichert.
 Unter **Einstellungen → Allgemein** kann die Option **„Letzte Jobliste beim Start wiederherstellen"**
-aktiviert werden. Dann wird beim nächsten Programmstart die gespeicherte Jobliste automatisch geladen.
+aktiviert werden. Dann wird beim nächsten Programmstart die gespeicherte Auftragsliste automatisch geladen.
 
-Beim Wiederherstellen werden **unfertige Jobs** (Status *Herunterladen*, *Heruntergeladen*, *Läuft*)
+Beim Wiederherstellen werden **unfertige Aufträge** (Status *Herunterladen*, *Heruntergeladen*, *Läuft*)
 automatisch auf **Wartend** zurückgesetzt, damit sie erneut gestartet werden können.
 
 | Datei | Beschreibung |
 |-------|-----------|
-| `data/session.json` | Wird beim Beenden automatisch geschrieben; enthält die Jobliste als JSON |
+| `data/session.json` | Wird beim Beenden automatisch geschrieben; enthält die Auftragsliste als JSON |
 
 > **Tipp:** Auch ohne aktivierte Option bleibt `data/session.json` erhalten und kann jederzeit manuell
-> über **Datei → Jobliste importieren** geladen werden.
+> über **Datei → Workflow laden** geladen werden.
 
 ---
 
