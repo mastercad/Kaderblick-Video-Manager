@@ -1,4 +1,4 @@
-"""Haupt-GUI des MJPEG Converters (QMainWindow)."""
+"""Haupt-GUI des Video Managers (QMainWindow)."""
 
 import argparse
 import time
@@ -9,31 +9,55 @@ from PySide6.QtCore import Qt, QThread, Slot
 from PySide6.QtGui import QFont, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QMainWindow, QToolBar, QTableWidget, QTableWidgetItem, QHeaderView,
-    QTextEdit, QProgressBar, QLabel,
+    QTextEdit, QProgressBar, QLabel, QCheckBox,
     QFileDialog, QMessageBox, QSplitter, QAbstractItemView,
-    QTreeView, QListView,
 )
 
 from .settings import AppSettings, SESSION_FILE
-from .converter import ConvertJob, save_jobs, load_jobs
-from .worker import ConvertWorker
-from .download_worker import DownloadWorker
 from .delegates import ProgressDelegate
 from .dialogs import (
     VideoSettingsDialog, AudioSettingsDialog,
-    YouTubeSettingsDialog, JobEditDialog,
+    YouTubeSettingsDialog,
     CameraSettingsDialog,
 )
-from .download_dialog import DownloadDialog
-from .workflow import Workflow
-from .workflow_wizard import WorkflowWizard
+from .workflow import Workflow, WorkflowJob, FileEntry, WORKFLOW_DIR
 from .workflow_executor import WorkflowExecutor
+from .job_editor import JobEditorDialog
+
+
+# ── Kompakt-Beschreibungen für die Übersichtstabelle ──────────────────────────
+
+def _summarize_source(job: WorkflowJob) -> str:
+    mode_icons = {"files": "🗃", "folder_scan": "📁", "pi_download": "📷"}
+    icon = mode_icons.get(job.source_mode, "?")
+    if job.source_mode == "files":
+        n = len(job.files)
+        return f"{icon} {n} Datei{'en' if n != 1 else ''}"
+    if job.source_mode == "folder_scan":
+        folder = Path(job.source_folder).name if job.source_folder else "–"
+        return f"{icon} {folder}"
+    if job.source_mode == "pi_download":
+        return f"{icon} {job.device_name or '–'}"
+    return "?"
+
+
+def _summarize_pipeline(job: WorkflowJob) -> str:
+    parts = []
+    if job.source_mode == "pi_download":
+        parts.append("Download")
+    if job.convert_enabled:
+        parts.append("Konvert.")
+    if job.create_youtube_version:
+        parts.append("YT-Version")
+    if job.upload_youtube:
+        parts.append("YT-Upload")
+    return " → ".join(parts) if parts else "—"
 
 
 class ConverterApp(QMainWindow):
     def __init__(self, cli_args: argparse.Namespace | None = None):
         super().__init__()
-        self.setWindowTitle("MJPEG Converter")
+        self.setWindowTitle("Video Manager")
         self.resize(960, 640)
         self.setMinimumSize(720, 460)
 
@@ -48,15 +72,10 @@ class ConverterApp(QMainWindow):
         if cli_args and cli_args.cameras_config:
             self._apply_cameras_config(cli_args.cameras_config)
 
-        self.jobs: list[ConvertJob] = []
-        self._worker: Optional[ConvertWorker] = None
-        self._thread: Optional[QThread] = None
-        self._dl_worker: Optional[DownloadWorker] = None
-        self._dl_thread: Optional[QThread] = None
+        self._workflow: Workflow = Workflow(jobs=[])
         self._wf_executor: Optional[WorkflowExecutor] = None
         self._wf_thread: Optional[QThread] = None
-        self._file_start_time: float = 0.0
-        self._job_start_time: float = 0.0
+        self._wf_start_time: float = 0.0
 
         self._build_menu()
         self._build_toolbar()
@@ -107,18 +126,25 @@ class ConverterApp(QMainWindow):
             print(f"[WARN] --cameras-config: Import fehlgeschlagen: {exc}")
 
     def _apply_add_files(self, paths: list[str]):
-        """Fügt CLI-übergebene Dateien als Jobs ein."""
+        """Fügt CLI-übergebene Dateien als Aufträge ein."""
         added = 0
         for raw in paths:
             p = Path(raw)
             if p.is_file():
-                self.jobs.append(ConvertJob(source_path=p))
+                job = WorkflowJob(
+                    source_mode="files",
+                    files=[FileEntry(source_path=str(p))],
+                )
+                self._workflow.jobs.append(job)
                 added += 1
             elif p.is_dir():
-                found = sorted(p.rglob("*"))
-                for f in found:
+                for f in sorted(p.rglob("*")):
                     if f.is_file():
-                        self.jobs.append(ConvertJob(source_path=f))
+                        job = WorkflowJob(
+                            source_mode="files",
+                            files=[FileEntry(source_path=str(f))],
+                        )
+                        self._workflow.jobs.append(job)
                         added += 1
             else:
                 print(f"[WARN] --add: Nicht gefunden: {p}")
@@ -141,8 +167,11 @@ class ConverterApp(QMainWindow):
             self._append_log(
                 f"[FEHLER] --workflow: Laden fehlgeschlagen: {exc}")
             return
+        self._workflow = wf
+        self._refresh_table()
+        self._update_count()
         self._append_log(f"CLI: Workflow geladen aus {p.name}")
-        self._run_workflow(wf)
+        self._start_workflow()
 
     # ══════════════════════════════════════════════════════════
     #  Menü
@@ -151,28 +180,14 @@ class ConverterApp(QMainWindow):
         mb = self.menuBar()
 
         file_menu = mb.addMenu("&Datei")
-        a = file_menu.addAction("Dateien hinzufügen …")
-        a.setShortcut(QKeySequence("Ctrl+O"))
-        a.triggered.connect(self._add_files)
-        a = file_menu.addAction("Ordner hinzufügen …")
-        a.setShortcut(QKeySequence("Ctrl+D"))
-        a.triggered.connect(self._add_directory)
-        a = file_menu.addAction("Pi-Download hinzufügen")
-        a.setShortcut(QKeySequence("Ctrl+P"))
-        a.triggered.connect(self._add_download_jobs)
-        file_menu.addSeparator()
-        a = file_menu.addAction("Workflow-Assistent …")
-        a.setShortcut(QKeySequence("Ctrl+W"))
-        a.triggered.connect(self._open_workflow_wizard)
-        file_menu.addSeparator()
-        a = file_menu.addAction("Jobliste exportieren …")
-        a.setShortcut(QKeySequence("Ctrl+E"))
-        a.triggered.connect(self._export_jobs)
-        a = file_menu.addAction("Jobliste importieren …")
+        a = file_menu.addAction("Workflow laden …")
         a.setShortcut(QKeySequence("Ctrl+I"))
-        a.triggered.connect(self._import_jobs)
+        a.triggered.connect(self._load_workflow)
+        a = file_menu.addAction("Workflow speichern …")
+        a.setShortcut(QKeySequence("Ctrl+E"))
+        a.triggered.connect(self._save_workflow)
         file_menu.addSeparator()
-        file_menu.addAction("Alle Jobs entfernen", self._clear_jobs)
+        file_menu.addAction("Alle Aufträge entfernen", self._clear_jobs)
         file_menu.addSeparator()
         file_menu.addAction("Beenden", self.close)
 
@@ -190,24 +205,27 @@ class ConverterApp(QMainWindow):
     def _build_toolbar(self):
         tb = QToolBar("Aktionen")
         tb.setMovable(False)
-        tb.setIconSize(tb.iconSize())
         self.addToolBar(tb)
 
-        tb.addAction("＋ Dateien", self._add_files)
-        tb.addAction("＋ Ordner", self._add_directory)
-        tb.addAction("＋ Pi-Download", self._add_download_jobs)
+        tb.addAction("＋ Auftrag", self._add_job)
+        tb.addAction("＋ Alle Kameras", self._add_all_cameras)
+        tb.addSeparator()
+        tb.addAction("Bearbeiten", self._edit_job)
+        tb.addAction("Duplizieren", self._duplicate_job)
+        tb.addAction("Entfernen", self._remove_selected)
         tb.addSeparator()
 
-        tb.addAction("🧩 Workflow", self._open_workflow_wizard)
-        tb.addSeparator()
-
-        self.act_start = tb.addAction("▶  Starten", self._start_jobs)
-        self.act_cancel = tb.addAction("■  Abbrechen", self._cancel_all)
+        self.act_start = tb.addAction("▶  Starten", self._start_workflow)
+        self.act_cancel = tb.addAction("■  Abbrechen", self._cancel_workflow)
         self.act_cancel.setEnabled(False)
         tb.addSeparator()
 
-        tb.addAction("Bearbeiten", self._edit_job)
-        tb.addAction("Entfernen", self._remove_selected)
+        tb.addAction("Laden", self._load_workflow)
+        tb.addAction("Speichern", self._save_workflow)
+        tb.addSeparator()
+
+        self._shutdown_cb = QCheckBox("Rechner herunterfahren")
+        tb.addWidget(self._shutdown_cb)
 
     # ══════════════════════════════════════════════════════════
     #  Zentrales Widget
@@ -217,14 +235,16 @@ class ConverterApp(QMainWindow):
 
         self.table = QTableWidget(0, 5)
         self.table.setHorizontalHeaderLabels(
-            ["#", "Typ", "Beschreibung", "Status", "YouTube-Titel"])
+            ["#", "Name", "Quelle", "Pipeline", "Status"])
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(2, QHeaderView.Interactive)
         hdr.setSectionResizeMode(3, QHeaderView.Interactive)
-        hdr.setSectionResizeMode(4, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(4, QHeaderView.Interactive)
+        hdr.resizeSection(2, 180)
         hdr.resizeSection(3, 160)
+        hdr.resizeSection(4, 200)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
@@ -232,7 +252,7 @@ class ConverterApp(QMainWindow):
         self.table.doubleClicked.connect(self._edit_job)
 
         self._progress_delegate = ProgressDelegate(self.table)
-        self.table.setItemDelegateForColumn(3, self._progress_delegate)
+        self.table.setItemDelegateForColumn(4, self._progress_delegate)
 
         splitter.addWidget(self.table)
 
@@ -263,33 +283,59 @@ class ConverterApp(QMainWindow):
     #  Tabelle
     # ══════════════════════════════════════════════════════════
     def _refresh_table(self):
-        self.table.setRowCount(len(self.jobs))
-        for i, job in enumerate(self.jobs):
+        jobs = self._workflow.jobs
+        self.table.setRowCount(len(jobs))
+        for i, job in enumerate(jobs):
             self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
+            self.table.setItem(i, 1, QTableWidgetItem(job.name or "–"))
+            self.table.setItem(i, 2, QTableWidgetItem(_summarize_source(job)))
+            self.table.setItem(i, 3, QTableWidgetItem(_summarize_pipeline(job)))
+            # Status-Spalte: nur anlegen wenn noch kein Status (Ausführung läuft)
+            if self.table.item(i, 4) is None:
+                item = QTableWidgetItem("Wartend")
+                item.setData(Qt.UserRole, 0)
+                self.table.setItem(i, 4, item)
 
-            if job.job_type == "download":
-                self.table.setItem(i, 1, QTableWidgetItem("⬇ Download"))
-                desc = f"{job.device_name}  →  {job.source_path}"
-            else:
-                self.table.setItem(i, 1, QTableWidgetItem("🔄 Konvertieren"))
-                desc = f"{job.source_path.name}   ({job.source_path.parent})"
+    def _set_row_status(self, row: int, status: str):
+        """Schreibt Status-Text in Spalte 4 und setzt Farbe."""
+        item = self.table.item(row, 4)
+        if item is None:
+            item = QTableWidgetItem()
+            self.table.setItem(row, 4, item)
+        item.setText(status)
+        if status == "Fertig":
+            item.setForeground(Qt.darkGreen)
+        elif "Fehler" in status:
+            item.setForeground(Qt.red)
+        elif status == "Übersprungen":
+            item.setForeground(Qt.gray)
+        elif status in ("Läuft", "Herunterladen", "Transfer …",
+                        "Konvertiere …", "YouTube-Upload …"):
+            item.setForeground(Qt.blue)
+        else:
+            item.setForeground(Qt.black)
+        self.table.viewport().update()
 
-            self.table.setItem(i, 2, QTableWidgetItem(desc))
+    def _set_row_progress(self, row: int, pct: int):
+        """Setzt Fortschrittsbalken-Daten in Spalte 4."""
+        item = self.table.item(row, 4)
+        if item is None:
+            item = QTableWidgetItem()
+            self.table.setItem(row, 4, item)
+        item.setData(Qt.UserRole, pct)
+        self.table.viewport().update()
 
-            status_item = QTableWidgetItem(job.status)
-            status_item.setData(Qt.UserRole, job.progress_pct)
-            if job.status == "Fertig":
-                status_item.setForeground(Qt.darkGreen)
-            elif "Fehler" in job.status:
-                status_item.setForeground(Qt.red)
-            elif job.status in ("Läuft", "Herunterladen"):
-                status_item.setForeground(Qt.blue)
-            elif job.status == "Übersprungen":
-                status_item.setForeground(Qt.gray)
-            self.table.setItem(i, 3, status_item)
-
-            self.table.setItem(i, 4, QTableWidgetItem(
-                job.youtube_title or ""))
+    def _reset_status_column(self):
+        """Setzt alle Status-Zellen auf »Wartend«."""
+        for i in range(self.table.rowCount()):
+            item = self.table.item(i, 4)
+            if item is None:
+                item = QTableWidgetItem()
+                self.table.setItem(i, 4, item)
+            item.setText("Wartend")
+            item.setData(Qt.UserRole, 0)
+            item.setForeground(Qt.black)
+        self.table.viewport().update()
 
     # ══════════════════════════════════════════════════════════
     #  Log
@@ -299,116 +345,65 @@ class ConverterApp(QMainWindow):
         self.log_text.append(msg)
 
     # ══════════════════════════════════════════════════════════
-    #  Jobliste befüllen
+    #  Aufträge verwalten
     # ══════════════════════════════════════════════════════════
-    def _add_files(self):
-        init_dir = self.settings.last_directory or str(Path.home())
-        files, _ = QFileDialog.getOpenFileNames(
-            self, "MJPEG-Dateien auswählen", init_dir,
-            "MJPEG-Dateien (*.mjpg *.mjpeg);;Alle Dateien (*)")
-        if files:
-            self.settings.last_directory = str(Path(files[0]).parent)
-            self.settings.save()
-            for f in files:
-                self.jobs.append(ConvertJob(source_path=Path(f)))
+    def _add_job(self):
+        """Öffnet den Auftrags-Editor für einen neuen Job."""
+        dlg = JobEditorDialog(self, self.settings, job=None)
+        if dlg.exec():
+            self._workflow.jobs.append(dlg.result_job)
             self._refresh_table()
             self._update_count()
 
-    def _add_directory(self):
-        init_dir = self.settings.last_directory or str(Path.home())
-        dlg = QFileDialog(self, "Ordner mit MJPEG-Dateien", init_dir)
-        dlg.setFileMode(QFileDialog.FileMode.Directory)
-        dlg.setOption(QFileDialog.Option.ShowDirsOnly, True)
-        dlg.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-        tree = dlg.findChild(QTreeView)
-        if tree:
-            tree.setSelectionMode(QTreeView.SelectionMode.ExtendedSelection)
-        list_view = dlg.findChild(QListView)
-        if list_view:
-            list_view.setSelectionMode(QListView.SelectionMode.ExtendedSelection)
-        if not dlg.exec():
-            return
-        dirs = dlg.selectedFiles()
-        if not dirs:
-            return
-        self.settings.last_directory = str(Path(dirs[0]).parent)
-        self.settings.save()
-        total_added = 0
-        empty_dirs = []
-        for d in dirs:
-            dp = Path(d)
-            found = sorted(dp.glob("*.mjpg")) + sorted(dp.glob("*.mjpeg"))
-            if not found:
-                empty_dirs.append(str(dp))
-                continue
-            for f in found:
-                self.jobs.append(ConvertJob(source_path=f))
-            total_added += len(found)
-        if empty_dirs:
-            QMessageBox.information(
-                self, "Hinweis",
-                "Keine .mjpg/.mjpeg-Dateien in:\n"
-                + "\n".join(empty_dirs))
-        if total_added:
-            self._refresh_table()
-            self._update_count()
-
-    def _add_download_jobs(self):
-        """Fügt je einen Download-Eintrag pro konfigurierter Kamera zur
-        Jobliste hinzu. Das eigentliche Herunterladen passiert beim Start."""
+    def _add_all_cameras(self):
+        """Fügt je einen Pi-Download-Auftrag pro konfigurierter Kamera hinzu."""
         cam = self.settings.cameras
         if not cam.devices:
             QMessageBox.warning(
                 self, "Keine Kameras",
-                "Es sind keine Kameras konfiguriert.\n"
                 "Bitte zuerst unter Einstellungen → Kameras Geräte anlegen.")
             return
-        if not cam.destination:
-            QMessageBox.warning(
-                self, "Kein Zielverzeichnis",
-                "In den Kamera-Einstellungen ist kein Zielverzeichnis angegeben.")
-            return
-        # Keine doppelten Download-Jobs für dieselben Geräte
-        existing = {j.device_name for j in self.jobs
-                    if j.job_type == "download" and j.status == "Wartend"}
+        existing_names = {
+            j.device_name for j in self._workflow.jobs
+            if j.source_mode == "pi_download"
+        }
         added = 0
         for dev in cam.devices:
-            if dev.name not in existing:
-                self.jobs.append(ConvertJob(
-                    source_path=Path(cam.destination),
-                    job_type="download",
+            if dev.name not in existing_names:
+                job = WorkflowJob(
+                    name=dev.name,
+                    source_mode="pi_download",
                     device_name=dev.name,
-                ))
+                    convert_enabled=True,
+                )
+                self._workflow.jobs.append(job)
                 added += 1
         if added:
             self._refresh_table()
             self._update_count()
-            self._append_log(
-                f"{added} Download-Auftrag/Aufträge für Pi-Kameras hinzugefügt\n"
-                f"Die heruntergeladenen Dateien werden nach dem Download "
-                f"automatisch als Konvertier-Aufträge angelegt und verarbeitet.")
+            self._append_log(f"{added} Kamera-Auftrag/Aufträge hinzugefügt.")
         else:
             QMessageBox.information(
                 self, "Hinweis",
-                "Download-Aufträge für alle Kameras sind bereits vorhanden.")
+                "Für alle Kameras sind bereits Aufträge vorhanden.")
 
     def _remove_selected(self):
         rows = sorted(
             {idx.row() for idx in self.table.selectedIndexes()},
             reverse=True)
         for r in rows:
-            if 0 <= r < len(self.jobs):
-                del self.jobs[r]
+            if 0 <= r < len(self._workflow.jobs):
+                del self._workflow.jobs[r]
         self._refresh_table()
         self._update_count()
 
     def _clear_jobs(self):
-        if self.jobs:
+        if self._workflow.jobs:
             if QMessageBox.question(
                     self, "Bestätigung", "Alle Aufträge entfernen?",
                     QMessageBox.Yes | QMessageBox.No
             ) == QMessageBox.Yes:
-                self.jobs.clear()
+                self._workflow.jobs.clear()
                 self._refresh_table()
                 self.status_label.setText("Bereit")
 
@@ -418,20 +413,30 @@ class ConverterApp(QMainWindow):
         if not rows:
             return
         idx = rows[0]
-        if 0 <= idx < len(self.jobs):
-            dlg = JobEditDialog(self, self.jobs[idx])
-            dlg.exec()
-            self._refresh_table()
+        if 0 <= idx < len(self._workflow.jobs):
+            job = self._workflow.jobs[idx]
+            dlg = JobEditorDialog(self, self.settings, job=job)
+            if dlg.exec():
+                self._refresh_table()
+
+    def _duplicate_job(self):
+        rows = sorted(
+            {idx.row() for idx in self.table.selectedIndexes()})
+        if not rows:
+            return
+        import copy
+        for r in reversed(rows):
+            if 0 <= r < len(self._workflow.jobs):
+                copy_job = copy.deepcopy(self._workflow.jobs[r])
+                copy_job.name = (copy_job.name or "") + " (Kopie)"
+                self._workflow.jobs.insert(r + 1, copy_job)
+        self._refresh_table()
+        self._update_count()
 
     def _update_count(self):
-        dl = sum(1 for j in self.jobs if j.job_type == "download")
-        cv = sum(1 for j in self.jobs if j.job_type == "convert")
-        parts = []
-        if dl:
-            parts.append(f"{dl} Download(s)")
-        if cv:
-            parts.append(f"{cv} Konvertierung(en)")
-        self.status_label.setText(", ".join(parts) if parts else "Bereit")
+        n = len(self._workflow.jobs)
+        self.status_label.setText(
+            f"{n} Auftrag/Aufträge" if n else "Bereit")
 
     # ══════════════════════════════════════════════════════════
     #  Einstellungs-Dialoge
@@ -456,159 +461,125 @@ class ConverterApp(QMainWindow):
         GeneralSettingsDialog(self, self.settings).exec()
 
     # ══════════════════════════════════════════════════════════
-    #  Jobliste Import / Export
+    #  Workflow laden / speichern
     # ══════════════════════════════════════════════════════════
-    def _export_jobs(self):
-        if not self.jobs:
-            QMessageBox.information(
-                self, "Hinweis", "Die Jobliste ist leer.")
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Jobliste exportieren",
-            str(Path(self.settings.last_directory or Path.home())
-                / "jobliste.json"),
-            "JSON-Dateien (*.json);;Alle Dateien (*)")
-        if path:
-            try:
-                save_jobs(self.jobs, Path(path))
-                self._append_log(
-                    f"Jobliste exportiert: {path}  ({len(self.jobs)} Jobs)")
-            except Exception as e:
-                QMessageBox.critical(
-                    self, "Export-Fehler", str(e))
-
-    def _import_jobs(self):
+    def _load_workflow(self):
+        WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
         path, _ = QFileDialog.getOpenFileName(
-            self, "Jobliste importieren",
-            self.settings.last_directory or str(Path.home()),
+            self, "Workflow laden",
+            str(WORKFLOW_DIR),
             "JSON-Dateien (*.json);;Alle Dateien (*)")
         if path:
             try:
-                imported = load_jobs(Path(path))
-                self.jobs.extend(imported)
+                wf = Workflow.load(Path(path))
+                self._workflow = wf
                 self._refresh_table()
                 self._update_count()
-                self._append_log(
-                    f"Jobliste importiert: {path}  ({len(imported)} Jobs)")
-            except Exception as e:
-                QMessageBox.critical(
-                    self, "Import-Fehler",
-                    f"Die Datei konnte nicht geladen werden:\n{e}")
+                self._append_log(f"Workflow geladen: {path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "Fehler beim Laden", str(exc))
+
+    def _save_workflow(self):
+        WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Workflow speichern",
+            str(WORKFLOW_DIR / "workflow.json"),
+            "JSON-Dateien (*.json);;Alle Dateien (*)")
+        if path:
+            try:
+                self._workflow.save(Path(path))
+                self._append_log(f"Workflow gespeichert: {path}")
+            except Exception as exc:
+                QMessageBox.critical(self, "Fehler beim Speichern", str(exc))
 
     # ══════════════════════════════════════════════════════════
     #  Session speichern / wiederherstellen
     # ══════════════════════════════════════════════════════════
     def _save_session(self):
-        """Speichert die aktuelle Jobliste als session.json."""
+        """Speichert den aktuellen Workflow als session.json."""
         try:
-            save_jobs(self.jobs, SESSION_FILE)
+            self._workflow.save(SESSION_FILE)
         except Exception:
             pass   # Stillschweigend ignorieren
 
     def _restore_session(self):
-        """Lädt die letzte Jobliste aus session.json."""
+        """Lädt den letzten Workflow aus session.json."""
         if SESSION_FILE.exists():
             try:
-                self.jobs = load_jobs(SESSION_FILE)
-                # Unfertige Jobs zurücksetzen, damit sie erneut gestartet
-                # werden können (z. B. nach App-Neustart während Download).
-                _reset_stati = {
-                    "Herunterladen", "Heruntergeladen", "Läuft",
-                }
-                for job in self.jobs:
-                    if job.status in _reset_stati:
-                        job.status = "Wartend"
+                self._workflow = Workflow.load(SESSION_FILE)
                 self._refresh_table()
                 self._update_count()
                 self._append_log(
-                    f"Session wiederhergestellt: {len(self.jobs)} Job(s)")
+                    f"Session wiederhergestellt: "
+                    f"{len(self._workflow.jobs)} Auftrag/Aufträge")
             except Exception:
                 pass
 
     # ══════════════════════════════════════════════════════════
-    #  Pipeline: ▶ Starten
-    #
-    #  1. Download-Jobs vorhanden? → DownloadWorker → fertig? weiter zu 2.
-    #  2. Konvertier-Jobs vorhanden? → ConvertWorker → fertig.
-    #
-    #  Alles im selben Fenster, eine Jobliste, ein Start-Button.
+    #  ▶ Workflow starten
     # ══════════════════════════════════════════════════════════
-    def _start_jobs(self):
-        pending_dl = [j for j in self.jobs
-                      if j.job_type == "download"
-                      and j.status in ("Wartend", "Fehler")]
-        pending_cv = [j for j in self.jobs
-                      if j.job_type == "convert"
-                      and j.status in ("Wartend", "Fehler")]
-
-        if not pending_dl and not pending_cv:
+    def _start_workflow(self):
+        enabled = [j for j in self._workflow.jobs if j.enabled]
+        if not enabled:
             QMessageBox.information(
-                self, "Hinweis", "Keine wartenden Aufträge.")
+                self, "Hinweis", "Keine aktiven Aufträge vorhanden.")
             return
+
+        if self._wf_thread and self._wf_thread.isRunning():
+            return
+
+        # Status-Spalte zurücksetzen
+        self._reset_status_column()
 
         self._set_busy(True)
-
-        if pending_dl:
-            self._run_downloads(pending_dl)
-        else:
-            self._run_converts(pending_cv)
-
-    # ── Phase 1: Downloads ────────────────────────────────────
-    def _run_downloads(self, dl_jobs: list[ConvertJob]):
-        cam = self.settings.cameras
-
-        # Geräte anhand der Job-Device-Namen auflösen
-        dev_by_name = {d.name: d for d in cam.devices}
-        devices = []
-        for job in dl_jobs:
-            dev = dev_by_name.get(job.device_name)
-            if dev:
-                devices.append(dev)
-                job.status = "Wartend"
-            else:
-                job.status = "Fehler"
-                job.error_msg = f"Gerät '{job.device_name}' nicht in Einstellungen"
-        self._refresh_table()
-
-        if not devices:
-            self._append_log("Keine gültigen Geräte – Downloads übersprungen.")
-            self._after_downloads()
-            return
-
         self._append_log(
             f"\n{'═'*60}"
-            f"\n  ⬇ Download von {len(devices)} Kamera(s)"
-            f"  →  {cam.destination}"
+            f"\n  ▶ Workflow gestartet  ({len(enabled)} aktive Aufträge)"
             f"\n{'═'*60}")
+        self.progress.setMaximum(len(enabled))
+        self.progress.setValue(0)
 
-        # Alle Download-Jobs auf "Herunterladen" setzen
-        for job in dl_jobs:
-            if job.status != "Fehler":
-                job.status = "Herunterladen"
-        self._refresh_table()
+        self._workflow.shutdown_after = self._shutdown_cb.isChecked()
 
-        self._dl_thread = QThread(self)
-        self._dl_worker = DownloadWorker(
-            config=cam,
-            devices=devices,
-            delete_after_download=cam.delete_after_download,
-        )
-        self._dl_worker.moveToThread(self._dl_thread)
-        self._dl_thread.started.connect(self._dl_worker.run)
-        self._dl_worker.log_message.connect(self._append_log)
-        self._dl_worker.file_progress.connect(self._on_dl_file_progress)
-        self._dl_worker.device_done.connect(self._on_device_done)
-        self._dl_worker.finished.connect(self._on_all_downloads_done)
-        self._dl_thread.start()
+        self._wf_thread = QThread(self)
+        self._wf_executor = WorkflowExecutor(self._workflow, self.settings)
+        self._wf_executor.moveToThread(self._wf_thread)
+
+        self._wf_thread.started.connect(self._wf_executor.run)
+        self._wf_executor.log_message.connect(self._append_log)
+        self._wf_executor.job_status.connect(self._on_job_status)
+        self._wf_executor.job_progress.connect(self._on_job_progress)
+        self._wf_executor.file_progress.connect(self._on_dl_progress)
+        self._wf_executor.overall_progress.connect(self._on_overall_progress)
+        self._wf_executor.phase_changed.connect(self._on_phase_changed)
+        self._wf_executor.finished.connect(self._on_workflow_done)
+
+        self._wf_start_time = time.monotonic()
+        self._wf_thread.start()
+
+    def _cancel_workflow(self):
+        if self._wf_executor:
+            self._wf_executor.cancel()
+        self._append_log("Abbruch angefordert …")
+
+    # ── Executor-Slots ────────────────────────────────────────
+
+    @Slot(int, str)
+    def _on_job_status(self, orig_idx: int, status: str):
+        if 0 <= orig_idx < self.table.rowCount():
+            self._set_row_status(orig_idx, status)
+
+    @Slot(int, int)
+    def _on_job_progress(self, orig_idx: int, pct: int):
+        if 0 <= orig_idx < self.table.rowCount():
+            self._set_row_progress(orig_idx, pct)
 
     @Slot(str, str, float, float, float)
-    def _on_dl_file_progress(self, device: str, filename: str,
-                             transferred: float, total: float,
-                             speed_bps: float):
+    def _on_dl_progress(self, device: str, filename: str,
+                        transferred: float, total: float, speed_bps: float):
         if total > 0:
             pct = int(transferred / total * 100)
-            # Geschwindigkeit + ETA berechnen
-            info = f"⬇ {device}: {filename}  {pct} %"
+            info = f"⬇ {device}: {filename}  {pct}%"
             if speed_bps > 0:
                 speed_mb = speed_bps / 1048576
                 remaining = total - transferred
@@ -624,152 +595,42 @@ class ConverterApp(QMainWindow):
         else:
             self.status_label.setText(f"⬇ {device}: {filename}")
 
-    @Slot(str, int)
-    def _on_device_done(self, device_name: str, count: int):
-        """Aktualisiert den Download-Job für dieses Gerät."""
-        for job in self.jobs:
-            if (job.job_type == "download"
-                    and job.device_name == device_name
-                    and job.status == "Herunterladen"):
-                job.status = "Heruntergeladen"
-                break
-        self._refresh_table()
-
-    @Slot(int, list)
-    def _on_all_downloads_done(self, total: int, mjpg_paths: list):
-        self._dl_thread.quit()
-        self._dl_thread.wait()
-        self._dl_thread = None
-        self._dl_worker = None
-
-        # Download-Jobs abschließen – nur Geräte, die tatsächlich
-        # Ergebnisse geliefert haben, als "Fertig" markieren.
-        # Abgebrochene / fehlgeschlagene Jobs zurück auf "Wartend".
-        successful_devices = {name for name, _path in mjpg_paths}
-        for job in self.jobs:
-            if job.job_type == "download" and job.status in (
-                    "Herunterladen", "Heruntergeladen"):
-                if job.device_name in successful_devices:
-                    job.status = "Fertig"
-                else:
-                    job.status = "Wartend"
-
-        self._append_log(f"\n⬇ Downloads abgeschlossen: {total} Aufnahme(n)")
-
-        # Metadaten von Download-Jobs indexieren (device_name → Job)
-        dl_meta = {}
-        for job in self.jobs:
-            if job.job_type == "download":
-                dl_meta[job.device_name] = job
-
-        # Konvertier-Jobs aus heruntergeladenen Dateien erzeugen
-        # mjpg_paths ist list[tuple[str, str]] → (device_name, path)
-        if mjpg_paths:
-            existing = {str(j.source_path) for j in self.jobs
-                        if j.job_type == "convert"}
-            added = 0
-            for device_name, path in mjpg_paths:
-                if path not in existing:
-                    parent_job = dl_meta.get(device_name)
-                    new_job = ConvertJob(source_path=Path(path))
-                    if parent_job:
-                        new_job.youtube_title = parent_job.youtube_title
-                        new_job.youtube_playlist = parent_job.youtube_playlist
-                    self.jobs.append(new_job)
-                    added += 1
-            if added:
-                self._append_log(
-                    f"   {added} Konvertier-Auftrag/Aufträge aus Download erzeugt")
-        self._refresh_table()
-
-        # Weiter zur Konvertierung
-        self._after_downloads()
-
-    def _after_downloads(self):
-        """Prüft ob Konvertier-Jobs anstehen und startet sie."""
-        pending_cv = [j for j in self.jobs
-                      if j.job_type == "convert"
-                      and j.status in ("Wartend", "Fehler")]
-        if pending_cv:
-            self._run_converts(pending_cv)
-        else:
-            self._append_log("Keine Dateien zum Konvertieren.")
-            self._set_busy(False)
-
-    # ── Phase 2: Konvertierung ────────────────────────────────
-    def _run_converts(self, cv_jobs: list[ConvertJob]):
-        self._append_log(
-            f"\n{'═'*60}"
-            f"\n  🔄 Konvertierung von {len(cv_jobs)} Datei(en)"
-            f"\n{'═'*60}")
-
-        self.progress.setMaximum(len(cv_jobs))
-        self.progress.setValue(0)
-
-        self._thread = QThread()
-        self._worker = ConvertWorker(cv_jobs, self.settings)
-        self._worker.moveToThread(self._thread)
-
-        self._thread.started.connect(self._worker.run)
-        self._worker.log_message.connect(self._append_log)
-        self._worker.job_updated.connect(self._refresh_table)
-        self._worker.progress.connect(self._on_progress)
-        self._worker.file_progress.connect(self._on_file_progress)
-        self._worker.finished.connect(self._on_worker_done)
-
-        self._job_start_time = time.monotonic()
-        self._file_start_time = time.monotonic()
-        self._thread.start()
+    @Slot(int)
+    def _on_phase_changed(self, phase: int):
+        if phase == 1:
+            self.status_label.setText("Phase 1 – Downloads …")
+        elif phase == 2:
+            self.status_label.setText("Phase 2 – Konvertierung …")
 
     @Slot(int, int)
-    def _on_progress(self, done: int, total: int):
+    def _on_overall_progress(self, done: int, total: int):
+        self.progress.setMaximum(total)
         self.progress.setValue(done)
-        self._file_start_time = time.monotonic()
-        self.status_label.setText(f"Konvertiere {done}/{total} …")
-
-    @Slot(int, int)
-    def _on_file_progress(self, job_index: int, pct: int):
-        elapsed = time.monotonic() - self._file_start_time
-        eta_str = ""
-        if pct > 0 and elapsed > 2:
-            total_est = elapsed / (pct / 100.0)
-            remaining = max(0, total_est - elapsed)
-            eta_str = (
-                f" – Verstrichen: {self._format_duration(elapsed)},"
-                f" Rest: ~{self._format_duration(remaining)}")
-
-        done_jobs = self.progress.value()
-        total_jobs = self.progress.maximum()
+        elapsed = time.monotonic() - self._wf_start_time
         self.status_label.setText(
-            f"Konvertiere {done_jobs}/{total_jobs}"
-            f" – Datei {pct}%{eta_str}")
-
-        row = self._find_job_row(job_index)
-        if row is not None:
-            item = self.table.item(row, 3)
-            if item is not None:
-                if pct < 100:
-                    item.setText(f"Läuft ({pct}%)")
-                else:
-                    item.setText("Läuft (100%)")
-                item.setData(Qt.UserRole, pct)
-                self.table.viewport().update()
+            f"Schritt {done}/{total}  ({self._format_duration(elapsed)})")
 
     @Slot(int, int, int)
-    def _on_worker_done(self, ok: int, skip: int, fail: int):
-        msg = (f"Fertig: {ok} erfolgreich, {skip} übersprungen, "
-               f"{fail} fehlgeschlagen")
+    def _on_workflow_done(self, ok: int, skip: int, fail: int):
+        if self._wf_thread:
+            self._wf_thread.quit()
+            self._wf_thread.wait()
+            self._wf_thread = None
+            self._wf_executor = None
+
+        elapsed = time.monotonic() - self._wf_start_time
+        msg = (f"Fertig: {ok} OK, {skip} übersprungen, {fail} Fehler"
+               f"  ({self._format_duration(elapsed)})")
         self._append_log(f"\n{msg}")
         self.status_label.setText(msg)
         self._set_busy(False)
 
-        if self._thread:
-            self._thread.quit()
-            self._thread.wait()
-            self._thread = None
-            self._worker = None
-
-        self._refresh_table()
+        if self._workflow.shutdown_after and fail == 0:
+            self._append_log("\n⏻ Rechner wird in 1 Minute heruntergefahren …")
+            import subprocess
+            subprocess.Popen(["shutdown", "+1"])
+        elif self._workflow.shutdown_after and fail > 0:
+            self._append_log("\n⚠ Herunterfahren übersprungen wegen Fehlern.")
 
     # ══════════════════════════════════════════════════════════
     #  Hilfsmethoden
@@ -788,165 +649,30 @@ class ConverterApp(QMainWindow):
         else:
             return f"{s}s"
 
-    def _find_job_row(self, pending_index: int) -> Optional[int]:
-        if not hasattr(self, '_worker') or not self._worker:
-            return None
-        try:
-            job = self._worker._jobs[pending_index]
-        except IndexError:
-            return None
-        for row, j in enumerate(self.jobs):
-            if j is job:
-                return row
-        return None
-
-    def _cancel_all(self):
-        if self._dl_worker:
-            self._dl_worker.cancel()
-        if self._worker:
-            self._worker.cancel()
-        if self._wf_executor:
-            self._wf_executor.cancel()
-        self._append_log("Abbruch angefordert …")
-
     def _set_busy(self, busy: bool):
         self.act_start.setEnabled(not busy)
         self.act_cancel.setEnabled(busy)
 
     # ══════════════════════════════════════════════════════════
-    #  Workflow-Assistent
-    # ══════════════════════════════════════════════════════════
-    def _open_workflow_wizard(self):
-        """Öffnet den Workflow-Assistenten."""
-        running = ((self._thread and self._thread.isRunning())
-                   or (self._dl_thread and self._dl_thread.isRunning())
-                   or (self._wf_thread and self._wf_thread.isRunning()))
-        if running:
-            QMessageBox.warning(
-                self, "Beschäftigt",
-                "Es läuft bereits ein Download oder eine Konvertierung.\n"
-                "Bitte zuerst abbrechen oder abwarten.")
-            return
-
-        # Letzten Workflow laden als Vorlage
-        last_wf = Workflow.load_last()
-        wizard = WorkflowWizard(self, self.settings, last_wf)
-        if wizard.exec():
-            self._run_workflow(wizard.workflow)
-
-    def _run_workflow(self, workflow: Workflow):
-        """Startet die Ausführung eines Workflows."""
-        self._set_busy(True)
-        self._append_log(
-            f"\n{'═'*60}"
-            f"\n  🧩 Workflow gestartet"
-            f"  ({len([s for s in workflow.sources if s.enabled])} Quellen)"
-            f"\n{'═'*60}")
-
-        self._wf_thread = QThread(self)
-        self._wf_executor = WorkflowExecutor(workflow, self.settings)
-        self._wf_executor.moveToThread(self._wf_thread)
-
-        self._wf_thread.started.connect(self._wf_executor.run)
-        self._wf_executor.log_message.connect(self._append_log)
-        self._wf_executor.file_progress.connect(self._on_wf_dl_progress)
-        self._wf_executor.convert_progress.connect(self._on_wf_convert_progress)
-        self._wf_executor.phase_changed.connect(self._on_wf_phase)
-        self._wf_executor.overall_progress.connect(self._on_wf_overall)
-        self._wf_executor.finished.connect(self._on_wf_done)
-
-        self._wf_start_time = time.monotonic()
-        self._wf_workflow = workflow
-        self._wf_thread.start()
-
-    @Slot(int)
-    def _on_wf_phase(self, phase: int):
-        if phase == 1:
-            self.status_label.setText("Workflow: Phase 1 – Downloads …")
-        elif phase == 2:
-            self.status_label.setText("Workflow: Phase 2 – Konvertierung …")
-
-    @Slot(int, int)
-    def _on_wf_overall(self, done: int, total: int):
-        self.progress.setMaximum(total)
-        self.progress.setValue(done)
-
-    @Slot(str, str, float, float, float)
-    def _on_wf_dl_progress(self, device: str, filename: str,
-                           transferred: float, total: float,
-                           speed_bps: float):
-        if total > 0:
-            pct = int(transferred / total * 100)
-            info = f"⬇ {device}: {filename}  {pct} %"
-            if speed_bps > 0:
-                speed_mb = speed_bps / 1048576
-                remaining = total - transferred
-                eta_s = remaining / speed_bps
-                if eta_s >= 3600:
-                    eta_str = f"{int(eta_s // 3600)}h {int((eta_s % 3600) // 60)}min"
-                elif eta_s >= 60:
-                    eta_str = f"{int(eta_s // 60)}min {int(eta_s % 60)}s"
-                else:
-                    eta_str = f"{int(eta_s)}s"
-                info += f"  –  {speed_mb:.1f} MB/s  ETA {eta_str}"
-            self.status_label.setText(info)
-
-    @Slot(int, int)
-    def _on_wf_convert_progress(self, conv_idx: int, pct: int):
-        elapsed = time.monotonic() - self._wf_start_time
-        self.status_label.setText(
-            f"Workflow: Konvertiere #{conv_idx+1} – {pct}%"
-            f"  (Gesamt: {self._format_duration(elapsed)})")
-
-    @Slot(int, int, int)
-    def _on_wf_done(self, ok: int, skip: int, fail: int):
-        if self._wf_thread:
-            self._wf_thread.quit()
-            self._wf_thread.wait()
-            self._wf_thread = None
-            self._wf_executor = None
-
-        elapsed = time.monotonic() - self._wf_start_time
-        msg = (f"Workflow abgeschlossen: {ok} OK, {skip} übersprungen, "
-               f"{fail} Fehler  ({self._format_duration(elapsed)})")
-        self._append_log(f"\n{msg}")
-        self.status_label.setText(msg)
-        self._set_busy(False)
-
-        # Rechner herunterfahren wenn gewünscht
-        shutdown = (hasattr(self, '_wf_workflow')
-                    and self._wf_workflow
-                    and self._wf_workflow.shutdown_after)
-        if shutdown and fail == 0:
-            self._append_log("\n⏻ Rechner wird in 30 Sekunden heruntergefahren …")
-            import subprocess
-            subprocess.Popen(["shutdown", "+0.5"])
-        elif shutdown and fail > 0:
-            self._append_log(
-                "\n⚠ Herunterfahren übersprungen wegen Fehlern.")
-
-    # ══════════════════════════════════════════════════════════
     #  Beenden
     # ══════════════════════════════════════════════════════════
     def closeEvent(self, event):
-        running = ((self._thread and self._thread.isRunning())
-                   or (self._dl_thread and self._dl_thread.isRunning())
-                   or (self._wf_thread and self._wf_thread.isRunning()))
+        running = self._wf_thread and self._wf_thread.isRunning()
         if running:
             if QMessageBox.question(
                     self, "Verarbeitung läuft",
-                    "Download oder Konvertierung läuft noch. Wirklich beenden?",
+                    "Workflow läuft noch. Wirklich beenden?",
                     QMessageBox.Yes | QMessageBox.No
             ) != QMessageBox.Yes:
                 event.ignore()
                 return
-            self._cancel_all()
-            for t in (self._thread, self._dl_thread, self._wf_thread):
-                if t:
-                    t.quit()
-                    if not t.wait(10_000):
-                        t.terminate()
-                        t.wait(2000)
+            if self._wf_executor:
+                self._wf_executor.cancel()
+            if self._wf_thread:
+                self._wf_thread.quit()
+                if not self._wf_thread.wait(10_000):
+                    self._wf_thread.terminate()
+                    self._wf_thread.wait(2000)
         # Session immer speichern (für Restore beim nächsten Start)
         self._save_session()
         event.accept()

@@ -1,0 +1,375 @@
+"""Workflow-Dialog: Auftragsliste verwalten und Workflow starten.
+
+Ersetzt den alten mehrstufigen Workflow-Wizard durch einen einzigen,
+übersichtlichen Dialog:
+  • Aufträge anlegen, bearbeiten, löschen, aktivieren/deaktivieren
+  • Workflow laden / speichern
+  • Globale Optionen (Rechner herunterfahren)
+  • Workflow starten
+"""
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QGroupBox,
+    QPushButton, QDialogButtonBox, QLabel,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+    QCheckBox, QFileDialog, QMessageBox, QSplitter, QWidget,
+)
+
+from .settings import AppSettings
+from .workflow import Workflow, WorkflowJob, WORKFLOW_DIR
+from .job_editor import JobEditorDialog
+
+
+# Kompakt-Beschreibungen für die Übersichtstabelle
+def _summarize_source(job: WorkflowJob) -> str:
+    mode_icons = {"files": "🗃", "folder_scan": "📁", "pi_download": "📷"}
+    icon = mode_icons.get(job.source_mode, "?")
+    if job.source_mode == "files":
+        n = len(job.files)
+        return f"{icon} {n} Datei{'en' if n != 1 else ''}"
+    if job.source_mode == "folder_scan":
+        folder = Path(job.source_folder).name if job.source_folder else "–"
+        return f"{icon} {folder}  ({job.file_pattern})"
+    if job.source_mode == "pi_download":
+        return f"{icon} {job.device_name or '–'}"
+    return "?"
+
+
+def _summarize_processing(job: WorkflowJob) -> str:
+    if not job.convert_enabled:
+        return "keine Konvertierung"
+    from .encoder import encoder_display_name
+    enc = encoder_display_name(job.encoder)
+    return f"{enc}  CRF {job.crf}  {job.output_format.upper()}"
+
+
+def _summarize_audio(job: WorkflowJob) -> str:
+    parts = []
+    if job.merge_audio:
+        parts.append("Merge")
+    if job.amplify_audio:
+        parts.append(f"Verstärken {job.amplify_db:+.0f} dB")
+    if job.audio_sync:
+        parts.append("Sync")
+    return ", ".join(parts) if parts else "—"
+
+
+def _summarize_youtube(job: WorkflowJob) -> str:
+    parts = []
+    if job.create_youtube_version:
+        parts.append("YT-Version")
+    if job.upload_youtube:
+        parts.append("Upload")
+    return " + ".join(parts) if parts else "—"
+
+
+class WorkflowDialog(QDialog):
+    """Haupt-Dialog für Workflow-Verwaltung und -Start."""
+
+    def __init__(self, parent, settings: AppSettings,
+                 workflow: Workflow | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("Workflow")
+        self.resize(880, 560)
+        self.setMinimumSize(700, 400)
+
+        self._settings = settings
+        self._workflow = workflow or Workflow()
+
+        self._build_ui()
+        self._refresh_job_table()
+
+    @property
+    def workflow(self) -> Workflow:
+        return self._workflow
+
+    # ── UI aufbauen ───────────────────────────────────────────
+
+    def _build_ui(self) -> None:
+        layout = QVBoxLayout(self)
+        layout.setSpacing(8)
+
+        # Kopfzeile
+        header = QLabel("Aufträge")
+        header.setFont(QFont("", 13, QFont.Bold))
+        layout.addWidget(header)
+
+        subtitle = QLabel(
+            "Füge einen oder mehrere Aufträge hinzu. "
+            "Jeder Auftrag bündelt Quelle, Verarbeitung, Audio und YouTube-Einstellungen. "
+            "Download- und Kopierschritte laufen automatisch vor der Verarbeitung.")
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet("color: #666;")
+        layout.addWidget(subtitle)
+
+        # Auftrags-Tabelle
+        self._job_table = QTableWidget(0, 6)
+        self._job_table.setHorizontalHeaderLabels(
+            ["✓", "Name", "Quelle", "Verarbeitung", "Audio", "YouTube"])
+        hdr = self._job_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Fixed)
+        hdr.resizeSection(0, 30)
+        hdr.setSectionResizeMode(1, QHeaderView.Interactive)
+        hdr.resizeSection(1, 160)
+        hdr.setSectionResizeMode(2, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(3, QHeaderView.Interactive)
+        hdr.resizeSection(3, 180)
+        hdr.setSectionResizeMode(4, QHeaderView.Interactive)
+        hdr.resizeSection(4, 130)
+        hdr.setSectionResizeMode(5, QHeaderView.Interactive)
+        hdr.resizeSection(5, 110)
+        self._job_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._job_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self._job_table.verticalHeader().setVisible(False)
+        self._job_table.setAlternatingRowColors(True)
+        self._job_table.doubleClicked.connect(self._edit_selected_job)
+        self._job_table.itemChanged.connect(self._on_enabled_checkbox_changed)
+        layout.addWidget(self._job_table, stretch=1)
+
+        # Buttons für Aufträge
+        job_btn_row = QHBoxLayout()
+
+        add_btn = QPushButton("＋ Auftrag hinzufügen")
+        add_btn.setToolTip("Neuen Auftrag anlegen")
+        add_btn.clicked.connect(self._add_job)
+        job_btn_row.addWidget(add_btn)
+
+        add_all_cams_btn = QPushButton("＋ Alle Kameras")
+        add_all_cams_btn.setToolTip(
+            "Für jede konfigurierte Pi-Kamera automatisch einen Auftrag anlegen")
+        add_all_cams_btn.clicked.connect(self._add_all_cameras)
+        job_btn_row.addWidget(add_all_cams_btn)
+
+        job_btn_row.addStretch()
+
+        edit_btn = QPushButton("Bearbeiten")
+        edit_btn.clicked.connect(self._edit_selected_job)
+        job_btn_row.addWidget(edit_btn)
+
+        duplicate_btn = QPushButton("Duplizieren")
+        duplicate_btn.setToolTip("Kopie des ausgewählten Auftrags anlegen")
+        duplicate_btn.clicked.connect(self._duplicate_selected_job)
+        job_btn_row.addWidget(duplicate_btn)
+
+        remove_btn = QPushButton("Entfernen")
+        remove_btn.clicked.connect(self._remove_selected_jobs)
+        job_btn_row.addWidget(remove_btn)
+
+        layout.addLayout(job_btn_row)
+
+        # Globale Optionen + Laden/Speichern
+        bottom_row = QHBoxLayout()
+
+        wf_load_btn = QPushButton("Workflow laden …")
+        wf_load_btn.clicked.connect(self._load_workflow)
+        bottom_row.addWidget(wf_load_btn)
+
+        wf_save_btn = QPushButton("Workflow speichern …")
+        wf_save_btn.clicked.connect(self._save_workflow)
+        bottom_row.addWidget(wf_save_btn)
+
+        bottom_row.addStretch()
+
+        self._shutdown_cb = QCheckBox("Rechner nach Abschluss herunterfahren")
+        self._shutdown_cb.setChecked(self._workflow.shutdown_after)
+        bottom_row.addWidget(self._shutdown_cb)
+
+        layout.addLayout(bottom_row)
+
+        # Dialog-Buttons
+        dialog_buttons = QDialogButtonBox()
+        self._start_btn = dialog_buttons.addButton(
+            "▶  Workflow starten", QDialogButtonBox.AcceptRole)
+        self._start_btn.setStyleSheet(
+            "QPushButton { background-color: #2d8d46; color: white; "
+            "font-weight: bold; padding: 6px 18px; }")
+        cancel_btn = dialog_buttons.addButton(
+            "Schließen", QDialogButtonBox.RejectRole)
+        dialog_buttons.accepted.connect(self._confirm_and_start)
+        dialog_buttons.rejected.connect(self.reject)
+        layout.addWidget(dialog_buttons)
+
+    # ── Tabelle befüllen ──────────────────────────────────────
+
+    def _refresh_job_table(self) -> None:
+        # Signal kurz trennen, um spurius itemChanged-Feuern zu vermeiden
+        self._job_table.itemChanged.disconnect(self._on_enabled_checkbox_changed)
+        self._job_table.setRowCount(len(self._workflow.jobs))
+
+        for row, job in enumerate(self._workflow.jobs):
+            # Aktivierungs-Checkbox
+            chk = QTableWidgetItem()
+            chk.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            chk.setCheckState(Qt.Checked if job.enabled else Qt.Unchecked)
+            self._job_table.setItem(row, 0, chk)
+
+            self._job_table.setItem(row, 1, QTableWidgetItem(job.name))
+            self._job_table.setItem(row, 2, QTableWidgetItem(_summarize_source(job)))
+            self._job_table.setItem(row, 3, QTableWidgetItem(_summarize_processing(job)))
+            self._job_table.setItem(row, 4, QTableWidgetItem(_summarize_audio(job)))
+            self._job_table.setItem(row, 5, QTableWidgetItem(_summarize_youtube(job)))
+
+        self._job_table.itemChanged.connect(self._on_enabled_checkbox_changed)
+
+    def _on_enabled_checkbox_changed(self, item: QTableWidgetItem) -> None:
+        if item.column() == 0:
+            row = item.row()
+            if 0 <= row < len(self._workflow.jobs):
+                self._workflow.jobs[row].enabled = (
+                    item.checkState() == Qt.Checked)
+
+    # ── Auftrags-Verwaltung ───────────────────────────────────
+
+    def _add_job(self) -> None:
+        dlg = JobEditorDialog(self, self._settings)
+        if dlg.exec():
+            self._workflow.jobs.append(dlg.result_job)
+            self._refresh_job_table()
+
+    def _edit_selected_job(self) -> None:
+        row = self._job_table.currentRow()
+        if not (0 <= row < len(self._workflow.jobs)):
+            return
+        job = self._workflow.jobs[row]
+        dlg = JobEditorDialog(self, self._settings, job)
+        if dlg.exec():
+            self._workflow.jobs[row] = dlg.result_job
+            self._refresh_job_table()
+
+    def _duplicate_selected_job(self) -> None:
+        row = self._job_table.currentRow()
+        if not (0 <= row < len(self._workflow.jobs)):
+            return
+        import copy
+        import uuid
+        original = self._workflow.jobs[row]
+        clone = copy.deepcopy(original)
+        clone.id = uuid.uuid4().hex[:8]
+        clone.name = f"{original.name} (Kopie)"
+        self._workflow.jobs.insert(row + 1, clone)
+        self._refresh_job_table()
+
+    def _remove_selected_jobs(self) -> None:
+        rows = sorted(
+            {idx.row() for idx in self._job_table.selectedIndexes()},
+            reverse=True)
+        for r in rows:
+            if 0 <= r < len(self._workflow.jobs):
+                del self._workflow.jobs[r]
+        self._refresh_job_table()
+
+    def _add_all_cameras(self) -> None:
+        devices = self._settings.cameras.devices
+        if not devices:
+            QMessageBox.information(
+                self, "Keine Kameras",
+                "Es sind keine Pi-Kameras konfiguriert.\n"
+                "Bitte zuerst unter Einstellungen → Kameras Geräte anlegen.")
+            return
+
+        existing_devices = {
+            j.device_name for j in self._workflow.jobs
+            if j.source_mode == "pi_download"}
+        added = 0
+        for dev in devices:
+            if dev.name in existing_devices:
+                continue
+            job = WorkflowJob(
+                name=dev.name,
+                source_mode="pi_download",
+                device_name=dev.name,
+                download_destination=self._settings.cameras.destination,
+                delete_after_download=self._settings.cameras.delete_after_download,
+                encoder=self._settings.video.encoder,
+                crf=self._settings.video.crf,
+                preset=self._settings.video.preset,
+                fps=self._settings.video.fps,
+                merge_audio=True,
+                audio_sync=self._settings.video.audio_sync,
+                amplify_audio=self._settings.audio.amplify_audio,
+                amplify_db=self._settings.audio.amplify_db,
+            )
+            self._workflow.jobs.append(job)
+            added += 1
+
+        self._refresh_job_table()
+        if added:
+            QMessageBox.information(
+                self, "Kameras hinzugefügt",
+                f"{added} Pi-Kamera-Auftrag/-Aufträge wurden angelegt.")
+        else:
+            QMessageBox.information(
+                self, "Keine neuen Kameras",
+                "Für alle konfigurierten Kameras sind bereits Aufträge vorhanden.")
+
+    # ── Workflow laden / speichern ────────────────────────────
+
+    def _save_workflow(self) -> None:
+        self._workflow.shutdown_after = self._shutdown_cb.isChecked()
+        WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+        default_name = self._workflow.name or "workflow"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Workflow speichern",
+            str(WORKFLOW_DIR / f"{default_name}.json"),
+            "JSON-Dateien (*.json)")
+        if path:
+            p = Path(path)
+            self._workflow.name = p.stem
+            self._workflow.save(p)
+            QMessageBox.information(
+                self, "Gespeichert", f"Workflow gespeichert: {p.name}")
+
+    def _load_workflow(self) -> None:
+        WORKFLOW_DIR.mkdir(parents=True, exist_ok=True)
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Workflow laden",
+            str(WORKFLOW_DIR),
+            "JSON-Dateien (*.json)")
+        if not path:
+            return
+        try:
+            wf = Workflow.load(Path(path))
+            self._workflow = wf
+            self._shutdown_cb.setChecked(wf.shutdown_after)
+            self._refresh_job_table()
+        except Exception as exc:
+            QMessageBox.critical(
+                self, "Ladefehler",
+                f"Workflow konnte nicht geladen werden:\n{exc}")
+
+    # ── Start ─────────────────────────────────────────────────
+
+    def _confirm_and_start(self) -> None:
+        self._workflow.shutdown_after = self._shutdown_cb.isChecked()
+
+        active_jobs = [j for j in self._workflow.jobs if j.enabled]
+        if not active_jobs:
+            QMessageBox.warning(
+                self, "Keine aktiven Aufträge",
+                "Bitte mindestens einen Auftrag aktivieren (Häkchen setzen).")
+            return
+
+        summary_lines = [f"<b>{len(active_jobs)} aktive(r) Auftrag/Aufträge:</b><ul>"]
+        for job in active_jobs:
+            parts = [f"<b>{job.name}</b>"]
+            parts.append(_summarize_source(job))
+            if not job.convert_enabled:
+                parts.append("ohne Konvertierung")
+            if job.upload_youtube:
+                parts.append("→ YouTube")
+            summary_lines.append(f"<li>{'  ·  '.join(parts)}</li>")
+        summary_lines.append("</ul>")
+        if self._workflow.shutdown_after:
+            summary_lines.append(
+                "<b>⚠ Der Rechner wird nach Abschluss heruntergefahren!</b>")
+
+        if QMessageBox.question(
+                self, "Workflow starten?",
+                "".join(summary_lines),
+                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            self._workflow.save_as_last()
+            self.accept()

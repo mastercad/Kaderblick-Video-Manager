@@ -12,3 +12,4 @@ data/settings.json
 config/cameras.yaml
 data/session.json
 data/workflows/
+data/last_workflow.json

@@ -1,1 +1,1 @@
-"""MJPEG Converter – Modulpaket."""
+"""Video Manager – Modulpaket."""

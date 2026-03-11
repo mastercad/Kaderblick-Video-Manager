@@ -148,10 +148,16 @@ def upload_to_youtube(job, settings: AppSettings,
     title = job.youtube_title or upload_file.stem
     log(f"YouTube-Upload: {upload_file.name} → \"{title}\"")
 
+    source_name = job.source_path.name if job.source_path else upload_file.name
+    description = (
+        f"Automatisch hochgeladen von Video Manager\n"
+        f"Quelldatei: {source_name}"
+    )
+
     body = {
         "snippet": {
             "title": title,
-            "description": "Automatisch hochgeladen von MJPEG Converter",
+            "description": description,
             "categoryId": "17",  # Sport
         },
         "status": {

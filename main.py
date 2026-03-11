@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""MJPEG Converter – Haupteinstiegspunkt.
+"""Video Manager – Haupteinstiegspunkt.
 
-Startet die PySide6-GUI für die MJPEG-Konvertierung mit:
+Startet die PySide6-GUI für die Video-Verarbeitung mit:
   - Profil-System (KI Auswertung / YouTube / Benutzerdefiniert)
   - NVIDIA NVENC Hardware-Encoding (falls verfügbar)
   - Halbzeiten zusammenführen mit Titelkarten
@@ -33,7 +33,7 @@ _ICON = Path(__file__).resolve().parent / "assets" / "icon.svg"
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="MJPEG Converter – Video-Verarbeitung für Fußballverein-Kameras",
+        description="Video Manager – Video-Verarbeitung für Fußballverein-Kameras",
     )
     p.add_argument(
         "--cameras-config",

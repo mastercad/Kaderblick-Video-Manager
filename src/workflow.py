@@ -1,21 +1,15 @@
-"""Workflow-Datenmodell: Zwei-Etappen-Auftrags-Baukasten.
+"""Workflow-Datenmodell.
 
-Etappe 1 – Quellen:
-  Definiert von welchen Quellen Dateien heruntergeladen oder verschoben
-  werden (Pi-Kameras, lokale Quellen / Datenträger).
+Ein Workflow ist eine geordnete Liste von Aufträgen (WorkflowJob).
+Jeder Auftrag definiert:
+  - Woher die Dateien kommen  (direkte Auswahl | Pi-Download | Ordner)
+  - Wie sie verarbeitet werden (Encoding, Audio – alles im Auftrag)
+  - Was mit ihnen passiert    (YouTube-Upload, Umbenennungen)
+  - Per-Datei-Metadaten       (Ausgabename, YT-Titel, Playlist)
 
-Etappe 2 – Verarbeitung (pro Quelle):
-  Noch bevor die Dateien existieren, wird pro Quelle festgelegt:
-    • Encoding-Einstellungen
-    • Soll Audio+Video gemerged werden?
-    • Soll Audio verstärkt werden?
-    • Soll eine YouTube-Version erstellt werden?
-    • YouTube-Titel + Playlist
-    • Soll auf YouTube hochgeladen werden?
-    • Wie soll die Ausgabedatei heißen?
-
-Globale Optionen:
-  • Rechner nach Abschluss herunterfahren
+Rückwärtskompatibilität:
+  Altes Format (sources / WorkflowSource) wird beim Laden automatisch
+  in das neue Format migriert.
 """
 
 import json
@@ -30,141 +24,225 @@ WORKFLOW_DIR = _DATA_DIR / "workflows"
 LAST_WORKFLOW_FILE = _DATA_DIR / "last_workflow.json"
 
 
-# ═════════════════════════════════════════════════════════════════
-#  Workflow-Quelle (Etappe 1 + Etappe 2 zusammen)
-#
-#  Jede Quelle beschreibt:
-#    - Woher die Dateien kommen (Kamera, SSD, Ordner)
-#    - Was damit passieren soll (Verarbeitung, YouTube)
-# ═════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────
+#  FileEntry – Metadaten für eine einzelne Quelldatei
+# ─────────────────────────────────────────────────────────────────
 
 @dataclass
-class WorkflowSource:
-    """Eine Quelle im Workflow mit zugehöriger Verarbeitungskonfiguration."""
+class FileEntry:
+    """Metadaten für eine einzelne Quelldatei innerhalb eines Auftrags."""
+
+    source_path: str = ""
+    output_filename: str = ""      # leer = automatisch aus Quelldateiname ableiten
+    youtube_title: str = ""        # leer = Dateiname als Titel verwenden
+    youtube_playlist: str = ""
+
+
+# ─────────────────────────────────────────────────────────────────
+#  WorkflowJob – ein einzelner ausführbarer Auftrag
+# ─────────────────────────────────────────────────────────────────
+
+# Laufzeitfelder werden nicht in die JSON-Datei geschrieben.
+_RUNTIME_FIELDS = {"status", "progress_pct", "error_msg"}
+
+
+@dataclass
+class WorkflowJob:
+    """Ein einzelner Auftrag im Workflow.
+
+    Quellmodi
+    ---------
+    "files"        – direkt ausgewählte Dateien (Liste von FileEntry-Objekten)
+    "pi_download"  – Aufnahmen von einer Raspberry-Pi-Kamera herunterladen
+    "folder_scan"  – Dateien in einem lokalen Ordner scannen / kopieren
+    """
 
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
     enabled: bool = True
+    name: str = ""
 
-    # ── Etappe 1: Quelle + Transfer ─────────────────────────
-    source_type: str = "pi_camera"    # "pi_camera" | "local"
-    name: str = ""                    # Anzeigename (z.B. "Kamera 1")
+    # ── Quellmodus ────────────────────────────────────────────
+    source_mode: str = "files"     # "files" | "pi_download" | "folder_scan"
 
-    #  Pi-Kamera
-    device_name: str = ""             # Verweist auf DeviceSettings.name
+    # files-Modus: direkt ausgewählte Dateien
+    files: list = field(default_factory=list)   # list[FileEntry]
 
-    #  Lokale Quelle / Datenträger
-    source_path: str = ""             # Quellordner oder Videodatei
-    audio_path: str = ""              # Explizite Audio-Datei (Einzel-Datei-Modus)
-    file_extensions: str = "*.mp4"    # Glob-Pattern für Dateien (Ordner-Modus)
-    move_to_destination: bool = False  # Dateien in Zielordner verschieben
+    # pi_download-Modus
+    device_name: str = ""
+    download_destination: str = ""
+    delete_after_download: bool = False
 
-    #  Gemeinsam
-    destination_path: str = ""        # Zielordner
-    delete_source: bool = False       # Quelldateien nach Transfer löschen
+    # folder_scan-Modus
+    source_folder: str = ""
+    file_pattern: str = "*.mp4"
+    copy_destination: str = ""    # leer = Dateien direkt am Quellort verarbeiten
+    move_files: bool = False      # True = verschieben, False = kopieren / an Ort lassen
+    output_prefix: str = ""       # optionaler Präfix für umbenannte Ausgabedateien
 
-    # ── Etappe 2: Verarbeitung (wird VOR Download konfiguriert) ─
-    merge_audio_video: bool = True    # Audio + Video zusammenführen
-    amplify_audio: bool = False       # Audioverstärkung
-    amplify_db: float = 6.0           # Verstärkung in dB
-    audio_sync: bool = False          # Frame-Drop-Korrektur
-    output_filename: str = ""         # "{name}" → wird beim Konvertieren ersetzt
-
-    #  Encoding
-    encoder: str = "auto"             # auto | h264_nvenc | libx264
+    # ── Verarbeitung ──────────────────────────────────────────
+    convert_enabled: bool = True
+    encoder: str = "auto"
     crf: int = 18
     preset: str = "medium"
     fps: int = 25
     output_format: str = "mp4"
 
-    #  YouTube
-    create_youtube: bool = False      # YouTube-optimierte Version erzeugen
-    upload_youtube: bool = False       # Auf YouTube hochladen
-    youtube_title: str = ""           # "{ name }" als Platzhalter möglich
-    youtube_playlist: str = ""
+    # ── Audio ─────────────────────────────────────────────────
+    merge_audio: bool = False      # separate A+V-Dateien zusammenführen
+    amplify_audio: bool = False    # Lautstärke anheben
+    amplify_db: float = 6.0        # Verstärkung in dB
+    audio_sync: bool = False       # Frame-Drop-Korrektur
 
-    # ── Laufzeit (nicht persistiert) ─────────────────────────
-    status: str = "Wartend"           # Wartend | Herunterladen | Verarbeiten | Fertig | Fehler
+    # ── YouTube ───────────────────────────────────────────────
+    create_youtube_version: bool = False   # separate YT-optimierte Version erzeugen
+    upload_youtube: bool = False           # auf YouTube hochladen
+    default_youtube_title: str = ""        # Standard-Titel (Vorlage)
+    default_youtube_playlist: str = ""     # Standard-Playlist
+
+    # ── Laufzeit (nicht persistiert) ──────────────────────────
+    status: str = "Wartend"
     progress_pct: int = 0
     error_msg: str = ""
 
+    # ── Serialisierung ────────────────────────────────────────
 
-# Felder die nicht in die JSON-Datei geschrieben werden
-_RUNTIME_FIELDS = {"status", "progress_pct", "error_msg"}
+    def to_dict(self) -> dict:
+        d = asdict(self)
+        for key in _RUNTIME_FIELDS:
+            d.pop(key, None)
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WorkflowJob":
+        valid = set(cls.__dataclass_fields__)
+        filtered = {k: v for k, v in data.items()
+                    if k in valid and k not in _RUNTIME_FIELDS}
+        raw_files = filtered.pop("files", [])
+        files = [
+            FileEntry(**{k: v for k, v in f.items()
+                         if k in FileEntry.__dataclass_fields__})
+            for f in raw_files
+        ]
+        return cls(files=files, **filtered)
 
 
-# ═════════════════════════════════════════════════════════════════
-#  Workflow (Sammlung aller Quellen + globale Optionen)
-# ═════════════════════════════════════════════════════════════════
+# ─────────────────────────────────────────────────────────────────
+#  Workflow – Sammlung aller Aufträge
+# ─────────────────────────────────────────────────────────────────
 
 @dataclass
 class Workflow:
-    """Kompletter Workflow mit allen Quellen und globalen Optionen."""
+    """Kompletter Workflow: geordnete Liste von Aufträgen + globale Optionen."""
 
     name: str = ""
-    sources: list[WorkflowSource] = field(default_factory=list)
+    jobs: list = field(default_factory=list)   # list[WorkflowJob]
     shutdown_after: bool = False
-    upload_youtube_global: bool = False   # Globaler YouTube-Upload-Schalter
     created_at: str = field(
         default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
 
-    # ── Serialisierung ───────────────────────────────────────
+    # ── Serialisierung ────────────────────────────────────────
 
     def to_dict(self) -> dict:
-        """Konvertiert den Workflow in ein JSON-fähiges dict."""
-        data = {
+        return {
             "name": self.name,
             "shutdown_after": self.shutdown_after,
-            "upload_youtube_global": self.upload_youtube_global,
             "created_at": self.created_at,
-            "sources": [],
+            "jobs": [j.to_dict() for j in self.jobs],
         }
-        for src in self.sources:
-            d = asdict(src)
-            for key in _RUNTIME_FIELDS:
-                d.pop(key, None)
-            data["sources"].append(d)
-        return data
 
     @classmethod
     def from_dict(cls, data: dict) -> "Workflow":
-        """Erzeugt einen Workflow aus einem dict."""
-        valid_fields = set(WorkflowSource.__dataclass_fields__)
-        sources = []
-        for raw in data.get("sources", []):
-            filtered = {k: v for k, v in raw.items()
-                        if k in valid_fields and k not in _RUNTIME_FIELDS}
-            sources.append(WorkflowSource(**filtered))
+        raw_jobs = data.get("jobs", [])
+
+        # Migrationsfall: altes Format mit "sources" / WorkflowSource
+        if not raw_jobs and "sources" in data:
+            raw_jobs = [_migrate_source_to_job(s) for s in data["sources"]]
+
+        jobs = [WorkflowJob.from_dict(j) for j in raw_jobs]
         return cls(
             name=data.get("name", ""),
-            sources=sources,
+            jobs=jobs,
             shutdown_after=data.get("shutdown_after", False),
-            upload_youtube_global=data.get("upload_youtube_global", False),
             created_at=data.get("created_at", ""),
         )
 
-    # ── Dateipersistenz ──────────────────────────────────────
+    # ── Dateipersistenz ───────────────────────────────────────
 
     def save(self, path: Path) -> None:
-        """Speichert den Workflow als JSON-Datei."""
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(
             json.dumps(self.to_dict(), indent=2, ensure_ascii=False))
 
     @classmethod
     def load(cls, path: Path) -> "Workflow":
-        """Lädt einen Workflow aus einer JSON-Datei."""
         return cls.from_dict(json.loads(path.read_text()))
 
     def save_as_last(self) -> None:
-        """Speichert den Workflow als zuletzt verwendeten Workflow."""
         self.save(LAST_WORKFLOW_FILE)
 
     @classmethod
     def load_last(cls) -> "Workflow | None":
-        """Lädt den zuletzt verwendeten Workflow, falls vorhanden."""
         if LAST_WORKFLOW_FILE.exists():
             try:
                 return cls.load(LAST_WORKFLOW_FILE)
             except Exception:
                 pass
         return None
+
+
+# ─────────────────────────────────────────────────────────────────
+#  Migration: altes WorkflowSource-Format → WorkflowJob
+# ─────────────────────────────────────────────────────────────────
+
+def _migrate_source_to_job(source: dict) -> dict:
+    """Konvertiert ein altes WorkflowSource-dict in das neue WorkflowJob-Format."""
+    src_type = source.get("source_type", "local")
+    src_path = source.get("source_path", "")
+
+    # Quellmodus bestimmen
+    if src_type == "pi_camera":
+        mode = "pi_download"
+    elif src_path and Path(src_path).is_file():
+        mode = "files"
+    else:
+        mode = "folder_scan"
+
+    # Per-Datei-Eintrag für Einzeldatei-Modus
+    files = []
+    if mode == "files":
+        files = [{
+            "source_path": src_path,
+            "output_filename": source.get("output_filename", ""),
+            "youtube_title": source.get("youtube_title", ""),
+            "youtube_playlist": source.get("youtube_playlist", ""),
+        }]
+
+    return {
+        "id": source.get("id", uuid.uuid4().hex[:8]),
+        "enabled": source.get("enabled", True),
+        "name": source.get("name", ""),
+        "source_mode": mode,
+        "files": files,
+        "device_name": source.get("device_name", ""),
+        "download_destination": source.get("destination_path", ""),
+        "delete_after_download": source.get("delete_source", False),
+        "source_folder": src_path if mode == "folder_scan" else "",
+        "file_pattern": source.get("file_extensions", "*.mp4"),
+        "copy_destination": (source.get("destination_path", "")
+                             if source.get("move_to_destination") else ""),
+        "move_files": source.get("move_to_destination", False),
+        "convert_enabled": True,
+        "encoder": source.get("encoder", "auto"),
+        "crf": source.get("crf", 18),
+        "preset": source.get("preset", "medium"),
+        "fps": source.get("fps", 25),
+        "output_format": source.get("output_format", "mp4"),
+        "merge_audio": source.get("merge_audio_video", False),
+        "amplify_audio": source.get("amplify_audio", False),
+        "amplify_db": source.get("amplify_db", 6.0),
+        "audio_sync": source.get("audio_sync", False),
+        "create_youtube_version": source.get("create_youtube", False),
+        "upload_youtube": source.get("upload_youtube", False),
+        "default_youtube_title": source.get("youtube_title", ""),
+        "default_youtube_playlist": source.get("youtube_playlist", ""),
+    }
