@@ -6,7 +6,7 @@ Video-Container (MP4, MKV, AVI, MOV) mit eingebetteter Tonspur.
 
 import json
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
@@ -15,6 +15,7 @@ from .encoder import resolve_encoder, build_encoder_args
 from .ffmpeg_runner import (
     find_audio, get_duration, estimate_duration_from_filesize,
     count_frames, run_ffmpeg, has_audio_stream,
+    get_video_stream_info, get_audio_stream_info,
 )
 
 # Rohe MJPEG-Streams benötigen -framerate/-f mjpeg Input-Flags.
@@ -34,7 +35,9 @@ class ConvertJob:
     output_path: Optional[Path] = None
     audio_override: Optional[Path] = None  # Explizite Audio-Datei
     youtube_title: str = ""
+    youtube_description: str = ""
     youtube_playlist: str = ""
+    youtube_tags: list = field(default_factory=list)
     error_msg: str = ""
     progress_pct: int = 0
     device_name: str = ""              # nur für job_type="download"
@@ -48,6 +51,7 @@ class ConvertJob:
             "output_path": str(self.output_path) if self.output_path else "",
             "audio_override": str(self.audio_override) if self.audio_override else "",
             "youtube_title": self.youtube_title,
+            "youtube_description": self.youtube_description,
             "youtube_playlist": self.youtube_playlist,
             "device_name": self.device_name,
         }
@@ -62,6 +66,7 @@ class ConvertJob:
             output_path=Path(d["output_path"]) if d.get("output_path") else None,
             audio_override=Path(d["audio_override"]) if d.get("audio_override") else None,
             youtube_title=d.get("youtube_title", ""),
+            youtube_description=d.get("youtube_description", ""),
             youtube_playlist=d.get("youtube_playlist", ""),
             device_name=d.get("device_name", ""),
         )
@@ -216,49 +221,101 @@ def run_convert(job: ConvertJob, settings: AppSettings,
                 log(f"Audio-Sync: OK ({frame_count} Frames, "
                     f"Δ {drift:.1f}s)")
 
+    # ── Quelldatei analysieren (Codec, FPS, Bitrate) ───────────────────────────
+    # Für Container-Formate: tatsächliche Quell-FPS und Bitrate ermitteln.
+    src_info: dict = {}
+    src_maxrate_kbps: int | None = None
+
+    if vs.output_format == "mp4":
+        if is_raw_mjpeg and input_duration and input_duration > 0:
+            # Rohstream: Bitrate aus Dateigröße (kein Container-Header)
+            raw_kbps = int(src.stat().st_size * 8 / input_duration / 1000)
+            src_maxrate_kbps = raw_kbps
+            log(f"Quell-Bitrate: ~{raw_kbps // 1000} Mbit/s (MJPEG, aus Dateigröße)")
+        else:
+            src_info = get_video_stream_info(src)
+            if src_info.get("bit_rate"):
+                src_maxrate_kbps = src_info["bit_rate"] // 1000
+                codec = src_info.get("codec_name", "?")
+                log(f"Quell-Codec: {codec}, "
+                    f"Bitrate: ~{src_maxrate_kbps // 1000} Mbit/s")
+
+    # Quell-FPS für Container-Formate übernehmen (nicht aus Settings erzwingen)
+    if not is_raw_mjpeg:
+        if not src_info:
+            src_info = get_video_stream_info(src)
+        src_fps = src_info.get("fps")
+        if src_fps and src_fps > 0:
+            effective_fps = src_fps
+            log(f"Quell-FPS: {src_fps:.3f}")
+
     # ── ffmpeg-Kommando aufbauen ──────────────────────────────
+    # Für Container-Formate ohne Audio-Verarbeitung: stream-copy.
+    # Erhält exakt FPS, Bitrate und Tonqualität der Quelldatei.
+    needs_audio_encode = (
+        wav_path is not None
+        or (has_embedded_audio and aus.amplify_audio)
+    )
+    use_stream_copy = (
+        not is_raw_mjpeg
+        and vs.output_format == "mp4"
+        and not needs_audio_encode
+        and not vs.lossless
+    )
+
     cmd = ["ffmpeg", "-hide_banner", "-y"]
 
-    # Input: MJPEG-Rohstrom benötigt framerate + format
-    if is_raw_mjpeg:
-        cmd += ["-framerate", f"{effective_fps:.6f}", "-f", "mjpeg",
-                "-i", str(src)]
-    else:
+    if use_stream_copy:
+        # Nur Remux (Container-Wechsel falls nötig), kein Re-Encode
         cmd += ["-i", str(src)]
-    if wav_path:
-        cmd += ["-i", str(wav_path)]
-
-    # Video-Encoder
-    if vs.output_format == "mp4":
-        encoder = resolve_encoder(vs.encoder, log_callback=log_callback)
-        log(f"Encoder:  {encoder}")
-        cmd += build_encoder_args(encoder, vs.preset, vs.crf,
-                                  vs.lossless, effective_fps)
-    else:
-        cmd += ["-c:v", "mjpeg", "-q:v", "2", "-r", str(vs.fps)]
-
-    # Audio-Handling
-    # Filter-Kette: volume (Verstärkung) → loudnorm (EBU R128)
-    _amplify_filter = f"volume={aus.amplify_db}dB,loudnorm"
-
-    if wav_path:
-        # Externe Audio-Datei → re-encode zu AAC
-        cmd += ["-c:a", "aac", "-b:a", aus.audio_bitrate]
-        if aus.amplify_audio:
-            cmd += ["-af", _amplify_filter]
-        cmd += ["-shortest"]
-    elif has_embedded_audio:
-        # Eingebettete Tonspur im Container
-        if aus.amplify_audio:
-            cmd += ["-c:a", "aac", "-b:a", aus.audio_bitrate,
-                    "-af", _amplify_filter]
+        if has_embedded_audio:
+            cmd += ["-c", "copy"]
         else:
-            cmd += ["-c:a", "copy"]
+            cmd += ["-c:v", "copy", "-an"]
+        cmd += ["-movflags", "+faststart", str(out_path)]
+        log("Container → Stream-Copy "
+            "(Original-FPS und -Qualität bleiben erhalten)")
     else:
-        # Kein Audio vorhanden
-        cmd += ["-an"]
+        # Input
+        if is_raw_mjpeg:
+            cmd += ["-framerate", f"{effective_fps:.6f}", "-f", "mjpeg",
+                    "-i", str(src)]
+        else:
+            cmd += ["-i", str(src)]
+        if wav_path:
+            cmd += ["-i", str(wav_path)]
 
-    cmd += [str(out_path)]
+        # Video-Encoder
+        if vs.output_format == "mp4":
+            encoder = resolve_encoder(vs.encoder, log_callback=log_callback)
+            log(f"Encoder:  {encoder}")
+            cmd += build_encoder_args(encoder, vs.preset, vs.crf,
+                                      vs.lossless, effective_fps,
+                                      maxrate_kbps=src_maxrate_kbps,
+                                      no_bframes=vs.no_bframes,
+                                      keyframe_interval=vs.keyframe_interval)
+        else:
+            cmd += ["-c:v", "mjpeg", "-q:v", "2", "-r", str(vs.fps)]
+
+        # Audio-Handling
+        # Filter-Kette: volume (Verstärkung) → loudnorm (EBU R128)
+        _amplify_filter = f"volume={aus.amplify_db}dB,loudnorm"
+
+        if wav_path:
+            cmd += ["-c:a", "aac", "-b:a", aus.audio_bitrate]
+            if aus.amplify_audio:
+                cmd += ["-af", _amplify_filter]
+            cmd += ["-shortest"]
+        elif has_embedded_audio:
+            if aus.amplify_audio:
+                cmd += ["-c:a", "aac", "-b:a", aus.audio_bitrate,
+                        "-af", _amplify_filter]
+            else:
+                cmd += ["-c:a", "copy"]
+        else:
+            cmd += ["-an"]
+
+        cmd += [str(out_path)]
     log("Starte ffmpeg …")
     log(f"  CMD: {' '.join(cmd)}")
 
@@ -290,8 +347,11 @@ def run_convert(job: ConvertJob, settings: AppSettings,
     log(f"✓ Fertig: {out_path.name} ({size_mb:.0f} MB{dur_str})")
 
     if yt.create_youtube and vs.output_format == "mp4":
-        run_youtube_convert(job, settings, cancel_flag, log_callback,
-                            progress_callback)
+        yt_ok = run_youtube_convert(job, settings, cancel_flag, log_callback,
+                                    progress_callback)
+        if not yt_ok:
+            log("⚠ YouTube-Version konnte nicht erstellt werden "
+                "– beim Upload wird die konvertierte Datei verwendet.")
 
     job.status = "Fertig"
     return True
@@ -354,5 +414,68 @@ def run_youtube_convert(job: ConvertJob, settings: AppSettings,
     if yt_path.exists():
         size_mb = yt_path.stat().st_size / (1024 * 1024)
         log(f"✓ YouTube-Version: {yt_path.name} ({size_mb:.0f} MB)")
+        return True
+    return False
+
+
+def run_concat(
+    source_files: list[Path],
+    output: Path,
+    cancel_flag: Optional[threading.Event] = None,
+    log_callback=None,
+    crf: int = 18,
+    preset: str = "fast",
+) -> bool:
+    """Verbindet mehrere Videos mit dem ffmpeg concat-Filter (mit Re-Encode).
+
+    Verwendet bewusst Re-Encoding statt stream copy (-c copy), weil H.264-Videos
+    mit B-Frames und nicht-standardisierten Timebases beim concat-Demuxer + stream
+    copy zu korrumpierten Ausgaben führen:
+    - Falscher DTS-Sprung an Segment-Grenzen → A/V-Versatz von tausenden Sekunden
+    - YouTube meldet fehlende Keyframes und erstellt neue → Szenen doppelt/fehlend
+
+    Der concat-Filter verarbeitet alle Frames durch die FFmpeg-interne Pipeline und
+    normalisiert Timestamps korrekt über Segment-Grenzen hinweg.
+    """
+    def log(msg: str):
+        if log_callback:
+            log_callback(msg)
+
+    if not source_files:
+        return False
+
+    n = len(source_files)
+    names = " + ".join(p.name for p in source_files)
+    log(f"Zusammenführen (re-encode): {names} → {output.name}")
+
+    # filter_complex: [0:v][0:a][1:v][1:a]...concat=n=N:v=1:a=1[outv][outa]
+    filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n))
+    filter_complex = f"{filter_inputs}concat=n={n}:v=1:a=1[outv][outa]"
+
+    cmd = ["ffmpeg", "-hide_banner", "-y"]
+    for src in source_files:
+        cmd += ["-i", str(src)]
+    cmd += [
+        "-filter_complex", filter_complex,
+        "-map", "[outv]",
+        "-map", "[outa]",
+        "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
+        "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-b:a", "192k",
+        "-movflags", "+faststart",
+        str(output),
+    ]
+
+    rc = run_ffmpeg(cmd, cancel_flag=cancel_flag, log_callback=log_callback)
+    if rc == -1:
+        if output.exists():
+            output.unlink()
+        return False
+    if rc != 0:
+        log(f"concat-Fehler (exit {rc})")
+        return False
+    if output.exists():
+        size_mb = output.stat().st_size / (1024 * 1024)
+        log(f"✓ Zusammengeführt: {output.name} ({size_mb:.0f} MB)")
         return True
     return False

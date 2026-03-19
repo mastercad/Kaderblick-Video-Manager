@@ -14,6 +14,8 @@ SETTINGS_FILE = _DATA_DIR / "settings.json"
 SESSION_FILE = _DATA_DIR / "session.json"
 CLIENT_SECRET_FILE = _CONFIG_DIR / "client_secret.json"
 TOKEN_FILE = _DATA_DIR / "youtube_token.json"
+UPLOAD_REGISTRY_FILE = _DATA_DIR / "youtube_uploads.json"
+KADERBLICK_REGISTRY_FILE = _DATA_DIR / "kaderblick_uploads.json"
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -21,19 +23,33 @@ TOKEN_FILE = _DATA_DIR / "youtube_token.json"
 # ═════════════════════════════════════════════════════════════════
 
 PROFILES: dict[str, dict] = {
+    # Für KI-Analyse, Bild-für-Bild-Verarbeitung, Random-Access:
+    # – Keine B-Frames: jeder Frame ist sofort und unabhängig decodierbar
+    # – Keyframe alle 1 s: maximaler Sprung zum letzten Keyframe = 1 Sek.
+    # – CRF 12: hohe Qualität (weniger Artefakte = bessere Detektrion)
+    # – Preset slow: bessere Kompression bei gleicher Qualität
     "KI Auswertung": {
         "encoder": "auto",
         "lossless": False,
         "preset": "slow",
         "crf": 12,
         "output_format": "mp4",
+        "no_bframes": True,
+        "keyframe_interval": 1,
     },
+    # Für YouTube-Upload und allgemeine Wiedergabe:
+    # – B-Frames aktiv: kleinere Dateigröße, YouTube verarbeitet sie korrekt
+    # – Keyframe alle 2 s: YouTube-Empfehlung für gutes Seeking
+    # – CRF 20: gutes Gleichgewicht zwischen Qualität und Dateigröße
+    # – Preset medium: vernünftige Encode-Zeit
     "YouTube": {
         "encoder": "auto",
         "lossless": False,
         "preset": "medium",
-        "crf": 23,
+        "crf": 20,
         "output_format": "mp4",
+        "no_bframes": False,
+        "keyframe_interval": 2,
     },
     "Benutzerdefiniert": {},
 }
@@ -58,6 +74,8 @@ class VideoSettings:
     merge_title_duration: int = 3
     merge_title_bg: str = "#000000"
     merge_title_fg: str = "#FFFFFF"
+    no_bframes: bool = False          # B-Frames deaktivieren (KI-Analyse / Random-Access)
+    keyframe_interval: int = 0        # Keyframe-Abstand in Sekunden (0 = Encoder-Standard)
 
     def apply_profile(self, profile_name: str) -> None:
         """Wendet ein Profil an (überschreibt nur die Profil-Felder)."""
@@ -87,6 +105,16 @@ class YouTubeSettings:
     youtube_bufsize: str = "16M"
     youtube_audio_bitrate: str = "128k"
     upload_to_youtube: bool = False
+
+
+@dataclass
+class KaderblickSettings:
+    """Verbindungseinstellungen für die Kaderblick-API."""
+    base_url: str = "https://api.kaderblick.de"
+    auth_mode: str = "jwt"          # "jwt" | "bearer"
+    jwt_token: str = ""
+    jwt_refresh_token: str = ""
+    bearer_token: str = ""
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -123,6 +151,7 @@ class AppSettings:
     video: VideoSettings = field(default_factory=VideoSettings)
     audio: AudioSettings = field(default_factory=AudioSettings)
     youtube: YouTubeSettings = field(default_factory=YouTubeSettings)
+    kaderblick: KaderblickSettings = field(default_factory=KaderblickSettings)
     cameras: CameraSettings = field(default_factory=CameraSettings)
     last_directory: str = ""
     restore_session: bool = False      # Beim Start letzte Jobliste laden
@@ -147,6 +176,9 @@ class AppSettings:
                 for k, v in data.get("youtube", {}).items():
                     if hasattr(s.youtube, k):
                         setattr(s.youtube, k, v)
+                for k, v in data.get("kaderblick", {}).items():
+                    if hasattr(s.kaderblick, k):
+                        setattr(s.kaderblick, k, v)
                 cam_data = data.get("cameras", {})
                 for k, v in cam_data.items():
                     if k == "devices":

@@ -221,6 +221,7 @@ class WorkflowDialog(QDialog):
             if 0 <= row < len(self._workflow.jobs):
                 self._workflow.jobs[row].enabled = (
                     item.checkState() == Qt.Checked)
+                self._workflow.save_as_last()
 
     # ── Auftrags-Verwaltung ───────────────────────────────────
 
@@ -229,6 +230,7 @@ class WorkflowDialog(QDialog):
         if dlg.exec():
             self._workflow.jobs.append(dlg.result_job)
             self._refresh_job_table()
+            self._workflow.save_as_last()
 
     def _edit_selected_job(self) -> None:
         row = self._job_table.currentRow()
@@ -239,6 +241,7 @@ class WorkflowDialog(QDialog):
         if dlg.exec():
             self._workflow.jobs[row] = dlg.result_job
             self._refresh_job_table()
+            self._workflow.save_as_last()
 
     def _duplicate_selected_job(self) -> None:
         row = self._job_table.currentRow()
@@ -252,6 +255,7 @@ class WorkflowDialog(QDialog):
         clone.name = f"{original.name} (Kopie)"
         self._workflow.jobs.insert(row + 1, clone)
         self._refresh_job_table()
+        self._workflow.save_as_last()
 
     def _remove_selected_jobs(self) -> None:
         rows = sorted(
@@ -261,6 +265,7 @@ class WorkflowDialog(QDialog):
             if 0 <= r < len(self._workflow.jobs):
                 del self._workflow.jobs[r]
         self._refresh_job_table()
+        self._workflow.save_as_last()
 
     def _add_all_cameras(self) -> None:
         devices = self._settings.cameras.devices
@@ -298,6 +303,7 @@ class WorkflowDialog(QDialog):
 
         self._refresh_job_table()
         if added:
+            self._workflow.save_as_last()
             QMessageBox.information(
                 self, "Kameras hinzugefügt",
                 f"{added} Pi-Kamera-Auftrag/-Aufträge wurden angelegt.")

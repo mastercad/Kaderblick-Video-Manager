@@ -1,9 +1,10 @@
 """Einstellungs-Dialoge (Video, Audio, YouTube, Job-Bearbeitung)."""
 
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QVBoxLayout,
     QHBoxLayout, QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QLineEdit,
-    QLabel,
+    QLabel, QProgressBar, QPushButton,
 )
 
 from .settings import AppSettings, PROFILES
@@ -136,6 +137,30 @@ class VideoSettingsDialog(QDialog):
             "Wenn aktiv, werden bestehende .mp4-Dateien erneut erstellt")
         form.addRow("", self.overwrite_cb)
 
+        # B-Frames deaktivieren
+        self.no_bframes_cb = QCheckBox("B-Frames deaktivieren (KI-Analyse / Random-Access)")
+        self.no_bframes_cb.setChecked(vs.no_bframes)
+        self.no_bframes_cb.setToolTip(
+            "B-Frames benötigen Referenzframes aus der Zukunft – das kann bei\n"
+            "KI-Tools oder Seeking-Operationen zu Problemen führen.\n\n"
+            "Aktivieren: jeder Frame ist unabhängig decodierbar.\n"
+            "Nachteil: leicht größere Dateigröße.")
+        form.addRow("", self.no_bframes_cb)
+
+        # Keyframe-Abstand
+        kf_row = QHBoxLayout()
+        self.keyframe_spin = QSpinBox()
+        self.keyframe_spin.setRange(0, 60)
+        self.keyframe_spin.setValue(vs.keyframe_interval)
+        self.keyframe_spin.setSuffix(" Sek (0 = Encoder-Standard)")
+        self.keyframe_spin.setToolTip(
+            "Maximaler Abstand zwischen Keyframes.\n"
+            "Kleiner Wert = schnellerer Random-Zugriff, für KI-Analyse empfohlen: 1-2 Sek.\n"
+            "0 = Encoder entscheidet (meist 2-10 Sek.)")
+        kf_row.addWidget(self.keyframe_spin)
+        kf_row.addStretch()
+        form.addRow("Keyframe-Abstand:", kf_row)
+
         group.setLayout(form)
         layout.addWidget(group)
 
@@ -190,6 +215,10 @@ class VideoSettingsDialog(QDialog):
             self.crf_spin.setValue(values["crf"])
         if "output_format" in values:
             self.fmt_combo.setCurrentText(values["output_format"])
+        if "no_bframes" in values:
+            self.no_bframes_cb.setChecked(values["no_bframes"])
+        if "keyframe_interval" in values:
+            self.keyframe_spin.setValue(values["keyframe_interval"])
         self._update_encoder_info()
         self._updating_profile = False
 
@@ -222,6 +251,8 @@ class VideoSettingsDialog(QDialog):
         vs.overwrite = self.overwrite_cb.isChecked()
         vs.merge_halves = self.merge_cb.isChecked()
         vs.merge_title_duration = self.title_dur_spin.value()
+        vs.no_bframes = self.no_bframes_cb.isChecked()
+        vs.keyframe_interval = self.keyframe_spin.value()
         self.settings.save()
         self.accept()
 
@@ -483,6 +514,130 @@ class GeneralSettingsDialog(QDialog):
 
     def _save(self):
         self.settings.restore_session = self.restore_cb.isChecked()
+        self.settings.save()
+        self.accept()
+
+
+# ═════════════════════════════════════════════════════════════════
+#  Kaderblick-Einstellungen
+# ═════════════════════════════════════════════════════════════════
+
+class KaderblickSettingsDialog(QDialog):
+    """Dialog für Kaderblick-API-Einstellungen."""
+
+    def __init__(self, parent, settings: AppSettings):
+        super().__init__(parent)
+        self.setWindowTitle("Kaderblick-Einstellungen")
+        self.setMinimumWidth(520)
+        self.settings = settings
+        kb = settings.kaderblick
+
+        layout = QVBoxLayout(self)
+
+        # ── Verbindung ────────────────────────────────────────
+        conn_group = QGroupBox("API-Verbindung")
+        form = QFormLayout()
+
+        self.base_url_edit = QLineEdit(kb.base_url)
+        self.base_url_edit.setPlaceholderText("https://api.kaderblick.de")
+        self.base_url_edit.setToolTip(
+            "Basis-URL der Kaderblick-API.\n"
+            "Standardwert: https://api.kaderblick.de")
+        form.addRow("Base-URL:", self.base_url_edit)
+
+        # Auth-Modus
+        from PySide6.QtWidgets import QWidget, QRadioButton, QButtonGroup
+        auth_row = QWidget()
+        auth_layout = QHBoxLayout(auth_row)
+        auth_layout.setContentsMargins(0, 0, 0, 0)
+        self._rb_jwt    = QRadioButton("JWT (Cookie)")
+        self._rb_bearer = QRadioButton("Bearer-Token")
+        self._auth_group = QButtonGroup(self)
+        self._auth_group.addButton(self._rb_jwt,    0)
+        self._auth_group.addButton(self._rb_bearer, 1)
+        auth_layout.addWidget(self._rb_jwt)
+        auth_layout.addWidget(self._rb_bearer)
+        auth_layout.addStretch()
+        form.addRow("Auth-Modus:", auth_row)
+
+        conn_group.setLayout(form)
+        layout.addWidget(conn_group)
+
+        # ── JWT-Bereich ───────────────────────────────────────
+        self._jwt_group = QGroupBox("JWT-Authentifizierung")
+        jwt_form = QFormLayout()
+
+        self.jwt_token_edit = QLineEdit(kb.jwt_token)
+        self.jwt_token_edit.setPlaceholderText("eyJ… (Browser-Cookie jwt_token)")
+        self.jwt_token_edit.setToolTip(
+            "JWT-Token aus dem Browser-Cookie jwt_token.\n"
+            "Browser → F12 → Application → Cookies → jwt_token\n"
+            "Den langen eyJ...-Wert kopieren.")
+        self.jwt_token_edit.setEchoMode(QLineEdit.Password)
+        jwt_form.addRow("JWT-Token:", self.jwt_token_edit)
+
+        self.jwt_refresh_edit = QLineEdit(kb.jwt_refresh_token)
+        self.jwt_refresh_edit.setPlaceholderText("optional – für automatische Token-Erneuerung")
+        self.jwt_refresh_edit.setToolTip(
+            "Refresh-Token aus dem Browser-Cookie jwt_refresh_token.\n"
+            "Damit wird der JWT automatisch erneuert wenn er abläuft.")
+        self.jwt_refresh_edit.setEchoMode(QLineEdit.Password)
+        jwt_form.addRow("Refresh-Token:", self.jwt_refresh_edit)
+
+        self._jwt_group.setLayout(jwt_form)
+        layout.addWidget(self._jwt_group)
+
+        # ── Bearer-Bereich ────────────────────────────────────
+        self._bearer_group = QGroupBox("Bearer-Authentifizierung")
+        bearer_form = QFormLayout()
+
+        self.bearer_token_edit = QLineEdit(kb.bearer_token)
+        self.bearer_token_edit.setPlaceholderText("API-Key / statischer Bearer-Token")
+        self.bearer_token_edit.setToolTip(
+            "Statischer Bearer-Token für den Authorization-Header.")
+        self.bearer_token_edit.setEchoMode(QLineEdit.Password)
+        bearer_form.addRow("Bearer-Token:", self.bearer_token_edit)
+
+        self._bearer_group.setLayout(bearer_form)
+        layout.addWidget(self._bearer_group)
+
+        # ── Hinweis ───────────────────────────────────────────
+        hint = QLabel(
+            "Tokens werden lokal in settings.json gespeichert.\n"
+            "Kaderblick-Eintrag erfolgt nur nach erfolgreichem YouTube-Upload.")
+        hint.setEnabled(False)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Save).setText("Speichern")
+        buttons.button(QDialogButtonBox.Cancel).setText("Abbrechen")
+        buttons.accepted.connect(self._save)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        # Initialer Zustand
+        if kb.auth_mode == "bearer":
+            self._rb_bearer.setChecked(True)
+        else:
+            self._rb_jwt.setChecked(True)
+        self._auth_group.idToggled.connect(self._update_auth_visibility)
+        self._update_auth_visibility()
+
+    def _update_auth_visibility(self) -> None:
+        jwt_on = self._rb_jwt.isChecked()
+        self._jwt_group.setVisible(jwt_on)
+        self._bearer_group.setVisible(not jwt_on)
+        self.adjustSize()
+
+    def _save(self):
+        kb = self.settings.kaderblick
+        kb.base_url = self.base_url_edit.text().strip() or "https://api.kaderblick.de"
+        kb.auth_mode = "jwt" if self._rb_jwt.isChecked() else "bearer"
+        kb.jwt_token = self.jwt_token_edit.text().strip()
+        kb.jwt_refresh_token = self.jwt_refresh_edit.text().strip()
+        kb.bearer_token = self.bearer_token_edit.text().strip()
         self.settings.save()
         self.accept()
 
@@ -787,3 +942,72 @@ class CameraSettingsDialog(QDialog):
         cam.delete_after_download = self._delete_chk.isChecked()
         cam.auto_convert = self._convert_chk.isChecked()
         self.accept()
+
+
+# ═════════════════════════════════════════════════════════════════
+#  Herunterfahren – Countdown-Dialog
+# ═════════════════════════════════════════════════════════════════
+
+class ShutdownCountdownDialog(QDialog):
+    """Zeigt einen Countdown vor dem Herunterfahren.
+
+    Läuft der Countdown ab → accept() → Shutdown wird ausgeführt.
+    Klick auf „Abbrechen" → reject() → kein Shutdown.
+    """
+
+    def __init__(self, seconds: int = 30, parent=None):
+        super().__init__(parent)
+        self._remaining = seconds
+        self._total = seconds
+
+        self.setWindowTitle("Rechner herunterfahren")
+        self.setWindowFlags(self.windowFlags() | Qt.WindowStaysOnTopHint)
+        self.setMinimumWidth(380)
+
+        layout = QVBoxLayout(self)
+
+        self._label = QLabel()
+        self._label.setAlignment(Qt.AlignCenter)
+        self._label.setWordWrap(True)
+        self._label.setStyleSheet("font-size: 15px; padding: 12px;")
+        layout.addWidget(self._label)
+
+        self._progress = QProgressBar()
+        self._progress.setRange(0, seconds)
+        self._progress.setValue(seconds)
+        self._progress.setTextVisible(False)
+        layout.addWidget(self._progress)
+
+        btn_row = QHBoxLayout()
+        self._cancel_btn = QPushButton("⛔  Abbrechen")
+        self._cancel_btn.setMinimumHeight(36)
+        self._cancel_btn.clicked.connect(self.reject)
+        btn_row.addStretch()
+        btn_row.addWidget(self._cancel_btn)
+        layout.addLayout(btn_row)
+
+        self._timer = QTimer(self)
+        self._timer.setInterval(1_000)
+        self._timer.timeout.connect(self._tick)
+        self._timer.start()
+        self._update_label()
+
+    # ------------------------------------------------------------------
+    def _update_label(self):
+        self._label.setText(
+            f"⏻ Rechner wird in {self._remaining} Sekunde(n) heruntergefahren.\n\n"
+            f"‚Abbrechen' drücken, um den Vorgang zu stoppen."
+        )
+        self._progress.setValue(self._remaining)
+
+    def _tick(self):
+        self._remaining -= 1
+        if self._remaining <= 0:
+            self._timer.stop()
+            self.accept()          # gibt True zurück → Shutdown ausführen
+        else:
+            self._update_label()
+
+    def reject(self):
+        self._timer.stop()
+        super().reject()           # gibt False zurück → kein Shutdown

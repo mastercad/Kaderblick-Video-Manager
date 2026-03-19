@@ -18,6 +18,7 @@ from .delegates import ProgressDelegate
 from .dialogs import (
     VideoSettingsDialog, AudioSettingsDialog,
     YouTubeSettingsDialog,
+    KaderblickSettingsDialog,
     CameraSettingsDialog,
 )
 from .workflow import Workflow, WorkflowJob, FileEntry, WORKFLOW_DIR
@@ -47,10 +48,16 @@ def _summarize_pipeline(job: WorkflowJob) -> str:
         parts.append("Download")
     if job.convert_enabled:
         parts.append("Konvert.")
+    if any(f.merge_group_id for f in job.files):
+        parts.append("Kombinieren")
+    if job.title_card_enabled:
+        parts.append("Titelkarte")
     if job.create_youtube_version:
         parts.append("YT-Version")
     if job.upload_youtube:
         parts.append("YT-Upload")
+    if job.upload_kaderblick:
+        parts.append("KB")
     return " → ".join(parts) if parts else "—"
 
 
@@ -195,6 +202,7 @@ class ConverterApp(QMainWindow):
         settings_menu.addAction("Video …", self._open_video_settings)
         settings_menu.addAction("Audio …", self._open_audio_settings)
         settings_menu.addAction("YouTube …", self._open_youtube_settings)
+        settings_menu.addAction("Kaderblick …", self._open_kaderblick_settings)
         settings_menu.addAction("Kameras …", self._open_camera_settings)
         settings_menu.addSeparator()
         settings_menu.addAction("Allgemein …", self._open_general_settings)
@@ -354,6 +362,7 @@ class ConverterApp(QMainWindow):
             self._workflow.jobs.append(dlg.result_job)
             self._refresh_table()
             self._update_count()
+            self._workflow.save_as_last()
 
     def _add_all_cameras(self):
         """Fügt je einen Pi-Download-Auftrag pro konfigurierter Kamera hinzu."""
@@ -381,6 +390,7 @@ class ConverterApp(QMainWindow):
         if added:
             self._refresh_table()
             self._update_count()
+            self._workflow.save_as_last()
             self._append_log(f"{added} Kamera-Auftrag/Aufträge hinzugefügt.")
         else:
             QMessageBox.information(
@@ -396,6 +406,7 @@ class ConverterApp(QMainWindow):
                 del self._workflow.jobs[r]
         self._refresh_table()
         self._update_count()
+        self._workflow.save_as_last()
 
     def _clear_jobs(self):
         if self._workflow.jobs:
@@ -406,6 +417,7 @@ class ConverterApp(QMainWindow):
                 self._workflow.jobs.clear()
                 self._refresh_table()
                 self.status_label.setText("Bereit")
+                self._workflow.save_as_last()
 
     def _edit_job(self):
         rows = sorted(
@@ -418,6 +430,7 @@ class ConverterApp(QMainWindow):
             dlg = JobEditorDialog(self, self.settings, job=job)
             if dlg.exec():
                 self._refresh_table()
+                self._workflow.save_as_last()
 
     def _duplicate_job(self):
         rows = sorted(
@@ -432,9 +445,11 @@ class ConverterApp(QMainWindow):
                 self._workflow.jobs.insert(r + 1, copy_job)
         self._refresh_table()
         self._update_count()
+        self._workflow.save_as_last()
 
     def _update_count(self):
         n = len(self._workflow.jobs)
+        self.status_label.setStyleSheet("")
         self.status_label.setText(
             f"{n} Auftrag/Aufträge" if n else "Bereit")
 
@@ -455,6 +470,9 @@ class ConverterApp(QMainWindow):
 
     def _open_youtube_settings(self):
         YouTubeSettingsDialog(self, self.settings).exec()
+
+    def _open_kaderblick_settings(self):
+        KaderblickSettingsDialog(self, self.settings).exec()
 
     def _open_general_settings(self):
         from .dialogs import GeneralSettingsDialog
@@ -530,6 +548,7 @@ class ConverterApp(QMainWindow):
 
         # Status-Spalte zurücksetzen
         self._reset_status_column()
+        self.status_label.setStyleSheet("")
 
         self._set_busy(True)
         self._append_log(
@@ -595,12 +614,9 @@ class ConverterApp(QMainWindow):
         else:
             self.status_label.setText(f"⬇ {device}: {filename}")
 
-    @Slot(int)
-    def _on_phase_changed(self, phase: int):
-        if phase == 1:
-            self.status_label.setText("Phase 1 – Downloads …")
-        elif phase == 2:
-            self.status_label.setText("Phase 2 – Konvertierung …")
+    @Slot(str)
+    def _on_phase_changed(self, phase: str):
+        self.status_label.setText(phase)
 
     @Slot(int, int)
     def _on_overall_progress(self, done: int, total: int):
@@ -619,16 +635,29 @@ class ConverterApp(QMainWindow):
             self._wf_executor = None
 
         elapsed = time.monotonic() - self._wf_start_time
-        msg = (f"Fertig: {ok} OK, {skip} übersprungen, {fail} Fehler"
-               f"  ({self._format_duration(elapsed)})")
+        if fail > 0:
+            msg = (f"❌ FEHLER: {fail} Fehler, {ok} OK, {skip} übersprungen"
+                   f"  ({self._format_duration(elapsed)})")
+            self.status_label.setStyleSheet(
+                "color: white; background: #c0392b; font-weight: bold; padding: 2px 6px;")
+        else:
+            msg = (f"✅ Fertig: {ok} OK, {skip} übersprungen"
+                   f"  ({self._format_duration(elapsed)})")
+            self.status_label.setStyleSheet(
+                "color: white; background: #27ae60; font-weight: bold; padding: 2px 6px;")
         self._append_log(f"\n{msg}")
         self.status_label.setText(msg)
         self._set_busy(False)
 
         if self._workflow.shutdown_after and fail == 0:
-            self._append_log("\n⏻ Rechner wird in 1 Minute heruntergefahren …")
-            import subprocess
-            subprocess.Popen(["shutdown", "+1"])
+            from .dialogs import ShutdownCountdownDialog
+            dlg = ShutdownCountdownDialog(seconds=30, parent=self)
+            if dlg.exec():
+                self._append_log("\n⏻ Rechner wird heruntergefahren …")
+                import subprocess
+                subprocess.Popen(["shutdown", "now"])
+            else:
+                self._append_log("\n⚠ Herunterfahren durch Benutzer abgebrochen.")
         elif self._workflow.shutdown_after and fail > 0:
             self._append_log("\n⚠ Herunterfahren übersprungen wegen Fehlern.")
 

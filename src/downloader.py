@@ -451,6 +451,61 @@ def _rsync_download_file(
 
 
 # ═════════════════════════════════════════════════════════════════
+#  Dateiliste (ohne Download)
+# ═════════════════════════════════════════════════════════════════
+
+def list_camera_files(
+    device: DeviceSettings,
+    config: CameraSettings,
+) -> list[dict]:
+    """Listet verfügbare Aufnahmen auf einer Kamera auf, ohne sie herunterzuladen.
+
+    Gibt eine Liste von Dicts zurück:
+      {"base": str, "size_mjpg": int, "size_wav": int,
+       "total_size": int, "has_wav": bool}
+
+    Raises RuntimeError bei Verbindungsproblemen.
+    """
+    try:
+        client, sftp = _connect(device)
+    except Exception as exc:
+        raise RuntimeError(
+            f"Verbindung zu {device.name} ({device.ip}) fehlgeschlagen: {exc}") from exc
+    try:
+        try:
+            remote_files = sftp.listdir(config.source)
+        except Exception as exc:
+            raise RuntimeError(
+                f"Verzeichnis {config.source} auf {device.name} "
+                f"konnte nicht gelesen werden: {exc}") from exc
+
+        src = config.source.rstrip("/")
+        mjpg_bases = {os.path.splitext(f)[0] for f in remote_files
+                      if f.lower().endswith(".mjpg")}
+        wav_bases  = {os.path.splitext(f)[0] for f in remote_files
+                      if f.lower().endswith(".wav")}
+
+        result = []
+        for base in sorted(mjpg_bases):
+            size_m = _remote_size(sftp, f"{src}/{base}.mjpg") or 0
+            size_w = _remote_size(sftp, f"{src}/{base}.wav") or 0 if base in wav_bases else 0
+            result.append({
+                "base":       base,
+                "size_mjpg":  size_m,
+                "size_wav":   size_w,
+                "total_size": size_m + size_w,
+                "has_wav":    base in wav_bases,
+            })
+        return result
+    finally:
+        try:
+            sftp.close()
+            client.close()
+        except Exception:
+            pass
+
+
+# ═════════════════════════════════════════════════════════════════
 #  Download-Logik
 # ═════════════════════════════════════════════════════════════════
 
@@ -462,6 +517,7 @@ def download_device(
     cancel_flag: Optional[threading.Event] = None,
     destination_override: str = "",
     delete_after_download: bool = False,
+    selective_bases: Optional[set] = None,
 ) -> list:
     """
     Lädt alle vollständigen Aufnahmen (.mjpg + .wav) von einem Gerät herunter.
@@ -529,6 +585,11 @@ def download_device(
         wavs  = {os.path.splitext(f)[0] for f in remote_files if f.lower().endswith(".wav")}
         bases = sorted(mjpgs & wavs)
         log_cb(f"{device.name}: {len(bases)} vollstaendige Aufnahme(n) gefunden")
+
+        # Bei selektiver Dateiliste nur gewünschte Dateien herunterladen
+        if selective_bases:
+            bases = [b for b in bases if b in selective_bases]
+            log_cb(f"{device.name}: {len(bases)} Aufnahme(n) ausgewählt")
 
         for idx, base in enumerate(bases, 1):
             if cancel_flag and cancel_flag.is_set():

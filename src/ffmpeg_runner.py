@@ -83,6 +83,85 @@ def has_audio_stream(filepath: Path) -> bool:
         return False
 
 
+def get_video_stream_info(filepath: Path) -> dict:
+    """Ermittelt Codec, FPS und Bitrate des ersten Video-Streams via ffprobe.
+
+    Bevorzugt die Stream-Bitrate; fällt auf die Container-Gesamt-Bitrate
+    zurück, wenn der Stream keinen eigenen Wert liefert.
+
+    Returns:
+        Dict mit ``'codec_name'`` (str), ``'fps'`` (float|None),
+        ``'bit_rate'`` (int Bits/s oder None). Leeres Dict bei Fehler.
+    """
+    import json as _json
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
+             "-show_entries",
+             "stream=codec_name,bit_rate,avg_frame_rate:format=bit_rate",
+             "-of", "json", str(filepath)],
+            capture_output=True, text=True, timeout=30,
+        )
+        data = _json.loads(result.stdout)
+        streams = data.get("streams", [])
+        codec_name = streams[0].get("codec_name", "") if streams else ""
+
+        # FPS aus avg_frame_rate (z. B. "25/1" → 25.0)
+        fps: Optional[float] = None
+        if streams:
+            avg_fr = streams[0].get("avg_frame_rate", "0/0")
+            try:
+                num_s, den_s = avg_fr.split("/")
+                num, den = int(num_s), int(den_s)
+                if den > 0:
+                    fps = num / den
+            except (ValueError, ZeroDivisionError):
+                pass
+
+        bit_rate: Optional[int] = None
+        if streams:
+            br = streams[0].get("bit_rate")
+            if br and br not in ("N/A", "0", 0):
+                bit_rate = int(br)
+        if bit_rate is None:
+            fmt_br = data.get("format", {}).get("bit_rate")
+            if fmt_br and fmt_br not in ("N/A", "0", 0):
+                bit_rate = int(fmt_br)
+
+        return {"codec_name": codec_name, "fps": fps, "bit_rate": bit_rate}
+    except Exception:
+        return {}
+
+
+def get_audio_stream_info(filepath: Path) -> dict:
+    """Ermittelt Sample-Rate, Kanalanzahl und Codec der ersten Audio-Spur.
+
+    Returns:
+        Dict mit ``'codec_name'``, ``'sample_rate'`` (int Hz),
+        ``'channels'`` (int). Leeres Dict bei Fehler oder fehlender Tonspur.
+    """
+    import json as _json
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "quiet", "-select_streams", "a:0",
+             "-show_entries", "stream=codec_name,sample_rate,channels",
+             "-of", "json", str(filepath)],
+            capture_output=True, text=True, timeout=30,
+        )
+        data = _json.loads(result.stdout)
+        streams = data.get("streams", [])
+        if not streams:
+            return {}
+        s = streams[0]
+        return {
+            "codec_name": s.get("codec_name", ""),
+            "sample_rate": int(s.get("sample_rate") or 48000),
+            "channels": int(s.get("channels") or 2),
+        }
+    except Exception:
+        return {}
+
+
 def estimate_duration_from_filesize(filepath: Path, fps: int) -> Optional[float]:
     """Schätzt die Dauer einer MJPEG-Datei anhand Dateigröße + Auflösung.
 

@@ -35,7 +35,18 @@ class FileEntry:
     source_path: str = ""
     output_filename: str = ""      # leer = automatisch aus Quelldateiname ableiten
     youtube_title: str = ""        # leer = Dateiname als Titel verwenden
+    youtube_description: str = ""  # leer = automatisch aus Metadaten generiert
     youtube_playlist: str = ""
+    # Kaderblick-spezifische Felder (pro Datei)
+    kaderblick_game_id: str = ""      # leer = Job-Standard verwenden
+    kaderblick_game_start: int = 0    # Startzeit in Sekunden (Standard 0)
+    kaderblick_video_type_id: int = 0 # 0 = Job-Standard verwenden
+    kaderblick_camera_id: int = 0    # 0 = Job-Standard verwenden
+    # Merge-Gruppe: nicht-leer = Datei gehört zu einer Zusammenführungs-Gruppe.
+    # Die erste Datei der Gruppe hält den gemeinsamen YT-Titel/Playlist.
+    merge_group_id: str = ""
+    # Individuelle Titelkarte für diese Quelldatei (leer = Auftrag-Titel verwenden)
+    title_card_subtitle: str = ""   # z.B. "1. Halbzeit", "Kamera 1"
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -98,7 +109,20 @@ class WorkflowJob:
     upload_youtube: bool = False           # auf YouTube hochladen
     default_youtube_title: str = ""        # Standard-Titel (Vorlage)
     default_youtube_playlist: str = ""     # Standard-Playlist
-
+    # ── Kaderblick ─────────────────────────────────────────────
+    upload_kaderblick: bool = False        # Video auf Kaderblick eintragen
+    default_kaderblick_game_id: str = ""   # Spiel-ID (wird pro Datei geerbt)
+    default_kaderblick_video_type_id: int = 0  # Video-Typ-ID (Standard 0 = nicht gesetzt)
+    default_kaderblick_camera_id: int = 0      # Kamera-ID für Kaderblick
+    # ── Titelkarte ────────────────────────────────────────────
+    title_card_enabled: bool = False       # Titelkarte vor jedem Video einblenden
+    title_card_logo_path: str = ""         # Pfad zum Logo-Bild (leer = kein Logo)
+    title_card_duration: float = 3.0       # Anzeigedauer in Sekunden
+    title_card_bg_color: str = "#000000"   # Hintergrundfarbe
+    title_card_fg_color: str = "#FFFFFF"   # Textfarbe
+    title_card_home_team: str = ""         # Heimmannschaft
+    title_card_away_team: str = ""         # Auswärtsmannschaft
+    title_card_date: str = ""              # Datum (YYYY-MM-DD oder Anzeigetext)
     # ── Laufzeit (nicht persistiert) ──────────────────────────
     status: str = "Wartend"
     progress_pct: int = 0

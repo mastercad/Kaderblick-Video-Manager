@@ -99,7 +99,10 @@ def resolve_encoder(encoder_setting: str,
 
 
 def build_encoder_args(encoder: str, preset: str, crf: int,
-                       lossless: bool, fps: float) -> list[str]:
+                       lossless: bool, fps: float,
+                       maxrate_kbps: int | None = None,
+                       no_bframes: bool = False,
+                       keyframe_interval: int = 0) -> list[str]:
     """Erstellt die ffmpeg-Encoder-Argumente für den gewählten Encoder.
 
     Args:
@@ -108,11 +111,20 @@ def build_encoder_args(encoder: str, preset: str, crf: int,
         crf: Qualitätswert (CRF für x264, CQ für NVENC).
         lossless: Verlustfreie Kodierung.
         fps: Ausgabe-Framerate (kann gebrochene Werte enthalten bei Sync).
+        maxrate_kbps: Optionale Bitrate-Obergrenze in kbps (aus Quell-Analyse).
+                      Verhindert, dass der Encoder mehr Bitrate nutzt als die
+                      Quelldatei — self wenn CRF einen hohen Wert zulässt.
 
     Returns:
         Liste der ffmpeg-Argumente.
     """
     fps_str = f"{fps:.6f}" if isinstance(fps, float) else str(fps)
+
+    # GOP-Größe: 0 = Encoder-Standard, sonst Sekunden → Frames
+    gop_frames: int | None = None
+    if keyframe_interval and keyframe_interval > 0 and fps and fps > 0:
+        gop_frames = max(1, int(round(fps * keyframe_interval)))
+
     if encoder == "h264_nvenc":
         nvenc_preset = _X264_TO_NVENC_PRESET.get(preset, "p5")
         args = ["-c:v", "h264_nvenc"]
@@ -121,14 +133,29 @@ def build_encoder_args(encoder: str, preset: str, crf: int,
         else:
             args += ["-preset", nvenc_preset, "-tune", "hq",
                      "-rc", "vbr", "-cq", str(crf), "-b:v", "0"]
+            if maxrate_kbps:
+                args += ["-maxrate:v", f"{maxrate_kbps}k",
+                         "-bufsize:v", f"{maxrate_kbps * 2}k"]
         args += ["-pix_fmt", "yuv420p", "-r", fps_str]
+        if no_bframes:
+            args += ["-bf", "0"]
+        if gop_frames is not None:
+            args += ["-g", str(gop_frames), "-keyint_min", str(gop_frames)]
         return args
 
     # Fallback: libx264
     p = "slow" if lossless else preset
     c = 0 if lossless else crf
-    return ["-c:v", "libx264", "-preset", p, "-crf", str(c),
+    args = ["-c:v", "libx264", "-preset", p, "-crf", str(c),
             "-pix_fmt", "yuv420p", "-r", fps_str]
+    if not lossless and maxrate_kbps:
+        args += ["-maxrate", f"{maxrate_kbps}k",
+                 "-bufsize", f"{maxrate_kbps * 2}k"]
+    if no_bframes:
+        args += ["-bf", "0"]
+    if gop_frames is not None:
+        args += ["-g", str(gop_frames), "-keyint_min", str(gop_frames)]
+    return args
 
 
 # ═════════════════════════════════════════════════════════════════

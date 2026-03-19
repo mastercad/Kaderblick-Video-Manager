@@ -11,8 +11,8 @@ class ProgressDelegate(QStyledItemDelegate):
     """Zeichnet einen Fortschrittsbalken als Hintergrund in die Status-Zelle,
     wenn ein Job den Status 'Läuft' hat."""
 
-    _BAR_COLOR = QColor(60, 140, 220, 90)       # halbtransparentes Blau
-    _BAR_DONE_COLOR = QColor(60, 180, 75, 90)   # halbtransparentes Grün
+    _BAR_COLOR = QColor(41, 128, 185, 190)       # kräftiges Blau (gut sichtbar)
+    _BAR_DONE_COLOR = QColor(39, 174, 96, 190)  # kräftiges Grün
 
     def paint(self, painter, option, index):
         self.initStyleOption(option, index)
@@ -41,9 +41,9 @@ class ProgressDelegate(QStyledItemDelegate):
                 brush = index.data(Qt.ForegroundRole)
                 painter.setPen(brush.color() if brush else Qt.black)
             elif "Fehler" in text:
-                painter.setPen(Qt.red)
+                painter.setPen(QColor("#c0392b"))
             else:
-                painter.setPen(Qt.blue)
+                painter.setPen(QColor("#0a1628"))   # fast Schwarz – lesbar auf jedem Hintergrund
             painter.drawText(
                 rect.adjusted(4, 0, -4, 0),
                 Qt.AlignVCenter | Qt.AlignLeft,
