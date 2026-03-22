@@ -10,12 +10,43 @@ Stellt low-level Funktionen bereit:
 import os
 import re
 import signal
+import shutil
 import subprocess
 import threading
 from pathlib import Path
 from typing import Optional
 
 _RE_TIME = re.compile(r"time=(\d+):(\d+):(\d+)\.(\d+)")
+
+
+def get_ffmpeg_bin() -> str:
+    """Liefert den zentral konfigurierten ffmpeg-Binärpfad.
+
+    Über ``KADERBLICK_FFMPEG_BIN`` kann ein eigenes, selbst gebautes ffmpeg
+    erzwungen werden. Ohne Override wird die PATH-Auflösung verwendet.
+    """
+    configured = os.environ.get("KADERBLICK_FFMPEG_BIN", "").strip()
+    if configured:
+        return configured
+    return shutil.which("ffmpeg") or "ffmpeg"
+
+
+def get_ffprobe_bin() -> str:
+    """Liefert den zentral konfigurierten ffprobe-Binärpfad."""
+    configured = os.environ.get("KADERBLICK_FFPROBE_BIN", "").strip()
+    if configured:
+        return configured
+    return shutil.which("ffprobe") or "ffprobe"
+
+
+def ffmpeg_cmd(*args: str) -> list[str]:
+    """Baut eine ffmpeg-Kommandozeile mit dem zentralen Binärpfad."""
+    return [get_ffmpeg_bin(), *args]
+
+
+def ffprobe_cmd(*args: str) -> list[str]:
+    """Baut eine ffprobe-Kommandozeile mit dem zentralen Binärpfad."""
+    return [get_ffprobe_bin(), *args]
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -42,8 +73,8 @@ def get_duration(filepath: Path) -> Optional[float]:
     """Ermittelt die Dauer einer Mediendatei via ffprobe."""
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-             "-of", "csv=p=0", str(filepath)],
+            ffprobe_cmd("-v", "quiet", "-show_entries", "format=duration",
+                        "-of", "csv=p=0", str(filepath)),
             capture_output=True, text=True, timeout=30,
         )
         val = result.stdout.strip()
@@ -56,9 +87,9 @@ def get_resolution(filepath: Path) -> Optional[tuple[int, int]]:
     """Ermittelt die Auflösung (width, height) eines Videos via ffprobe."""
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
-             "-show_entries", "stream=width,height",
-             "-of", "csv=p=0:s=x", str(filepath)],
+            ffprobe_cmd("-v", "quiet", "-select_streams", "v:0",
+                        "-show_entries", "stream=width,height",
+                        "-of", "csv=p=0:s=x", str(filepath)),
             capture_output=True, text=True, timeout=30,
         )
         parts = result.stdout.strip().split("x")
@@ -73,9 +104,9 @@ def has_audio_stream(filepath: Path) -> bool:
     """Prüft ob eine Mediendatei eine Audio-Spur enthält (ffprobe)."""
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-select_streams", "a",
-             "-show_entries", "stream=codec_type",
-             "-of", "csv=p=0", str(filepath)],
+            ffprobe_cmd("-v", "quiet", "-select_streams", "a",
+                        "-show_entries", "stream=codec_type",
+                        "-of", "csv=p=0", str(filepath)),
             capture_output=True, text=True, timeout=30,
         )
         return "audio" in result.stdout.strip().lower()
@@ -96,10 +127,10 @@ def get_video_stream_info(filepath: Path) -> dict:
     import json as _json
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-select_streams", "v:0",
-             "-show_entries",
-             "stream=codec_name,bit_rate,avg_frame_rate:format=bit_rate",
-             "-of", "json", str(filepath)],
+            ffprobe_cmd("-v", "quiet", "-select_streams", "v:0",
+                        "-show_entries",
+                        "stream=codec_name,bit_rate,avg_frame_rate:format=bit_rate",
+                        "-of", "json", str(filepath)),
             capture_output=True, text=True, timeout=30,
         )
         data = _json.loads(result.stdout)
@@ -143,9 +174,9 @@ def get_audio_stream_info(filepath: Path) -> dict:
     import json as _json
     try:
         result = subprocess.run(
-            ["ffprobe", "-v", "quiet", "-select_streams", "a:0",
-             "-show_entries", "stream=codec_name,sample_rate,channels",
-             "-of", "json", str(filepath)],
+            ffprobe_cmd("-v", "quiet", "-select_streams", "a:0",
+                        "-show_entries", "stream=codec_name,sample_rate,channels",
+                        "-of", "json", str(filepath)),
             capture_output=True, text=True, timeout=30,
         )
         data = _json.loads(result.stdout)

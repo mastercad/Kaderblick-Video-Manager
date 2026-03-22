@@ -10,7 +10,8 @@ _BASE_DIR = Path(__file__).resolve().parent.parent
 _CONFIG_DIR = _BASE_DIR / "config"
 _DATA_DIR = _BASE_DIR / "data"
 
-SETTINGS_FILE = _DATA_DIR / "settings.json"
+SETTINGS_FILE = _CONFIG_DIR / "settings.json"
+LEGACY_SETTINGS_FILE = _DATA_DIR / "settings.json"
 SESSION_FILE = _DATA_DIR / "session.json"
 CLIENT_SECRET_FILE = _CONFIG_DIR / "client_secret.json"
 TOKEN_FILE = _DATA_DIR / "youtube_token.json"
@@ -163,9 +164,10 @@ class AppSettings:
 
     @classmethod
     def load(cls) -> "AppSettings":
-        if SETTINGS_FILE.exists():
+        settings_path = SETTINGS_FILE if SETTINGS_FILE.exists() else LEGACY_SETTINGS_FILE
+        if settings_path.exists():
             try:
-                data = json.loads(SETTINGS_FILE.read_text())
+                data = json.loads(settings_path.read_text())
                 s = cls()
                 for k, v in data.get("video", {}).items():
                     if hasattr(s.video, k):

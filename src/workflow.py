@@ -54,7 +54,7 @@ class FileEntry:
 # ─────────────────────────────────────────────────────────────────
 
 # Laufzeitfelder werden nicht in die JSON-Datei geschrieben.
-_RUNTIME_FIELDS = {"status", "progress_pct", "error_msg"}
+_RUNTIME_FIELDS = {"status", "progress_pct", "overall_progress_pct", "current_step_key", "error_msg"}
 
 
 @dataclass
@@ -97,6 +97,7 @@ class WorkflowJob:
     preset: str = "medium"
     fps: int = 25
     output_format: str = "mp4"
+    overwrite: bool = False     # vorhandene Ausgabedateien überschreiben
 
     # ── Audio ─────────────────────────────────────────────────
     merge_audio: bool = False      # separate A+V-Dateien zusammenführen
@@ -109,6 +110,7 @@ class WorkflowJob:
     upload_youtube: bool = False           # auf YouTube hochladen
     default_youtube_title: str = ""        # Standard-Titel (Vorlage)
     default_youtube_playlist: str = ""     # Standard-Playlist
+    default_youtube_competition: str = ""  # Wettbewerb für Metadaten-Dialog
     # ── Kaderblick ─────────────────────────────────────────────
     upload_kaderblick: bool = False        # Video auf Kaderblick eintragen
     default_kaderblick_game_id: str = ""   # Spiel-ID (wird pro Datei geerbt)
@@ -123,9 +125,14 @@ class WorkflowJob:
     title_card_home_team: str = ""         # Heimmannschaft
     title_card_away_team: str = ""         # Auswärtsmannschaft
     title_card_date: str = ""              # Datum (YYYY-MM-DD oder Anzeigetext)
+    # ── Resume-Info (persistiert) ───────────────────────────
+    resume_status: str = ""                # letzter sichtbarer Status beim vorherigen Lauf
+    step_statuses: dict = field(default_factory=dict)  # z.B. {"transfer": "done"}
     # ── Laufzeit (nicht persistiert) ──────────────────────────
     status: str = "Wartend"
     progress_pct: int = 0
+    overall_progress_pct: int = 0
+    current_step_key: str = ""
     error_msg: str = ""
 
     # ── Serialisierung ────────────────────────────────────────

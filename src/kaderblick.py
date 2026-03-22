@@ -91,6 +91,12 @@ def _get_registry() -> KaderblickRegistry:
     return _registry
 
 
+def get_recorded_kaderblick_id(youtube_video_id: str) -> Optional[int]:
+    if not youtube_video_id:
+        return None
+    return _get_registry().already_posted(youtube_video_id)
+
+
 # ─────────────────────────────────────────────────────────────────
 #  HTTP-Hilfsfunktionen
 # ─────────────────────────────────────────────────────────────────
@@ -144,6 +150,17 @@ def _refresh_jwt(kb) -> bool:
     return False
 
 
+def _http_error_details(exc: urllib.error.HTTPError) -> str:
+    """Liest den HTTP-Fehlertext, damit API-Meldungen im Log sichtbar bleiben."""
+    try:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        body = ""
+    if body:
+        return f"HTTP {exc.code}: {exc.reason} | Body: {body[:400]}"
+    return f"HTTP {exc.code}: {exc.reason}"
+
+
 def _get(url: str, kb, timeout: int = 15) -> dict:
     """GET-Request, bei abgelaufenem JWT einmalig Token-Refresh versuchen."""
     try:
@@ -158,7 +175,7 @@ def _get(url: str, kb, timeout: int = 15) -> dict:
                     return json.loads(resp.read().decode("utf-8"))
             except Exception as exc2:
                 raise RuntimeError(f"GET {url} fehlgeschlagen (nach Token-Refresh): {exc2}") from exc2
-        raise RuntimeError(f"GET {url} fehlgeschlagen: {exc}") from exc
+        raise RuntimeError(f"GET {url} fehlgeschlagen: {_http_error_details(exc)}") from exc
     except Exception as exc:
         raise RuntimeError(f"GET {url} fehlgeschlagen: {exc}") from exc
 
@@ -203,7 +220,7 @@ def _post(url: str, kb, payload: dict, timeout: int = 15) -> dict:
                 return _do_post(url)
             except Exception as exc2:
                 raise RuntimeError(f"POST {url} fehlgeschlagen (nach Token-Refresh): {exc2}") from exc2
-        raise RuntimeError(f"POST {url} fehlgeschlagen: {exc}") from exc
+        raise RuntimeError(f"POST {url} fehlgeschlagen: {_http_error_details(exc)}") from exc
     except Exception as exc:
         raise RuntimeError(f"POST {url} fehlgeschlagen: {exc}") from exc
 
@@ -336,6 +353,11 @@ def post_to_kaderblick(
         return False
     if not youtube_video_id:
         log_callback("⚠ Kaderblick: Kein YouTube-Video-ID – übersprungen")
+        return False
+    if not video_type_id:
+        log_callback(
+            "⚠ Kaderblick: Kein Video-Typ gesetzt – der API-POST würde mit "
+            "'VideoType nicht gefunden' scheitern")
         return False
 
     registry = _get_registry()

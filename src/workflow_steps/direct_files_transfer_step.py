@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+from ..workflow import WorkflowJob
+from .transfer_io import emit_item_progress, transfer_files
+
+
+class DirectFilesTransferStep:
+    name = "files-transfer"
+
+    def execute(self, executor: Any, orig_idx: int, job: WorkflowJob) -> list[str]:
+        paths: list[Path] = []
+        total_entries = len(job.files)
+        executor.job_progress.emit(orig_idx, 0)
+        for entry_idx, entry in enumerate(job.files, start=1):
+            source_path = Path(entry.source_path)
+            executor._set_job_status(orig_idx, f"Transfer {entry_idx}/{total_entries}: {source_path.name} …")
+            if source_path.exists():
+                paths.append(source_path)
+                emit_item_progress(executor, orig_idx, entry_idx, total_entries)
+                continue
+
+            fallback = None
+            if job.copy_destination:
+                candidate = Path(job.copy_destination) / source_path.name
+                if candidate.exists():
+                    fallback = candidate
+            if fallback:
+                executor.log_message.emit(
+                    f"  ↩ Quelle fehlt, nutze vorhandenes Ziel: {fallback}"
+                )
+                paths.append(fallback)
+            elif self._should_keep_missing_entry_for_resume(job, source_path):
+                executor.log_message.emit(
+                    f"  ↩ Quelle fehlt: {source_path} | Fortsetzen über vorhandenes Merge-Ergebnis wird versucht"
+                )
+                paths.append(source_path)
+            else:
+                executor.log_message.emit(f"  ⚠ Datei nicht gefunden: {source_path}")
+            emit_item_progress(executor, orig_idx, entry_idx, total_entries)
+
+        executor.log_message.emit(f"\n🗃 {job.name}: {len(paths)} Datei(en) bereit")
+
+        dst_dir = Path(job.copy_destination) if job.copy_destination else None
+        if not dst_dir:
+            executor.job_progress.emit(orig_idx, 100)
+            return [str(path) for path in paths]
+
+        dst_dir.mkdir(parents=True, exist_ok=True)
+        verb = "verschieben" if job.move_files else "kopieren"
+        executor.log_message.emit(f"📁 {job.name}: {len(paths)} Datei(en) {verb} …")
+        return transfer_files(executor, orig_idx, job, paths, dst_dir)
+
+    @staticmethod
+    def _should_keep_missing_entry_for_resume(job: WorkflowJob, source_path: Path) -> bool:
+        if not (job.resume_status or job.step_statuses):
+            return False
+        for entry in job.files:
+            if entry.source_path != str(source_path):
+                continue
+            if entry.merge_group_id:
+                return True
+            if job.convert_enabled:
+                return True
+            if job.title_card_enabled or job.create_youtube_version or job.upload_youtube:
+                return True
+        return False

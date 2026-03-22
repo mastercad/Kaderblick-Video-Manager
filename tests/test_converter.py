@@ -15,8 +15,9 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from src.converter import ConvertJob, run_concat
+from src.converter import ConvertJob, run_concat, run_youtube_convert
 from src.merge import merge_halves
+from src.settings import AppSettings
 
 
 # ─── ConvertJob ───────────────────────────────────────────────────────────────
@@ -126,7 +127,7 @@ class TestRunConcat:
             out  = Path(tmp) / "merged.mp4"
             out.touch()   # simuliert von ffmpeg erstellte Ausgabedatei
 
-            result = run_concat(srcs, out)
+            result = run_concat(srcs, out, overwrite=True)
 
         assert result is True
         mock_ffmpeg.assert_called_once()
@@ -145,7 +146,7 @@ class TestRunConcat:
             srcs = self._make_files(tmp, 2)
             out  = Path(tmp) / "merged.mp4"
             out.touch()
-            result = run_concat(srcs, out)
+            result = run_concat(srcs, out, overwrite=True)
         assert result is False
 
     @patch("src.converter.run_ffmpeg", return_value=0)
@@ -155,7 +156,7 @@ class TestRunConcat:
             srcs = self._make_files(tmp, 3)
             out  = Path(tmp) / "merged.mp4"
             out.touch()
-            run_concat(srcs, out)
+            run_concat(srcs, out, overwrite=True)
 
         cmd = mock_ffmpeg.call_args[0][0]
         for src in srcs:
@@ -167,7 +168,7 @@ class TestRunConcat:
             srcs = self._make_files(tmp, 2)
             out  = Path(tmp) / "merged.mp4"
             out.touch()   # existiert noch vor dem Aufruf
-            run_concat(srcs, out)
+            run_concat(srcs, out, overwrite=True)
             # Ausgabedatei soll nach Abbruch gelöscht sein
             assert not out.exists()
 
@@ -178,7 +179,7 @@ class TestRunConcat:
             srcs = self._make_files(tmp, 2)
             out  = Path(tmp) / "merged.mp4"
             out.touch()
-            run_concat(srcs, out, log_callback=log_lines.append)
+            run_concat(srcs, out, log_callback=log_lines.append, overwrite=True)
         # Mindestens ein Log-Eintrag (z. B. "Zusammenführen: …")
         assert any(log_lines)
 
@@ -189,7 +190,7 @@ class TestRunConcat:
             out  = Path(tmp) / "merged.mp4"
             out.touch()
             cancel = threading.Event()
-            run_concat(srcs, out, cancel_flag=cancel)
+            run_concat(srcs, out, cancel_flag=cancel, overwrite=True)
         _, kwargs = mock_ffmpeg.call_args
         assert kwargs.get("cancel_flag") is cancel
 
@@ -200,7 +201,7 @@ class TestRunConcat:
             srcs = self._make_files(tmp, 2)
             out  = Path(tmp) / "merged.mp4"
             out.touch()
-            run_concat(srcs, out)
+            run_concat(srcs, out, overwrite=True)
 
         cmd = mock_ffmpeg.call_args[0][0]
         assert "-filter_complex" in cmd
@@ -209,6 +210,36 @@ class TestRunConcat:
         assert "concat" in fc_val
         assert "[outv]" in fc_val
         assert "[outa]" in fc_val
+
+
+class TestRunYouTubeConvert:
+    @patch("src.converter.run_ffmpeg", return_value=0)
+    @patch("src.converter.build_video_encoder_args",
+           return_value=("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p5"]))
+    @patch("src.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.converter.get_duration", return_value=12.0)
+    def test_uses_central_encoder_plan_and_logs_gpu(self, _dur, _info,
+                                                     _build_args, mock_ffmpeg):
+        with tempfile.TemporaryDirectory() as tmp:
+            mp4 = Path(tmp) / "video.mp4"
+            yt = Path(tmp) / "video_youtube.mp4"
+            mp4.touch()
+            yt.touch()
+
+            settings = AppSettings()
+            settings.video.encoder = "auto"
+            settings.video.overwrite = True
+            job = ConvertJob(source_path=mp4, output_path=mp4)
+            log_lines: list[str] = []
+
+            ok = run_youtube_convert(job, settings, log_callback=log_lines.append)
+
+        assert ok is True
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert cmd[0].endswith("ffmpeg")
+        assert "-c:v" in cmd
+        assert "h264_nvenc" in cmd
+        assert any("YouTube-Encoder: h264_nvenc" in line for line in log_lines)
 
 
 # ─── merge_halves – _youtube-Variante bevorzugen ───────────────────────────────

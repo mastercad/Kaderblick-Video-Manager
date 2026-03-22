@@ -75,6 +75,7 @@ class JobEditorDialog(QDialog):
         self._job        = job or self._create_default_job(settings)
         self._is_new     = job is None
         self._kb_api_loaded = False
+        self._yt_competition = self._job.default_youtube_competition
         self._current    = 0
         self.setWindowTitle(
             "Neuer Auftrag" if self._is_new
@@ -272,6 +273,21 @@ class JobEditorDialog(QDialog):
         )
         self._file_list.match_data_changed.connect(self._on_match_data_from_files)
         lay.addWidget(self._file_list)
+
+        form = QFormLayout()
+        form.setContentsMargins(0, 4, 0, 0)
+
+        self._files_dst_edit = QLineEdit()
+        self._files_dst_edit.setPlaceholderText("leer = Dateien am Quellort verarbeiten")
+        dst_btn = self._browse_btn(lambda: self._browse_dir(
+            self._files_dst_edit, "Zielordner wählen"))
+        form.addRow("Zielordner:", self._hbox(self._files_dst_edit, dst_btn))
+
+        self._files_move_cb = QCheckBox(
+            "Quelldateien in Zielordner verschieben (statt kopieren)")
+        form.addRow("", self._files_move_cb)
+
+        lay.addLayout(form)
         return w
 
     # ── Folder panel ──────────────────────────────────────────
@@ -426,6 +442,13 @@ class JobEditorDialog(QDialog):
         self._format_combo = QComboBox()
         self._format_combo.addItems(["mp4", "avi"])
         enc_form.addRow("Format:", self._format_combo)
+
+        self._overwrite_cb = QCheckBox(
+            "Vorhandene Ausgabedateien überschreiben  (Skip-Schutz deaktivieren)")
+        self._overwrite_cb.setToolTip(
+            "Wenn aktiviert, werden bereits konvertierte Dateien erneut verarbeitet.\n"
+            "Normalerweise deaktiviert lassen – dann werden fertige Dateien übersprungen.")
+        enc_form.addRow("", self._overwrite_cb)
 
         enc_lay.addLayout(enc_form)
         lay.addWidget(self._encoding_widget)
@@ -792,6 +815,8 @@ class JobEditorDialog(QDialog):
 
         # files
         self._file_list.load(job.files)
+        self._files_dst_edit.setText(job.copy_destination)
+        self._files_move_cb.setChecked(job.move_files)
 
         # folder
         self._folder_src_edit.setText(job.source_folder)
@@ -825,6 +850,7 @@ class JobEditorDialog(QDialog):
         self._crf_spin.setValue(job.crf)
         self._fps_spin.setValue(job.fps)
         self._format_combo.setCurrentText(job.output_format)
+        self._overwrite_cb.setChecked(job.overwrite)
 
         # audio
         self._merge_audio_cb.setChecked(job.merge_audio)
@@ -838,6 +864,7 @@ class JobEditorDialog(QDialog):
         self._yt_create_cb.setChecked(job.create_youtube_version)
         self._yt_title_edit.setText(job.default_youtube_title)
         self._yt_playlist_edit.setText(job.default_youtube_playlist)
+        self._yt_competition = job.default_youtube_competition
         self._yt_details.setVisible(job.upload_youtube)
 
         # kaderblick
@@ -884,9 +911,11 @@ class JobEditorDialog(QDialog):
         job.name        = self._name_edit.text().strip()
 
         if mode_id == 0:
-            job.files         = self._file_list.collect()
-            job.source_folder = ""
-            job.device_name   = ""
+            job.files            = self._file_list.collect()
+            job.copy_destination = self._files_dst_edit.text().strip()
+            job.move_files       = self._files_move_cb.isChecked()
+            job.source_folder    = ""
+            job.device_name      = ""
             if not job.name:
                 job.name = (Path(job.files[0].source_path).stem
                             if job.files else "Auftrag")
@@ -919,6 +948,7 @@ class JobEditorDialog(QDialog):
         job.crf                = self._crf_spin.value()
         job.fps                = self._fps_spin.value()
         job.output_format      = self._format_combo.currentText()
+        job.overwrite          = self._overwrite_cb.isChecked()
 
         job.merge_audio        = self._merge_audio_cb.isChecked()
         job.amplify_audio      = self._amplify_audio_cb.isChecked()
@@ -929,6 +959,7 @@ class JobEditorDialog(QDialog):
         job.upload_youtube          = self._yt_upload_cb.isChecked()
         job.default_youtube_title   = self._yt_title_edit.text().strip()
         job.default_youtube_playlist = self._yt_playlist_edit.text().strip()
+        job.default_youtube_competition = self._yt_competition.strip()
 
         job.upload_kaderblick          = self._kb_upload_cb.isChecked()
         job.default_kaderblick_game_id = self._kb_game_id_edit.text().strip()
@@ -1046,6 +1077,7 @@ class JobEditorDialog(QDialog):
             except Exception:
                 tc_date_iso = tc_date
         initial = MatchData(
+            competition=self._yt_competition.strip(),
             home_team=self._tc_home_edit.text().strip(),
             away_team=self._tc_away_edit.text().strip(),
             date_iso=tc_date_iso,
@@ -1053,6 +1085,7 @@ class JobEditorDialog(QDialog):
         dlg = YouTubeTitleEditorDialog(self, mode="playlist", initial_match=initial)
         if dlg.exec():
             self._yt_playlist_edit.setText(dlg.playlist_title)
+            self._yt_competition = dlg.match_data.competition
             # Spieldaten in Titelkarten-Felder übernehmen
             m = dlg.match_data
             if m.home_team:

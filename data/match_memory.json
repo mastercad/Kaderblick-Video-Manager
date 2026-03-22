@@ -1,26 +1,29 @@
 {
   "last_match": {
-    "date_iso": "2026-03-15",
-    "competition": "Sparkassenkreispokal",
-    "home_team": "SpG Wurgwitz/​SG 90 Braunsdorf",
-    "away_team": "SSV 1862 Langburkersdorf U19"
+    "date_iso": "2026-03-21",
+    "competition": "Sparkassenkreisoberliga",
+    "home_team": "SV Pesterwitz",
+    "away_team": "SpG Wurgwitz/​SG 90 Braunsdorf"
   },
   "last_segment": {
-    "camera": "Kaderblick Links",
-    "camera_id": 6,
-    "video_type_id": 0,
-    "side": "Links",
-    "half": 1,
+    "camera": "DJI Osmo Action 5",
+    "camera_id": 1,
+    "video_type_id": 3,
+    "side": "",
+    "half": 2,
     "part": 0,
-    "type_name": ""
+    "type_name": "2. Halbzeit"
   },
   "history_competition": [
+    "Sparkassenkreisoberliga",
     "Sparkassenkreispokal"
   ],
   "history_home_team": [
+    "SV Pesterwitz",
     "SpG Wurgwitz/​SG 90 Braunsdorf"
   ],
   "history_away_team": [
+    "SpG Wurgwitz/​SG 90 Braunsdorf",
     "SSV 1862 Langburkersdorf U19"
   ]
 }

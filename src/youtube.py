@@ -275,7 +275,7 @@ def upload_to_youtube(job, settings: AppSettings,
         return False
 
     mp4 = job.output_path
-    if not mp4 or not mp4.exists():
+    if not mp4:
         log("Keine Ausgabedatei zum Hochladen vorhanden.")
         return False
 
@@ -283,9 +283,12 @@ def upload_to_youtube(job, settings: AppSettings,
     if yt_version.exists():
         upload_file = yt_version
         log(f"Verwende YouTube-optimierte Version: {yt_version.name}")
-    else:
+    elif mp4.exists():
         upload_file = mp4
         log(f"Verwende Originaldatei (keine _youtube-Version gefunden): {mp4.name}")
+    else:
+        log("Keine Ausgabedatei zum Hochladen vorhanden.")
+        return False
 
     # ── 1. Bereits vollständig hochgeladen? ───────────────────
     existing_id = _registry.already_uploaded(upload_file)

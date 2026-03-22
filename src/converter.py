@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Optional
 
 from .settings import AppSettings
-from .encoder import resolve_encoder, build_encoder_args
+from .encoder import build_video_encoder_args
 from .ffmpeg_runner import (
     find_audio, get_duration, estimate_duration_from_filesize,
-    count_frames, run_ffmpeg, has_audio_stream,
+    count_frames, run_ffmpeg, has_audio_stream, ffmpeg_cmd,
     get_video_stream_info, get_audio_stream_info,
 )
 
@@ -263,7 +263,7 @@ def run_convert(job: ConvertJob, settings: AppSettings,
         and not vs.lossless
     )
 
-    cmd = ["ffmpeg", "-hide_banner", "-y"]
+    cmd = ffmpeg_cmd("-hide_banner", "-y")
 
     if use_stream_copy:
         # Nur Remux (Container-Wechsel falls nötig), kein Re-Encode
@@ -287,13 +287,19 @@ def run_convert(job: ConvertJob, settings: AppSettings,
 
         # Video-Encoder
         if vs.output_format == "mp4":
-            encoder = resolve_encoder(vs.encoder, log_callback=log_callback)
+            encoder, encoder_args = build_video_encoder_args(
+                vs.encoder,
+                preset=vs.preset,
+                crf=vs.crf,
+                lossless=vs.lossless,
+                fps=effective_fps,
+                maxrate_kbps=src_maxrate_kbps,
+                no_bframes=vs.no_bframes,
+                keyframe_interval=vs.keyframe_interval,
+                log_callback=log_callback,
+            )
             log(f"Encoder:  {encoder}")
-            cmd += build_encoder_args(encoder, vs.preset, vs.crf,
-                                      vs.lossless, effective_fps,
-                                      maxrate_kbps=src_maxrate_kbps,
-                                      no_bframes=vs.no_bframes,
-                                      keyframe_interval=vs.keyframe_interval)
+            cmd += encoder_args
         else:
             cmd += ["-c:v", "mjpeg", "-q:v", "2", "-r", str(vs.fps)]
 
@@ -385,12 +391,19 @@ def run_youtube_convert(job: ConvertJob, settings: AppSettings,
     input_duration = get_duration(mp4)
     log(f"Erstelle YouTube-Version: {yt_path.name}")
 
-    # Encoder aus Einstellungen verwenden
-    encoder = resolve_encoder(vs.encoder)
-    encoder_args = build_encoder_args(
-        encoder, "medium", yt.youtube_crf, lossless=False, fps=vs.fps)
+    src_info = get_video_stream_info(mp4)
+    source_fps = src_info.get("fps") or vs.fps
+    encoder, encoder_args = build_video_encoder_args(
+        vs.encoder,
+        preset=vs.preset,
+        crf=yt.youtube_crf,
+        lossless=False,
+        fps=source_fps,
+        log_callback=log_callback,
+    )
+    log(f"YouTube-Encoder: {encoder}")
 
-    cmd = ["ffmpeg", "-hide_banner", "-y", "-i", str(mp4)]
+    cmd = ffmpeg_cmd("-hide_banner", "-y", "-i", str(mp4))
     cmd += encoder_args
     cmd += ["-maxrate", yt.youtube_maxrate,
             "-bufsize", yt.youtube_bufsize,
@@ -423,8 +436,11 @@ def run_concat(
     output: Path,
     cancel_flag: Optional[threading.Event] = None,
     log_callback=None,
+    progress_callback=None,
     crf: int = 18,
     preset: str = "fast",
+    overwrite: bool = False,
+    encoder: str = "auto",
 ) -> bool:
     """Verbindet mehrere Videos mit dem ffmpeg concat-Filter (mit Re-Encode).
 
@@ -444,6 +460,10 @@ def run_concat(
     if not source_files:
         return False
 
+    if output.exists() and not overwrite:
+        log(f"Übersprungen: {output.name} existiert bereits")
+        return True
+
     n = len(source_files)
     names = " + ".join(p.name for p in source_files)
     log(f"Zusammenführen (re-encode): {names} → {output.name}")
@@ -452,21 +472,34 @@ def run_concat(
     filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n))
     filter_complex = f"{filter_inputs}concat=n={n}:v=1:a=1[outv][outa]"
 
-    cmd = ["ffmpeg", "-hide_banner", "-y"]
+    resolved, enc_args = build_video_encoder_args(
+        encoder,
+        preset=preset,
+        crf=crf,
+        lossless=False,
+        fps=None,
+        log_callback=log_callback,
+    )  # fps=None: concat-Filter bestimmt fps
+
+    cmd = ffmpeg_cmd("-hide_banner", "-y")
     for src in source_files:
         cmd += ["-i", str(src)]
     cmd += [
         "-filter_complex", filter_complex,
         "-map", "[outv]",
         "-map", "[outa]",
-        "-c:v", "libx264", "-crf", str(crf), "-preset", preset,
-        "-pix_fmt", "yuv420p",
+        *enc_args,
         "-c:a", "aac", "-b:a", "192k",
         "-movflags", "+faststart",
         str(output),
     ]
 
-    rc = run_ffmpeg(cmd, cancel_flag=cancel_flag, log_callback=log_callback)
+    rc = run_ffmpeg(
+        cmd,
+        cancel_flag=cancel_flag,
+        log_callback=log_callback,
+        progress_callback=progress_callback,
+    )
     if rc == -1:
         if output.exists():
             output.unlink()

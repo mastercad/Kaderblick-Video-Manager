@@ -21,7 +21,7 @@ from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QFileDialog, QInputDialog,
+    QFileDialog, QInputDialog, QMessageBox,
 )
 
 from .workflow import FileEntry
@@ -157,6 +157,7 @@ class FileListWidget(QWidget):
         hdr.resizeSection(self._COL_EDIT_BTN,  34)
 
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.MultiSelection)
         self._table.verticalHeader().setVisible(False)
         self._table.setAlternatingRowColors(True)
         self._table.setMinimumHeight(130)
@@ -310,8 +311,26 @@ class FileListWidget(QWidget):
 
     def _merge_selected(self) -> None:
         """Fasst ausgewählte Zeilen zu einer Merge-Gruppe zusammen."""
-        rows = sorted({idx.row() for idx in self._table.selectedIndexes()})
+        rows = self._selected_rows()
         if len(rows) < 2:
+            QMessageBox.information(
+                self,
+                "Zusammenführen",
+                "Bitte mindestens zwei Dateien auswählen, die zusammengeführt werden sollen.",
+                QMessageBox.Ok,
+            )
+            return
+        result = QMessageBox.question(
+            self,
+            "Zusammenführen",
+            "Die ausgewählten Dateien werden zu einer Merge-Gruppe zusammengefasst.\n"
+            "Beim Ausführen entsteht daraus eine gemeinsame Datei, und Titel sowie Playlist\n"
+            "werden von der ersten Datei der Gruppe übernommen.\n\n"
+            "Zusammenführen fortsetzen?",
+            QMessageBox.Ok | QMessageBox.Cancel,
+            QMessageBox.Ok,
+        )
+        if result != QMessageBox.Ok:
             return
         group_id = uuid.uuid4().hex[:8]
         for r in rows:
@@ -319,15 +338,46 @@ class FileListWidget(QWidget):
             if item:
                 item.setData(self._ROLE_MERGE_ID, group_id)
         self._refresh_merge_visuals()
+        QMessageBox.information(
+            self,
+            "Zusammenführen",
+            f"OK\n\n{len(rows)} Datei(en) wurden zur Merge-Gruppe zusammengefasst.",
+            QMessageBox.Ok,
+        )
 
     def _unmerge_selected(self) -> None:
         """Entfernt ausgewählte Zeilen aus ihrer Merge-Gruppe."""
-        rows = sorted({idx.row() for idx in self._table.selectedIndexes()})
+        rows = self._selected_rows()
+        if not rows:
+            QMessageBox.information(
+                self,
+                "Auflösen",
+                "Bitte mindestens eine Datei auswählen, deren Merge-Gruppe aufgelöst werden soll.",
+                QMessageBox.Ok,
+            )
+            return
+        result = QMessageBox.question(
+            self,
+            "Auflösen",
+            "Die ausgewählten Dateien werden aus ihrer Merge-Gruppe entfernt.\n"
+            "Danach lassen sich Titel und Playlist wieder pro Datei einzeln pflegen.\n\n"
+            "Auflösen fortsetzen?",
+            QMessageBox.Ok | QMessageBox.Cancel,
+            QMessageBox.Ok,
+        )
+        if result != QMessageBox.Ok:
+            return
         for r in rows:
             item = self._table.item(r, self._COL_PATH)
             if item:
                 item.setData(self._ROLE_MERGE_ID, "")
         self._refresh_merge_visuals()
+        QMessageBox.information(
+            self,
+            "Auflösen",
+            f"OK\n\n{len(rows)} Datei(en) wurden aus der Merge-Gruppe entfernt.",
+            QMessageBox.Ok,
+        )
 
     def _propagate_merge_title(self, merge_id: str, title: str, playlist: str) -> None:
         """Überträgt Titel+Playlist der ersten Datei an alle anderen in der Gruppe."""
@@ -439,11 +489,23 @@ class FileListWidget(QWidget):
         return super().eventFilter(obj, event)
 
     def _remove_selected_rows(self) -> None:
-        rows = sorted(
-            {idx.row() for idx in self._table.selectedIndexes()},
-            reverse=True)
+        rows = sorted(self._selected_rows(), reverse=True)
+        if not rows:
+            return
+        result = QMessageBox.question(
+            self,
+            "Einträge entfernen",
+            f"{len(rows)} ausgewählte Datei(en) wirklich aus der Liste entfernen?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if result != QMessageBox.Yes:
+            return
         for row in rows:
             self._table.removeRow(row)
+
+    def _selected_rows(self) -> list[int]:
+        return sorted({idx.row() for idx in self._table.selectedIndexes()})
 
     def _set_cell(self, row: int, col: int, text: str) -> None:
         item = self._table.item(row, col)

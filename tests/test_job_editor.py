@@ -235,11 +235,13 @@ class TestWriteJob:
         dlg._yt_create_cb.setChecked(True)
         dlg._yt_title_edit.setText("Mein Titel")
         dlg._yt_playlist_edit.setText("Liga")
+        dlg._yt_competition = "Sparkassenpokal"
         dlg._write_job()
         assert dlg._job.upload_youtube is True
         assert dlg._job.create_youtube_version is True
         assert dlg._job.default_youtube_title == "Mein Titel"
         assert dlg._job.default_youtube_playlist == "Liga"
+        assert dlg._job.default_youtube_competition == "Sparkassenpokal"
 
     def test_kb_fields_written(self):
         dlg = _new_dialog()

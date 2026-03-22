@@ -17,6 +17,7 @@ import subprocess
 from functools import lru_cache
 
 from .diagnostics import encoder_test_encode, gpu_diagnostics
+from .ffmpeg_runner import get_ffmpeg_bin
 
 # Mapping libx264-Presets → NVENC-Presets (p1=schnellstes, p7=bestes)
 _X264_TO_NVENC_PRESET: dict[str, str] = {
@@ -45,7 +46,7 @@ def detect_hw_encoders() -> list[str]:
     """
     try:
         result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
+            [get_ffmpeg_bin(), "-hide_banner", "-encoders"],
             capture_output=True, text=True, timeout=10,
         )
         lines = result.stdout.splitlines()
@@ -99,7 +100,7 @@ def resolve_encoder(encoder_setting: str,
 
 
 def build_encoder_args(encoder: str, preset: str, crf: int,
-                       lossless: bool, fps: float,
+                       lossless: bool, fps: float | None = None,
                        maxrate_kbps: int | None = None,
                        no_bframes: bool = False,
                        keyframe_interval: int = 0) -> list[str]:
@@ -110,7 +111,7 @@ def build_encoder_args(encoder: str, preset: str, crf: int,
         preset: libx264-Style Preset (wird für NVENC automatisch gemappt).
         crf: Qualitätswert (CRF für x264, CQ für NVENC).
         lossless: Verlustfreie Kodierung.
-        fps: Ausgabe-Framerate (kann gebrochene Werte enthalten bei Sync).
+        fps: Ausgabe-Framerate. None = kein -r-Flag (z.B. bei concat-Filter).
         maxrate_kbps: Optionale Bitrate-Obergrenze in kbps (aus Quell-Analyse).
                       Verhindert, dass der Encoder mehr Bitrate nutzt als die
                       Quelldatei — self wenn CRF einen hohen Wert zulässt.
@@ -118,12 +119,13 @@ def build_encoder_args(encoder: str, preset: str, crf: int,
     Returns:
         Liste der ffmpeg-Argumente.
     """
-    fps_str = f"{fps:.6f}" if isinstance(fps, float) else str(fps)
+    use_fps = fps is not None and fps > 0
+    fps_str = (f"{fps:.6f}" if isinstance(fps, float) else str(fps)) if use_fps else ""
 
     # GOP-Größe: 0 = Encoder-Standard, sonst Sekunden → Frames
     gop_frames: int | None = None
-    if keyframe_interval and keyframe_interval > 0 and fps and fps > 0:
-        gop_frames = max(1, int(round(fps * keyframe_interval)))
+    if keyframe_interval and keyframe_interval > 0 and use_fps:
+        gop_frames = max(1, int(round(fps * keyframe_interval)))  # type: ignore[arg-type]
 
     if encoder == "h264_nvenc":
         nvenc_preset = _X264_TO_NVENC_PRESET.get(preset, "p5")
@@ -136,7 +138,9 @@ def build_encoder_args(encoder: str, preset: str, crf: int,
             if maxrate_kbps:
                 args += ["-maxrate:v", f"{maxrate_kbps}k",
                          "-bufsize:v", f"{maxrate_kbps * 2}k"]
-        args += ["-pix_fmt", "yuv420p", "-r", fps_str]
+        args += ["-pix_fmt", "yuv420p"]
+        if use_fps:
+            args += ["-r", fps_str]
         if no_bframes:
             args += ["-bf", "0"]
         if gop_frames is not None:
@@ -146,8 +150,9 @@ def build_encoder_args(encoder: str, preset: str, crf: int,
     # Fallback: libx264
     p = "slow" if lossless else preset
     c = 0 if lossless else crf
-    args = ["-c:v", "libx264", "-preset", p, "-crf", str(c),
-            "-pix_fmt", "yuv420p", "-r", fps_str]
+    args = ["-c:v", "libx264", "-preset", p, "-crf", str(c), "-pix_fmt", "yuv420p"]
+    if use_fps:
+        args += ["-r", fps_str]
     if not lossless and maxrate_kbps:
         args += ["-maxrate", f"{maxrate_kbps}k",
                  "-bufsize", f"{maxrate_kbps * 2}k"]
@@ -156,6 +161,28 @@ def build_encoder_args(encoder: str, preset: str, crf: int,
     if gop_frames is not None:
         args += ["-g", str(gop_frames), "-keyint_min", str(gop_frames)]
     return args
+
+
+def build_video_encoder_args(encoder_setting: str, *,
+                             preset: str, crf: int,
+                             lossless: bool,
+                             fps: float | None = None,
+                             maxrate_kbps: int | None = None,
+                             no_bframes: bool = False,
+                             keyframe_interval: int = 0,
+                             log_callback=None) -> tuple[str, list[str]]:
+    """Löst Encoder + ffmpeg-Argumente zentral und konsistent auf."""
+    encoder = resolve_encoder(encoder_setting, log_callback=log_callback)
+    return encoder, build_encoder_args(
+        encoder,
+        preset,
+        crf,
+        lossless,
+        fps,
+        maxrate_kbps=maxrate_kbps,
+        no_bframes=no_bframes,
+        keyframe_interval=keyframe_interval,
+    )
 
 
 # ═════════════════════════════════════════════════════════════════

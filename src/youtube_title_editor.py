@@ -242,10 +242,6 @@ class YouTubeTitleEditorDialog(QDialog):
         self._mode = mode
         self._kb_video_types = kb_video_types or []
         self._kb_cameras = kb_cameras or []
-        self._initial_kb_type_id = initial_kb_type_id
-        self._initial_kb_camera_id = initial_kb_camera_id
-        self._result_kb_type_id = initial_kb_type_id
-        self._result_kb_camera_id = initial_kb_camera_id
 
         mem = load_memory()
         last_m = mem.get("last_match", {})
@@ -270,9 +266,14 @@ class YouTubeTitleEditorDialog(QDialog):
         )
         # KB-IDs aus Memory vorbelegen (werden in _populate per ID im Combo gesucht)
         if initial_kb_type_id == 0:
-            initial_kb_type_id   = last_s.get("video_type_id", 0)
+            initial_kb_type_id = last_s.get("video_type_id", 0)
         if initial_kb_camera_id == 0:
             initial_kb_camera_id = last_s.get("camera_id", 0)
+
+        self._initial_kb_type_id = initial_kb_type_id
+        self._initial_kb_camera_id = initial_kb_camera_id
+        self._result_kb_type_id = initial_kb_type_id
+        self._result_kb_camera_id = initial_kb_camera_id
         self._histories = {
             "competition": mem.get("history_competition", []),
             "home_team":   mem.get("history_home_team",   []),

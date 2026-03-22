@@ -11,6 +11,7 @@ Geprüft:
 
 import threading
 import tempfile
+from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -66,6 +67,24 @@ class TestFindFileEntry:
         job = WorkflowJob(files=[fe1, fe2])
         result = WorkflowExecutor._find_file_entry(job, "/x.mp4")
         assert result.youtube_title == "Erster"
+
+    def test_unique_filename_match_after_copy(self):
+        """Nach Kopieren/Verschieben bleibt die Zuordnung über den Dateinamen erhalten."""
+        job = WorkflowJob()
+        job.files = [FileEntry(source_path="/quelle/halbzeit1.mp4", merge_group_id="hz1")]
+        result = WorkflowExecutor._find_file_entry(job, "/ziel/halbzeit1.mp4")
+        assert result is not None
+        assert result.merge_group_id == "hz1"
+
+    def test_ambiguous_filename_match_returns_none(self):
+        """Gleicher Dateiname mehrfach: kein unsicheres Fallback verwenden."""
+        job = WorkflowJob()
+        job.files = [
+            FileEntry(source_path="/quelle_a/halbzeit.mp4", youtube_title="A"),
+            FileEntry(source_path="/quelle_b/halbzeit.mp4", youtube_title="B"),
+        ]
+        result = WorkflowExecutor._find_file_entry(job, "/ziel/halbzeit.mp4")
+        assert result is None
 
 
 # ─── _resolve_youtube_title ───────────────────────────────────────────────────
@@ -252,6 +271,15 @@ class TestMergeGroupDetection:
         skip = self._compute_skip_set(entries, job)
         assert skip == {1, 2}
 
+    def test_group_detected_after_copy_by_filename(self):
+        """Merge-Gruppe bleibt auch nach Transfer in einen Zielordner erkennbar."""
+        job = self._job_with_entries([
+            FileEntry(source_path="/quelle/teil1.mp4", merge_group_id="g1"),
+            FileEntry(source_path="/quelle/teil2.mp4", merge_group_id="g1"),
+        ])
+        assert WorkflowExecutor._get_merge_group_id(job, "/ziel/teil1.mp4") == "g1"
+        assert WorkflowExecutor._get_merge_group_id(job, "/ziel/teil2.mp4") == "g1"
+
 
 # ─── Transfer-Fehler-Zähler ───────────────────────────────────────────────────
 
@@ -277,6 +305,408 @@ class TestTransferFailCounter:
         ex.finished.connect(lambda ok, sk, fa: finished_args.append((ok, sk, fa)))
         ex.run()
         assert finished_args == [(0, 0, 0)]
+
+
+class TestTransferResumeFallbacks:
+    def test_direct_files_reuse_existing_target_when_source_missing(self, tmp_path):
+        dst_dir = tmp_path / "ziel"
+        dst_dir.mkdir()
+        existing = dst_dir / "halbzeit1.mp4"
+        existing.write_text("data", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Direkt",
+            source_mode="files",
+            copy_destination=str(dst_dir),
+            files=[FileEntry(source_path=str(tmp_path / "quelle" / "halbzeit1.mp4"))],
+        )
+        ex = WorkflowExecutor(Workflow(), _make_settings())
+
+        paths = ex._handle_direct_files(job)
+
+        assert paths == [str(existing)]
+
+    def test_scan_folder_reuses_existing_target_when_source_folder_missing(self, tmp_path):
+        dst_dir = tmp_path / "ziel"
+        dst_dir.mkdir()
+        reused = dst_dir / "clip1.mp4"
+        reused.write_text("data", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Ordner",
+            source_mode="folder_scan",
+            source_folder=str(tmp_path / "quelle-fehlt"),
+            copy_destination=str(dst_dir),
+            file_pattern="*.mp4",
+        )
+        ex = WorkflowExecutor(Workflow(), _make_settings())
+
+        paths = ex._scan_folder(job)
+
+        assert paths == [str(reused)]
+        assert job.step_statuses["transfer"] == "reused-target"
+
+    def test_direct_files_transfer_emits_status_and_progress(self, tmp_path):
+        src_a = tmp_path / "a.mp4"
+        src_b = tmp_path / "b.mp4"
+        src_a.write_bytes(b"a" * 128)
+        src_b.write_bytes(b"b" * 256)
+        dst_dir = tmp_path / "ziel"
+
+        job = WorkflowJob(
+            name="Direkt",
+            source_mode="files",
+            copy_destination=str(dst_dir),
+            files=[
+                FileEntry(source_path=str(src_a)),
+                FileEntry(source_path=str(src_b)),
+            ],
+        )
+        ex = WorkflowExecutor(Workflow(), _make_settings())
+        statuses = []
+        progress = []
+        ex.job_status.connect(lambda idx, status: statuses.append((idx, status)))
+        ex.job_progress.connect(lambda idx, pct: progress.append((idx, pct)))
+
+        paths = ex._handle_direct_files(job)
+
+        assert [Path(path).name for path in paths] == ["a.mp4", "b.mp4"]
+        assert statuses[0] == (0, "Transfer 1/2: a.mp4 …")
+        assert statuses[-1] == (0, "Transfer 2/2: b.mp4 …")
+        assert progress[0] == (0, 0)
+        assert progress[-1] == (0, 100)
+
+    def test_folder_scan_transfer_emits_status_and_progress_without_copy(self, tmp_path):
+        src_dir = tmp_path / "quelle"
+        src_dir.mkdir()
+        (src_dir / "clip1.mp4").write_text("1", encoding="utf-8")
+        (src_dir / "clip2.mp4").write_text("2", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Ordner",
+            source_mode="folder_scan",
+            source_folder=str(src_dir),
+            copy_destination="",
+            file_pattern="*.mp4",
+        )
+        ex = WorkflowExecutor(Workflow(), _make_settings())
+        statuses = []
+        progress = []
+        ex.job_status.connect(lambda idx, status: statuses.append((idx, status)))
+        ex.job_progress.connect(lambda idx, pct: progress.append((idx, pct)))
+
+        paths = ex._scan_folder(job)
+
+        assert [Path(path).name for path in paths] == ["clip1.mp4", "clip2.mp4"]
+        assert statuses == [
+            (0, "Transfer 1/2: clip1.mp4 …"),
+            (0, "Transfer 2/2: clip2.mp4 …"),
+        ]
+        assert progress[0] == (0, 0)
+        assert progress[-1] == (0, 100)
+
+    @patch("src.workflow_executor.run_convert")
+    @patch("src.workflow_executor.download_device", side_effect=RuntimeError("offline"))
+    def test_download_resume_fallback_continues_workflow_without_failure(
+        self,
+        _mock_download,
+        mock_convert,
+        tmp_path,
+    ):
+        download_root = tmp_path / "downloads"
+        device_dir = download_root / "Cam1"
+        device_dir.mkdir(parents=True)
+        reused = device_dir / "take1.mjpg"
+        reused.write_text("data", encoding="utf-8")
+
+        settings = _make_settings()
+        settings.cameras.destination = str(download_root)
+        settings.cameras.devices = [SimpleNamespace(name="Cam1", ip="1.2.3.4")]
+
+        def patched_convert(cv, _settings, **_kw):
+            out = cv.source_path.with_suffix(".mp4")
+            out.touch()
+            cv.output_path = out
+            cv.status = "Fertig"
+            return True
+
+        mock_convert.side_effect = patched_convert
+
+        job = WorkflowJob(
+            name="Pi",
+            source_mode="pi_download",
+            device_name="Cam1",
+            download_destination=str(download_root),
+            convert_enabled=True,
+            files=[FileEntry(source_path="take1.mp4")],
+        )
+        finished_args = []
+        ex = WorkflowExecutor(Workflow(jobs=[job]), settings)
+        ex.finished.connect(lambda ok, sk, fa: finished_args.append((ok, sk, fa)))
+
+        ex.run()
+
+        assert finished_args == [(1, 0, 0)]
+        assert mock_convert.called
+
+
+class TestWorkflowStackScenarios:
+    def test_convert_disabled_skips_conversion(self, tmp_path):
+        source = tmp_path / "clip.mp4"
+        source.write_text("data", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Kein Convert",
+            source_mode="files",
+            convert_enabled=False,
+            files=[FileEntry(source_path=str(source))],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+        with patch("src.workflow_executor.run_convert") as mock_convert:
+            ex.run()
+
+        mock_convert.assert_not_called()
+
+    @patch("src.workflow_executor.run_convert")
+    def test_convert_enabled_runs_conversion(self, mock_convert, tmp_path):
+        source = tmp_path / "clip.mjpeg"
+        source.write_text("data", encoding="utf-8")
+
+        def patched_convert(cv, _settings, **_kw):
+            out = cv.source_path.with_suffix(".mp4")
+            out.touch()
+            cv.output_path = out
+            cv.status = "Fertig"
+            return True
+
+        mock_convert.side_effect = patched_convert
+
+        job = WorkflowJob(
+            name="Mit Convert",
+            source_mode="files",
+            convert_enabled=True,
+            files=[FileEntry(source_path=str(source))],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+        ex.run()
+
+        assert mock_convert.called
+
+    def test_move_files_moves_source_into_destination(self, tmp_path):
+        src = tmp_path / "quelle.mp4"
+        src.write_text("data", encoding="utf-8")
+        dst_dir = tmp_path / "ziel"
+
+        job = WorkflowJob(
+            name="Move",
+            source_mode="files",
+            convert_enabled=False,
+            copy_destination=str(dst_dir),
+            move_files=True,
+            files=[FileEntry(source_path=str(src))],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+        ex.run()
+
+        assert not src.exists()
+        assert (dst_dir / src.name).exists()
+
+    def test_copy_mode_keeps_source_file(self, tmp_path):
+        src = tmp_path / "quelle.mp4"
+        src.write_text("data", encoding="utf-8")
+        dst_dir = tmp_path / "ziel"
+
+        job = WorkflowJob(
+            name="Copy",
+            source_mode="files",
+            convert_enabled=False,
+            copy_destination=str(dst_dir),
+            move_files=False,
+            files=[FileEntry(source_path=str(src))],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+        ex.run()
+
+        assert src.exists()
+        assert (dst_dir / src.name).exists()
+
+    @patch("src.workflow_executor.get_youtube_service")
+    def test_kaderblick_is_not_attempted_without_youtube_upload(self, mock_get_youtube, tmp_path):
+        source = tmp_path / "clip.mp4"
+        source.write_text("data", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Nur KB Flag",
+            source_mode="files",
+            convert_enabled=False,
+            upload_youtube=False,
+            upload_kaderblick=True,
+            files=[FileEntry(source_path=str(source))],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+        with patch("src.workflow_steps.kaderblick_post_step.kaderblick_post") as mock_kaderblick:
+            ex.run()
+
+        mock_get_youtube.assert_not_called()
+        mock_kaderblick.assert_not_called()
+
+    @patch("src.workflow_steps.kaderblick_post_step.get_video_id_for_output", return_value="video-123")
+    @patch("src.workflow_steps.kaderblick_post_step.kaderblick_post", return_value=True)
+    def test_kaderblick_runs_only_with_youtube_upload(
+        self,
+        mock_kaderblick,
+        _mock_video_id,
+        tmp_path,
+    ):
+        source = tmp_path / "clip.mp4"
+        source.write_text("data", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="YT und KB",
+            source_mode="files",
+            convert_enabled=False,
+            upload_youtube=True,
+            upload_kaderblick=True,
+            default_kaderblick_game_id="game-1",
+            default_kaderblick_video_type_id=3,
+            default_kaderblick_camera_id=7,
+            files=[FileEntry(source_path=str(source))],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+        with patch("src.workflow_executor.get_youtube_service", return_value=MagicMock()):
+            with patch(
+                "src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube",
+                return_value=True,
+            ):
+                ex.run()
+
+        mock_kaderblick.assert_called_once()
+
+    @patch("src.workflow_executor.run_convert")
+    def test_single_file_youtube_version_is_optional(self, mock_convert, tmp_path):
+        source = tmp_path / "clip.mjpeg"
+        source.write_text("data", encoding="utf-8")
+
+        def patched_convert(cv, _settings, **_kw):
+            out = cv.source_path.with_suffix(".mp4")
+            out.touch()
+            cv.output_path = out
+            cv.status = "Fertig"
+            return True
+
+        mock_convert.side_effect = patched_convert
+
+        with patch("src.workflow_executor.run_youtube_convert", return_value=True) as mock_yt_convert:
+            job = WorkflowJob(
+                name="YT-Version",
+                source_mode="files",
+                convert_enabled=True,
+                create_youtube_version=True,
+                upload_youtube=False,
+                files=[FileEntry(source_path=str(source))],
+            )
+            ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+            ex.run()
+
+        mock_yt_convert.assert_called_once()
+
+        with patch("src.workflow_executor.run_youtube_convert", return_value=True) as mock_yt_convert_disabled:
+            job = WorkflowJob(
+                name="Ohne YT-Version",
+                source_mode="files",
+                convert_enabled=True,
+                create_youtube_version=False,
+                upload_youtube=False,
+                files=[FileEntry(source_path=str(source))],
+            )
+            ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+            ex.run()
+
+        mock_yt_convert_disabled.assert_not_called()
+
+    def test_download_reuses_existing_target_when_device_unavailable(self, tmp_path):
+        download_root = tmp_path / "downloads"
+        device_dir = download_root / "Cam1"
+        device_dir.mkdir(parents=True)
+        reused = device_dir / "take1.mjpg"
+        reused.write_text("data", encoding="utf-8")
+
+        settings = _make_settings()
+        settings.cameras.destination = str(download_root)
+        settings.cameras.devices = [SimpleNamespace(name="Cam1", ip="1.2.3.4")]
+
+        job = WorkflowJob(
+            name="Pi",
+            source_mode="pi_download",
+            device_name="Cam1",
+            download_destination=str(download_root),
+            files=[FileEntry(source_path="take1.mp4")],
+        )
+        ex = WorkflowExecutor(Workflow(), settings)
+
+        with patch("src.workflow_executor.download_device", side_effect=RuntimeError("offline")):
+            paths = ex._download_from_pi(0, job)
+
+        assert paths == [str(reused)]
+        assert job.step_statuses["transfer"] == "reused-target"
+
+    @patch("src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube", return_value=True)
+    def test_resume_reuses_existing_converted_output_and_continues_pipeline(self, mock_upload, tmp_path):
+        source = tmp_path / "clip.mp4"
+        converted = tmp_path / "clip_converted.mp4"
+        converted.write_text("converted", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Resume Convert",
+            source_mode="files",
+            convert_enabled=True,
+            create_youtube_version=True,
+            upload_youtube=True,
+            files=[FileEntry(source_path=str(source))],
+            resume_status="Konvertiere …",
+            step_statuses={"transfer": "done", "convert": "running"},
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+        ex._youtube_convert_func = MagicMock(return_value=True)
+
+        with patch("src.workflow_executor.get_youtube_service", return_value=MagicMock()):
+            ex.run()
+
+        ex._youtube_convert_func.assert_called_once()
+        reused_cv_job = ex._youtube_convert_func.call_args[0][0]
+        assert reused_cv_job.output_path == converted
+        mock_upload.assert_called_once()
+        assert job.step_statuses["convert"] == "reused-target"
+
+    @patch("src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube", return_value=True)
+    def test_resume_uses_existing_youtube_artifact_when_source_is_gone(self, mock_upload, tmp_path):
+        source = tmp_path / "clip.mp4"
+        yt_version = tmp_path / "clip_youtube.mp4"
+        yt_version.write_text("yt", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Resume Upload",
+            source_mode="files",
+            convert_enabled=False,
+            create_youtube_version=True,
+            upload_youtube=True,
+            files=[FileEntry(source_path=str(source))],
+            resume_status="YT-Version erstellen …",
+            step_statuses={"transfer": "done", "yt_version": "running"},
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+        with patch("src.workflow_executor.get_youtube_service", return_value=MagicMock()):
+            ex.run()
+
+        mock_upload.assert_called_once()
+        assert job.step_statuses["yt_version"] == "reused-target"
 
 
 # ─── Merge-Concat: Standard-Dateien verwenden ────────────────────────────────
@@ -521,7 +951,7 @@ class TestMergeUploadAfterConcat:
         assert 0 not in skip, "Solo-Datei darf nicht in der Skip-Menge sein"
         assert skip == {1, 2}
 
-    @patch("src.workflow_executor.upload_to_youtube")
+    @patch("src.workflow_steps.youtube_upload_step.upload_to_youtube")
     @patch("src.workflow_executor.run_concat")
     @patch("src.workflow_executor.run_convert")
     def test_upload_called_once_after_concat(self, mock_convert, mock_concat,
@@ -581,8 +1011,10 @@ class TestMergeUploadAfterConcat:
             ex = WorkflowExecutor(wf, _make_settings())
 
             fake_yt_service = MagicMock()
-            with patch.object(ex, "_upload_to_youtube",
-                               side_effect=lambda *a, **kw: call_order.append("upload") or True):
+            with patch(
+                "src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube",
+                side_effect=lambda *a, **kw: call_order.append("upload") or True,
+            ):
                 with patch("src.workflow_executor.get_youtube_service",
                            return_value=fake_yt_service):
                     ex.run()
@@ -596,7 +1028,7 @@ class TestMergeUploadAfterConcat:
             f"Upload ({upload_pos}) sollte nach Concat ({concat_pos}) kommen, "
             f"aber war davor. Reihenfolge: {call_order}")
 
-    @patch("src.workflow_executor.upload_to_youtube")
+    @patch("src.workflow_steps.youtube_upload_step.upload_to_youtube")
     @patch("src.workflow_executor.run_concat")
     @patch("src.workflow_executor.run_convert")
     def test_no_upload_without_yt_service(self, mock_convert, mock_concat, mock_upload):
@@ -641,6 +1073,109 @@ class TestMergeUploadAfterConcat:
                 ex.run()
 
         mock_upload.assert_not_called()
+
+    @patch("src.workflow_executor.run_youtube_convert")
+    @patch("src.workflow_executor.run_concat")
+    def test_upload_only_merge_runs_concat_before_yt_version_and_upload(
+            self, mock_concat, mock_yt_convert):
+        """Bei convert_enabled=False dürfen Merge-Gruppen erst nach dem Concat hochladen."""
+        call_order: list[str] = []
+
+        def fake_concat(sources, dest, **kw):
+            call_order.append("concat")
+            dest.touch()
+            return True
+
+        def fake_yt_convert(cv_job, settings, **kw):
+            call_order.append("yt-version")
+            yt_path = cv_job.output_path.with_stem(cv_job.output_path.stem + "_youtube")
+            yt_path.touch()
+            return True
+
+        mock_concat.side_effect = fake_concat
+        mock_yt_convert.side_effect = fake_yt_convert
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            src1 = p / "part1.mp4"; src1.touch()
+            src2 = p / "part2.mp4"; src2.touch()
+
+            entries = [
+                FileEntry(source_path=str(src1), merge_group_id="g1", youtube_title="Finaltitel"),
+                FileEntry(source_path=str(src2), merge_group_id="g1", youtube_title="Finaltitel"),
+            ]
+            job = WorkflowJob(
+                source_mode="files",
+                convert_enabled=False,
+                upload_youtube=True,
+                upload_kaderblick=False,
+                title_card_enabled=False,
+                create_youtube_version=True,
+            )
+            job.files = entries
+
+            wf = Workflow(jobs=[job])
+            ex = WorkflowExecutor(wf, _make_settings())
+
+            with patch(
+                "src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube",
+                side_effect=lambda *a, **kw: call_order.append("upload") or True,
+            ):
+                with patch("src.workflow_executor.get_youtube_service", return_value=MagicMock()):
+                    ex.run()
+
+        assert call_order == ["concat", "yt-version", "upload"], (
+            "Merge-Upload ohne Konvertierung muss erst concat, dann YT-Version, dann Upload ausführen. "
+            f"Tatsächliche Reihenfolge: {call_order}"
+        )
+
+    @patch("src.workflow_executor.run_concat")
+    @patch("src.workflow_executor.run_convert")
+    def test_merge_emits_progress_updates(self, mock_convert, mock_concat):
+        progress_values: list[int] = []
+
+        def patched_convert(cv, _settings, **_kw):
+            out = cv.source_path.with_suffix(".mp4")
+            out.touch()
+            cv.output_path = out
+            cv.status = "Fertig"
+            return True
+
+        def fake_concat(_sources, dest, **kwargs):
+            progress_callback = kwargs.get("progress_callback")
+            if progress_callback:
+                progress_callback(10)
+                progress_callback(55)
+                progress_callback(100)
+            dest.touch()
+            return True
+
+        mock_convert.side_effect = patched_convert
+        mock_concat.side_effect = fake_concat
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            src1 = p / "a.mjpeg"; src1.touch()
+            src2 = p / "b.mjpeg"; src2.touch()
+
+            job = WorkflowJob(
+                source_mode="files",
+                convert_enabled=True,
+                upload_youtube=False,
+                upload_kaderblick=False,
+                files=[
+                    FileEntry(source_path=str(src1), merge_group_id="g1"),
+                    FileEntry(source_path=str(src2), merge_group_id="g1"),
+                ],
+            )
+            ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+            ex.job_progress.connect(lambda idx, pct: progress_values.append(pct) if idx == 0 else None)
+
+            ex.run()
+
+        assert 10 in progress_values
+        assert 55 in progress_values
+        assert 100 in progress_values
 
 
 # ─── Titelkarte bei Merge-Gruppen: nur einmal, nach dem Concat ────────────────
@@ -725,7 +1260,7 @@ class TestTitleCardMergeGroup:
     @patch("src.workflow_executor.run_convert")
     def test_prepend_title_card_called_once_after_concat(
             self, mock_convert, mock_concat):
-        """_prepend_title_card wird genau einmal aufgerufen — nach dem Concat."""
+        """TitleCardStep wird genau einmal aufgerufen — nach dem Concat."""
         with tempfile.TemporaryDirectory() as tmp:
             p = Path(tmp)
             src1 = p / "a.mjpeg"; src1.touch()
@@ -764,18 +1299,144 @@ class TestTitleCardMergeGroup:
             ex = WorkflowExecutor(wf, _make_settings())
             call_count = {"n": 0}
 
-            def fake_prepend(cv_job, j, s):
+            def fake_prepend(_executor, _orig_idx, cv_job, j, s):
                 call_count["n"] += 1
                 # return a fake path so the executor can continue
                 fake_out = p / f"with_intro_{call_count['n']}.mp4"
                 fake_out.touch()
-                return fake_out
+                return fake_out, True
 
-            with patch.object(ex, "_prepend_title_card", side_effect=fake_prepend):
+            with patch(
+                "src.workflow_steps.title_card_step.TitleCardStep._prepend_title_card",
+                side_effect=fake_prepend,
+            ):
                 ex.run()
 
         assert call_count["n"] == 1, (
-            f"_prepend_title_card sollte genau 1x aufgerufen werden, "
+            f"TitleCardStep._prepend_title_card sollte genau 1x aufgerufen werden, "
             f"wurde aber {call_count['n']}x aufgerufen")
+
+
+class TestOriginalPreservationWithoutConvert:
+    @patch("src.workflow_executor.run_concat")
+    def test_merge_without_convert_keeps_original_files(self, mock_concat):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            src1 = p / "halbzeit1.mp4"
+            src2 = p / "halbzeit2.mp4"
+            src1.write_text("a", encoding="utf-8")
+            src2.write_text("b", encoding="utf-8")
+
+            def fake_concat(sources, dest, **_kw):
+                dest.write_text("merged", encoding="utf-8")
+                return True
+
+            mock_concat.side_effect = fake_concat
+
+            job = WorkflowJob(
+                source_mode="files",
+                convert_enabled=False,
+                upload_youtube=False,
+                upload_kaderblick=False,
+                title_card_enabled=False,
+                create_youtube_version=False,
+                files=[
+                    FileEntry(source_path=str(src1), merge_group_id="g1"),
+                    FileEntry(source_path=str(src2), merge_group_id="g1"),
+                ],
+            )
+
+            ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+            ex.run()
+
+            assert src1.exists()
+            assert src2.exists()
+            assert (p / "halbzeit1_merged.mp4").exists()
+
+    @patch("src.workflow_steps.youtube_upload_step.upload_to_youtube", return_value=True)
+    @patch("src.workflow_executor.get_youtube_service", return_value=object())
+    @patch("src.workflow_executor.run_concat")
+    def test_title_card_without_convert_creates_new_file_and_keeps_original(
+        self,
+        mock_concat,
+        _mock_get_youtube_service,
+        _mock_upload,
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            src = p / "original.mp4"
+            src.write_text("video", encoding="utf-8")
+
+            def fake_concat(sources, dest, **_kw):
+                dest.write_text("with-titlecard", encoding="utf-8")
+                return True
+
+            mock_concat.side_effect = fake_concat
+
+            job = WorkflowJob(
+                source_mode="files",
+                convert_enabled=False,
+                upload_youtube=True,
+                upload_kaderblick=False,
+                title_card_enabled=True,
+                create_youtube_version=False,
+                files=[FileEntry(source_path=str(src))],
+            )
+
+            ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+            with patch(
+                "src.workflow_steps.title_card_step.generate_title_card",
+                return_value=True,
+            ):
+                ex.run()
+
+            assert src.exists()
+            assert src.read_text(encoding="utf-8") == "video"
+            assert (p / "original_titlecard.mp4").exists()
+
+    @patch("src.workflow_steps.kaderblick_post_step.get_video_id_for_output", return_value="video-123")
+    @patch("src.workflow_steps.kaderblick_post_step.kaderblick_post", return_value=True)
+    @patch("src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube", return_value=True)
+    def test_resume_uses_existing_merged_output_when_sources_are_gone(
+        self,
+        mock_upload,
+        mock_kaderblick,
+        _mock_video_id,
+    ):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            src1 = p / "halbzeit1.mp4"
+            src2 = p / "halbzeit2.mp4"
+            merged = p / "halbzeit1_merged.mp4"
+            merged.write_text("merged", encoding="utf-8")
+
+            job = WorkflowJob(
+                source_mode="files",
+                convert_enabled=False,
+                create_youtube_version=True,
+                upload_youtube=True,
+                upload_kaderblick=True,
+                default_kaderblick_game_id="game-1",
+                files=[
+                    FileEntry(source_path=str(src1), merge_group_id="g1"),
+                    FileEntry(source_path=str(src2), merge_group_id="g1"),
+                ],
+                resume_status="Zusammenführen …",
+                step_statuses={"transfer": "done", "merge": "running"},
+            )
+
+            ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+            ex._youtube_convert_func = MagicMock(return_value=True)
+
+            with patch("src.workflow_executor.get_youtube_service", return_value=MagicMock()):
+                ex.run()
+
+            ex._youtube_convert_func.assert_called_once()
+            yt_job = ex._youtube_convert_func.call_args[0][0]
+            assert yt_job.output_path == merged
+            mock_upload.assert_called_once()
+            mock_kaderblick.assert_called_once()
+            assert job.step_statuses["merge"] == "reused-target"
 
 

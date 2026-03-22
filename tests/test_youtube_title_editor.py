@@ -1,4 +1,4 @@
-"""Tests für youtube_title_editor.py (Generator-Funktionen).
+"""Tests für youtube_title_editor.py (Generator-Funktionen und Dialog-Verhalten).
 
 Geprüft:
 - _teams_str            (neu hinzugefügte Hilfsfunktion)
@@ -7,16 +7,22 @@ Geprüft:
 - build_video_description
 """
 
+import sys
 import pytest
+
+from PySide6.QtWidgets import QApplication
 
 from src.youtube_title_editor import (
     MatchData,
     SegmentData,
+    YouTubeTitleEditorDialog,
     _teams_str,
     build_playlist_title,
     build_video_title,
     build_video_description,
 )
+
+_app = QApplication.instance() or QApplication(sys.argv)
 
 MAX_LEN = 100
 
@@ -203,3 +209,42 @@ class TestBuildVideoDescription:
         # Keine Exception bei leeren Pflichtfeldern erwartet
         desc = build_video_description(MatchData(), SegmentData())
         assert isinstance(desc, str)
+
+
+class TestYouTubeTitleEditorDialog:
+    def test_memory_kaderblick_ids_are_preselected_and_preserved(self, monkeypatch):
+        monkeypatch.setattr(
+            "src.youtube_title_editor.load_memory",
+            lambda: {
+                "last_match": {
+                    "date_iso": "2026-03-21",
+                    "competition": "Liga",
+                    "home_team": "Heim",
+                    "away_team": "Gast",
+                },
+                "last_segment": {
+                    "camera": "Kaderblick Links",
+                    "camera_id": 6,
+                    "video_type_id": 2,
+                    "side": "Links",
+                    "half": 1,
+                    "part": 0,
+                    "type_name": "1. Halbzeit",
+                },
+            },
+        )
+        monkeypatch.setattr("src.youtube_title_editor.save_memory", lambda data: None)
+
+        dlg = YouTubeTitleEditorDialog(
+            mode="full",
+            kb_video_types=[{"id": 2, "name": "1. Halbzeit"}, {"id": 3, "name": "2. Halbzeit"}],
+            kb_cameras=[{"id": 6, "name": "Kaderblick Links"}, {"id": 7, "name": "Kaderblick Rechts"}],
+        )
+
+        assert dlg._video_type_combo.currentData() == 2
+        assert dlg._camera_combo.currentData() == 6
+
+        dlg._accept()
+
+        assert dlg.kb_video_type_id == 2
+        assert dlg.kb_camera_id == 6

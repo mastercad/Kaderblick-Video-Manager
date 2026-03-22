@@ -111,12 +111,14 @@ class TestWorkflowJob:
             files=[fe],
             upload_youtube=True,
             default_youtube_playlist="Meine Playlist",
+            default_youtube_competition="Sparkassenpokal",
         )
         d = job.to_dict()
         restored = WorkflowJob.from_dict(d)
         assert restored.name == "Mit Dateien"
         assert restored.upload_youtube is True
         assert restored.default_youtube_playlist == "Meine Playlist"
+        assert restored.default_youtube_competition == "Sparkassenpokal"
         assert len(restored.files) == 1
         assert restored.files[0].source_path == "/a/b.mp4"
         assert restored.files[0].merge_group_id == "grp1"
@@ -148,6 +150,18 @@ class TestWorkflowJob:
         restored = WorkflowJob.from_dict(d)
         # Laufzeitfeld soll nicht zurückgeschrieben werden
         assert restored.status == "Wartend"  # Standardwert
+
+    def test_resume_fields_are_persisted(self):
+        job = WorkflowJob(
+            resume_status="Transfer OK",
+            step_statuses={"transfer": "done", "convert": "running"},
+        )
+        restored = WorkflowJob.from_dict(job.to_dict())
+        assert restored.resume_status == "Transfer OK"
+        assert restored.step_statuses == {
+            "transfer": "done",
+            "convert": "running",
+        }
 
 
 # ─── Workflow ─────────────────────────────────────────────────────────────────

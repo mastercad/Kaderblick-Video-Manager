@@ -1,4 +1,4 @@
-"""Tabellen-Delegate für grafischen Fortschritt in der Status-Spalte."""
+"""Tabellen-Delegate für grafischen Fortschritt in Tabellenzellen."""
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
@@ -14,10 +14,14 @@ class ProgressDelegate(QStyledItemDelegate):
     _BAR_COLOR = QColor(41, 128, 185, 190)       # kräftiges Blau (gut sichtbar)
     _BAR_DONE_COLOR = QColor(39, 174, 96, 190)  # kräftiges Grün
 
+    def __init__(self, parent=None, *, progress_role=int(Qt.ItemDataRole.UserRole)):
+        super().__init__(parent)
+        self._progress_role = progress_role
+
     def paint(self, painter, option, index):
         self.initStyleOption(option, index)
         text = index.data(Qt.DisplayRole) or ""
-        pct = index.data(Qt.UserRole)
+        pct = index.data(self._progress_role)
 
         if pct is not None and isinstance(pct, int) and pct > 0:
             # Standardhintergrund (Auswahl, Alternating Rows etc.)

@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Optional
 
 from .settings import AppSettings
+from .encoder import resolve_encoder, build_encoder_args, build_video_encoder_args
 from .ffmpeg_runner import (
     run_ffmpeg, get_duration, get_resolution,
-    get_video_stream_info, get_audio_stream_info,
+    get_video_stream_info, get_audio_stream_info, ffmpeg_cmd,
 )
 
 
@@ -87,11 +88,12 @@ def generate_title_card(
     logo_path: str = "",
     bg_color: str = "#000000",
     fg_color: str = "#FFFFFF",
-    encoder: str = "libx264",
+    encoder: str = "auto",
     pix_fmt: str = "yuv420p",
     audio_sample_rate: int = 48000,
     cancel_flag: Optional[threading.Event] = None,
     log_callback=None,
+    progress_callback=None,
     work_dir: Optional[Path] = None,
 ) -> bool:
     """Erzeugt eine Titelkarte mit Logo, Titel (Mannschaften) und Untertitel.
@@ -189,8 +191,16 @@ def generate_title_card(
 
     vf = "; ".join(vf_parts) if vf_parts else "null"
 
-    cmd = [
-        "ffmpeg", "-hide_banner", "-y",
+    encoder, enc_args = build_video_encoder_args(
+        encoder,
+        preset="veryfast",
+        crf=18,
+        lossless=False,
+        fps=float(fps),
+        log_callback=log_callback,
+    )
+    cmd = ffmpeg_cmd(
+        "-hide_banner", "-y",
         "-f", "lavfi",
         "-i", (
             f"color=c={bg_color.lstrip('#')}:size={width}x{height}"
@@ -201,14 +211,15 @@ def generate_title_card(
               f":sample_rate={audio_sample_rate}",
         "-t", str(duration),
         "-vf", vf,
-        "-c:v", encoder, "-crf", "18", "-preset", "veryfast",
-        "-pix_fmt", pix_fmt,
+        *enc_args,
         "-c:a", "aac", "-b:a", "128k",
         "-shortest",
         str(output_path),
-    ]
+    )
     rc = run_ffmpeg(cmd, duration=float(duration),
-                    cancel_flag=cancel_flag, log_callback=log_callback)
+                    cancel_flag=cancel_flag,
+                    log_callback=log_callback,
+                    progress_callback=progress_callback)
     return rc == 0
 
 
@@ -248,6 +259,9 @@ def merge_halves(jobs: list, settings: AppSettings,
     def log(msg: str):
         if log_callback:
             log_callback(msg)
+
+    encoder = resolve_encoder(vs.encoder, log_callback=log_callback)
+    log(f"Merge-Encoder: {encoder}")
 
     # Nur erfolgreich konvertierte MP4-Jobs
     finished = [j for j in jobs if j.status == "Fertig"
@@ -374,10 +388,11 @@ def merge_halves(jobs: list, settings: AppSettings,
             title_path = tmpdir / f"title_{i:02d}.mp4"
 
             log(f"  Erstelle Titelkarte: \"{label}\"")
-            ok = _generate_title_card(
-                title_path, label,
-                duration=vs.merge_title_duration,
+            ok = generate_title_card(
+                title_path, subtitle=label,
+                duration=float(vs.merge_title_duration),
                 width=w, height=h, fps=fps,
+                encoder=encoder,
                 bg_color=vs.merge_title_bg,
                 fg_color=vs.merge_title_fg,
                 audio_sample_rate=src_sample_rate,
@@ -415,16 +430,14 @@ def merge_halves(jobs: list, settings: AppSettings,
         filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n_parts))
         filter_complex = f"{filter_inputs}concat=n={n_parts}:v=1:a=1[outv][outa]"
 
-        cmd = ["ffmpeg", "-hide_banner", "-y"]
+        cmd = ffmpeg_cmd("-hide_banner", "-y")
         for part in concat_parts:
             cmd += ["-i", str(part)]
         cmd += [
             "-filter_complex", filter_complex,
             "-map", "[outv]",
             "-map", "[outa]",
-            "-c:v", "libx264", "-crf", "18", "-preset", "fast",
-            "-pix_fmt", "yuv420p",
-            "-r", str(fps),
+            *build_encoder_args(encoder, vs.preset, vs.crf, False, float(fps)),
             "-c:a", "aac", "-b:a", "192k",
             "-movflags", "+faststart",
             str(merge_path),
