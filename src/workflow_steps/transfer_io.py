@@ -3,13 +3,21 @@ from __future__ import annotations
 import os
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 
 _CHUNK_SIZE = 8 * 1024 * 1024
 
 
-def transfer_files(executor: Any, orig_idx: int, job: Any, paths: list[Path], dst_dir: Path) -> list[str]:
+def transfer_files(
+    executor: Any,
+    orig_idx: int,
+    job: Any,
+    paths: list[Path],
+    dst_dir: Path,
+    *,
+    on_file_ready: Callable[[str], None] | None = None,
+) -> list[str]:
     total_files = len(paths)
     total_bytes = sum(_path_size(path) for path in paths)
     transferred = 0
@@ -28,6 +36,8 @@ def transfer_files(executor: Any, orig_idx: int, job: Any, paths: list[Path], ds
             transferred += _path_size(source_path)
             _emit_progress(executor, orig_idx, transferred, total_bytes, file_idx, total_files)
             result.append(str(source_path))
+            if on_file_ready is not None:
+                on_file_ready(str(source_path))
             continue
 
         if destination.exists():
@@ -35,6 +45,8 @@ def transfer_files(executor: Any, orig_idx: int, job: Any, paths: list[Path], ds
             transferred += max(_path_size(source_path), _path_size(destination))
             _emit_progress(executor, orig_idx, transferred, total_bytes, file_idx, total_files)
             result.append(str(destination))
+            if on_file_ready is not None:
+                on_file_ready(str(destination))
             continue
 
         executor.log_message.emit(f"  → {source_path.name}")
@@ -46,6 +58,8 @@ def transfer_files(executor: Any, orig_idx: int, job: Any, paths: list[Path], ds
             transferred += _path_size(destination)
             _emit_progress(executor, orig_idx, transferred, total_bytes, file_idx, total_files)
             result.append(str(destination))
+            if on_file_ready is not None:
+                on_file_ready(str(destination))
         except Exception as exc:
             executor.log_message.emit(f"  ❌ {source_path.name}: {exc}")
 

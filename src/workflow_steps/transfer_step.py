@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from .direct_files_transfer_step import DirectFilesTransferStep
 from .folder_scan_transfer_step import FolderScanTransferStep
@@ -16,11 +16,17 @@ class TransferStep:
         self._folder_scan_step = FolderScanTransferStep()
         self._pi_download_step = PiDownloadTransferStep()
 
-    def execute(self, executor: Any, orig_idx: int, job: WorkflowJob) -> list[str]:
+    def execute(
+        self,
+        executor: Any,
+        orig_idx: int,
+        job: WorkflowJob,
+        on_file_ready: Callable[[str], None] | None = None,
+    ) -> list[str]:
         if job.source_mode == "files":
-            return self._files_step.execute(executor, orig_idx, job)
+            return self._files_step.execute(executor, orig_idx, job, on_file_ready=on_file_ready)
         if job.source_mode == "pi_download":
-            return self._pi_download_step.execute(executor, orig_idx, job)
+            return self._pi_download_step.execute(executor, orig_idx, job, on_file_ready=on_file_ready)
         if job.source_mode == "folder_scan":
-            return self._folder_scan_step.execute(executor, orig_idx, job)
+            return self._folder_scan_step.execute(executor, orig_idx, job, on_file_ready=on_file_ready)
         raise ValueError(f"Unbekannter Quellmodus: {job.source_mode!r}")

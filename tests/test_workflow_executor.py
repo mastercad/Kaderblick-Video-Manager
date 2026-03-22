@@ -11,6 +11,7 @@ Geprüft:
 
 import threading
 import tempfile
+import time
 from types import SimpleNamespace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -27,6 +28,7 @@ _app = QApplication.instance() or QApplication(sys.argv)
 
 from src.workflow import Workflow, WorkflowJob, FileEntry
 from src.workflow_executor import WorkflowExecutor
+from src.workflow_steps import PreparedOutput
 
 
 # ─── Hilfsfunktionen ─────────────────────────────────────────────────────────
@@ -707,6 +709,175 @@ class TestWorkflowStackScenarios:
 
         mock_upload.assert_called_once()
         assert job.step_statuses["yt_version"] == "reused-target"
+
+    def test_pipeline_starts_first_conversion_while_same_job_still_transfers(self, tmp_path):
+        source_a = tmp_path / "halbzeit1.mjpg"
+        source_b = tmp_path / "halbzeit2.mjpg"
+        source_a.write_text("a", encoding="utf-8")
+        source_b.write_text("b", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Pipeline",
+            source_mode="files",
+            convert_enabled=True,
+            files=[
+                FileEntry(source_path=str(source_a)),
+                FileEntry(source_path=str(source_b)),
+            ],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+        transfer_finished = threading.Event()
+        convert_started_during_transfer = threading.Event()
+
+        def _transfer(_executor, _orig_idx, _job, on_file_ready=None):
+            assert on_file_ready is not None
+            on_file_ready(str(source_a))
+            for _ in range(50):
+                if convert_started_during_transfer.is_set():
+                    break
+                time.sleep(0.01)
+            on_file_ready(str(source_b))
+            transfer_finished.set()
+            return [str(source_a), str(source_b)]
+
+        def _convert(_executor, _orig_idx, _job, cv_job, _settings, _done_count, _total_count):
+            if cv_job.source_path == source_a and not transfer_finished.is_set():
+                convert_started_during_transfer.set()
+            output = cv_job.source_path.with_suffix(".mp4")
+            output.write_text("converted", encoding="utf-8")
+            cv_job.output_path = output
+            cv_job.status = "Fertig"
+            return "ok"
+
+        with patch.object(ex._transfer_step, "execute", side_effect=_transfer), patch.object(
+            ex._convert_step,
+            "execute",
+            side_effect=_convert,
+        ), patch.object(ex._output_step_stack, "execute_processing_steps", return_value=0), patch.object(
+            ex._output_step_stack,
+            "execute_delivery_steps",
+            return_value=0,
+        ):
+            ex.run()
+
+        assert convert_started_during_transfer.is_set()
+
+    def test_pipeline_preserves_merge_barrier_until_group_is_ready(self, tmp_path):
+        source_a = tmp_path / "kamera1.mjpg"
+        source_b = tmp_path / "kamera2.mjpg"
+        source_a.write_text("a", encoding="utf-8")
+        source_b.write_text("b", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Merge",
+            source_mode="files",
+            convert_enabled=True,
+            files=[
+                FileEntry(source_path=str(source_a), merge_group_id="g1"),
+                FileEntry(source_path=str(source_b), merge_group_id="g1"),
+            ],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+        call_order = []
+
+        def _transfer(_executor, _orig_idx, _job, on_file_ready=None):
+            assert on_file_ready is not None
+            on_file_ready(str(source_a))
+            on_file_ready(str(source_b))
+            return [str(source_a), str(source_b)]
+
+        def _convert(_executor, _orig_idx, _job, cv_job, _settings, _done_count, _total_count):
+            call_order.append(f"convert:{cv_job.source_path.name}")
+            output = cv_job.source_path.with_suffix(".mp4")
+            output.write_text("converted", encoding="utf-8")
+            cv_job.output_path = output
+            cv_job.status = "Fertig"
+            return "ok"
+
+        def _merge(_executor, gid, group):
+            call_order.append(f"merge:{gid}")
+            assert call_order[:2] == ["convert:kamera1.mjpg", "convert:kamera2.mjpg"]
+            merged_output = tmp_path / "kamera1_merged.mp4"
+            merged_output.write_text("merged", encoding="utf-8")
+            prepared = PreparedOutput(
+                orig_idx=group[0].orig_idx,
+                job=group[0].job,
+                cv_job=group[0].cv_job,
+                per_settings=ex._build_job_settings(group[0].job),
+            )
+            prepared.cv_job.output_path = merged_output
+            return prepared, 0
+
+        with patch.object(ex._transfer_step, "execute", side_effect=_transfer), patch.object(
+            ex._convert_step,
+            "execute",
+            side_effect=_convert,
+        ), patch.object(ex._merge_step, "execute", side_effect=_merge), patch.object(
+            ex._output_step_stack,
+            "execute_processing_steps",
+            return_value=0,
+        ), patch.object(ex._output_step_stack, "execute_delivery_steps", return_value=0):
+            ex.run()
+
+        assert call_order == ["convert:kamera1.mjpg", "convert:kamera2.mjpg", "merge:g1"]
+
+    def test_pipeline_can_upload_while_next_conversion_runs(self, tmp_path):
+        source_a = tmp_path / "upload1.mjpg"
+        source_b = tmp_path / "upload2.mjpg"
+        source_a.write_text("a", encoding="utf-8")
+        source_b.write_text("b", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Upload Parallel",
+            source_mode="files",
+            convert_enabled=True,
+            upload_youtube=True,
+            files=[
+                FileEntry(source_path=str(source_a)),
+                FileEntry(source_path=str(source_b)),
+            ],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+        upload_started = threading.Event()
+        release_upload = threading.Event()
+        second_convert_during_upload = threading.Event()
+
+        def _transfer(_executor, _orig_idx, _job, on_file_ready=None):
+            assert on_file_ready is not None
+            on_file_ready(str(source_a))
+            assert upload_started.wait(timeout=2.0)
+            on_file_ready(str(source_b))
+            return [str(source_a), str(source_b)]
+
+        def _convert(_executor, _orig_idx, _job, cv_job, _settings, _done_count, _total_count):
+            if cv_job.source_path == source_b and upload_started.is_set() and not release_upload.is_set():
+                second_convert_during_upload.set()
+                release_upload.set()
+            output = cv_job.source_path.with_suffix(".mp4")
+            output.write_text("converted", encoding="utf-8")
+            cv_job.output_path = output
+            cv_job.status = "Fertig"
+            return "ok"
+
+        def _deliver(_executor, prepared, _yt_service, _kb_sort_index):
+            if prepared.cv_job.source_path == source_a:
+                upload_started.set()
+                release_upload.wait(timeout=2.0)
+            return 0
+
+        with patch.object(ex._transfer_step, "execute", side_effect=_transfer), patch.object(
+            ex._convert_step,
+            "execute",
+            side_effect=_convert,
+        ), patch.object(ex._output_step_stack, "execute_processing_steps", return_value=0), patch.object(
+            ex._output_step_stack,
+            "execute_delivery_steps",
+            side_effect=_deliver,
+        ), patch("src.workflow_executor.get_youtube_service", return_value=MagicMock()):
+            ex.run()
+
+        assert upload_started.is_set()
+        assert second_convert_during_upload.is_set()
 
 
 # ─── Merge-Concat: Standard-Dateien verwenden ────────────────────────────────

@@ -24,6 +24,7 @@ from .dialogs import (
 from .workflow import Workflow, WorkflowJob, FileEntry, WORKFLOW_DIR
 from .workflow_executor import WorkflowExecutor
 from .job_editor import JobEditorDialog
+from .job_workflow_dialog import JobWorkflowDialog
 
 
 _ROLE_STEP_PROGRESS = int(Qt.ItemDataRole.UserRole)
@@ -384,6 +385,7 @@ class ConverterApp(QMainWindow):
         tb.addAction("＋ Alle Kameras", self._add_all_cameras)
         tb.addSeparator()
         tb.addAction("Bearbeiten", self._edit_job)
+        tb.addAction("Workflow", self._open_job_workflow)
         tb.addAction("Duplizieren", self._duplicate_job)
         tb.addAction("Entfernen", self._remove_selected)
         tb.addSeparator()
@@ -424,7 +426,7 @@ class ConverterApp(QMainWindow):
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.table.verticalHeader().setVisible(False)
         self.table.setAlternatingRowColors(True)
-        self.table.doubleClicked.connect(self._edit_job)
+        self.table.doubleClicked.connect(self._handle_table_double_click)
 
         self._step_progress_delegate = ProgressDelegate(self.table, progress_role=_ROLE_STEP_PROGRESS)
         self._job_progress_delegate = ProgressDelegate(self.table, progress_role=_ROLE_JOB_PROGRESS)
@@ -466,7 +468,9 @@ class ConverterApp(QMainWindow):
             self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
             self.table.setItem(i, 1, QTableWidgetItem(job.name or "–"))
             self.table.setItem(i, 2, QTableWidgetItem(_summarize_source(job)))
-            self.table.setItem(i, 3, QTableWidgetItem(_summarize_pipeline(job)))
+            pipeline_item = QTableWidgetItem(_summarize_pipeline(job))
+            pipeline_item.setToolTip("Doppelklick für Workflow-Ansicht")
+            self.table.setItem(i, 3, pipeline_item)
             status_item = QTableWidgetItem(job.resume_status or "Wartend")
             status_item.setData(_ROLE_STEP_PROGRESS, job.progress_pct)
             tooltip = _format_resume_tooltip(job)
@@ -475,6 +479,7 @@ class ConverterApp(QMainWindow):
 
             job_item = QTableWidgetItem(f"{job.overall_progress_pct}%")
             job_item.setData(_ROLE_JOB_PROGRESS, job.overall_progress_pct)
+            job_item.setToolTip("Doppelklick für Workflow-Ansicht")
             self.table.setItem(i, 5, job_item)
 
     def _set_row_status(self, row: int, status: str):
@@ -618,14 +623,48 @@ class ConverterApp(QMainWindow):
                 self.status_label.setText("Bereit")
                 self._workflow.save_as_last()
 
-    def _edit_job(self):
-        rows = sorted(
-            {idx.row() for idx in self.table.selectedIndexes()})
-        if not rows:
+    def _selected_job_row(self) -> int:
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
+        if rows:
+            return rows[0]
+        return self.table.currentRow()
+
+    def _handle_table_double_click(self, index):
+        row = index.row()
+        if index.column() >= 3:
+            self._open_job_workflow(row)
             return
-        idx = rows[0]
-        if 0 <= idx < len(self._workflow.jobs):
-            job = self._workflow.jobs[idx]
+        self._edit_job(row)
+
+    def _open_job_workflow(self, row: int | None = None):
+        if row is None or row is False:
+            row = self._selected_job_row()
+        if row < 0:
+            if len(self._workflow.jobs) == 1:
+                row = 0
+            elif self._workflow.jobs:
+                QMessageBox.information(
+                    self,
+                    "Kein Auftrag ausgewählt",
+                    "Bitte zuerst einen Auftrag markieren oder per Doppelklick öffnen.",
+                )
+                return
+        if not (0 <= row < len(self._workflow.jobs)):
+            return
+        job = self._workflow.jobs[row]
+        dlg = JobWorkflowDialog(self, job, allow_edit=True, settings=self.settings)
+        if dlg.exec():
+            if dlg.changed:
+                self._refresh_table()
+                self._workflow.save_as_last()
+            if dlg.edit_requested:
+                self._edit_job(row)
+
+    def _edit_job(self, row: int | None = None):
+        if row is None or row is False:
+            row = self._selected_job_row()
+        if 0 <= row < len(self._workflow.jobs):
+            job = self._workflow.jobs[row]
             dlg = JobEditorDialog(self, self.settings, job=job)
             if dlg.exec():
                 self._refresh_table()

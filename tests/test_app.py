@@ -68,6 +68,22 @@ class _DummyExecutor:
         return None
 
 
+class _DummyWorkflowDialog:
+    instances = []
+
+    def __init__(self, parent, job, allow_edit=False, settings=None):
+        self.parent = parent
+        self.job = job
+        self.allow_edit = allow_edit
+        self.settings = settings
+        self.edit_requested = False
+        self.changed = False
+        _DummyWorkflowDialog.instances.append(self)
+
+    def exec(self):
+        return True
+
+
 def _new_app() -> ConverterApp:
     with patch("src.app.AppSettings.load", return_value=AppSettings()):
         window = ConverterApp()
@@ -466,5 +482,108 @@ class TestConverterAppResumeState:
             assert window._wf_executor is None
             assert job.resume_status == "Transfer OK"
             window._save_session.assert_not_called()
+        finally:
+            window.close()
+
+    def test_open_job_workflow_uses_selected_job_and_allows_edit_mode(self):
+        window = _new_app()
+        try:
+            _DummyWorkflowDialog.instances.clear()
+            job = WorkflowJob(name="Job 1")
+            window._workflow = Workflow(jobs=[job])
+            window._refresh_table()
+            window.table.selectRow(0)
+
+            with patch("src.app.JobWorkflowDialog", _DummyWorkflowDialog):
+                window._open_job_workflow()
+
+            assert len(_DummyWorkflowDialog.instances) == 1
+            assert _DummyWorkflowDialog.instances[0].job is job
+            assert _DummyWorkflowDialog.instances[0].allow_edit is True
+        finally:
+            window.close()
+
+    def test_open_job_workflow_refreshes_table_when_dialog_changed_job(self):
+        window = _new_app()
+        try:
+            _DummyWorkflowDialog.instances.clear()
+            job = WorkflowJob(name="Job 1")
+            window._workflow = Workflow(jobs=[job])
+            window._refresh_table()
+            window.table.selectRow(0)
+
+            def _make_dialog(parent, selected_job, allow_edit=False, settings=None):
+                dialog = _DummyWorkflowDialog(parent, selected_job, allow_edit=allow_edit, settings=settings)
+                dialog.changed = True
+                selected_job.name = "Geändert"
+                return dialog
+
+            with patch("src.app.JobWorkflowDialog", side_effect=_make_dialog), patch.object(window._workflow, "save_as_last") as save_last:
+                window._open_job_workflow()
+
+            assert window.table.item(0, 1).text() == "Geändert"
+            save_last.assert_called_once()
+        finally:
+            window.close()
+
+    def test_open_job_workflow_uses_only_job_without_explicit_selection(self):
+        window = _new_app()
+        try:
+            _DummyWorkflowDialog.instances.clear()
+            job = WorkflowJob(name="Job 1")
+            window._workflow = Workflow(jobs=[job])
+            window._refresh_table()
+            window.table.clearSelection()
+
+            with patch("src.app.JobWorkflowDialog", _DummyWorkflowDialog):
+                window._open_job_workflow()
+
+            assert len(_DummyWorkflowDialog.instances) == 1
+            assert _DummyWorkflowDialog.instances[0].job is job
+        finally:
+            window.close()
+
+    def test_open_job_workflow_shows_hint_when_multiple_jobs_and_none_selected(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(jobs=[WorkflowJob(name="Job 1"), WorkflowJob(name="Job 2")])
+            window._refresh_table()
+            window.table.clearSelection()
+
+            with patch("src.app.QMessageBox.information") as info, patch("src.app.JobWorkflowDialog") as dialog:
+                window._open_job_workflow()
+
+            info.assert_called_once()
+            dialog.assert_not_called()
+        finally:
+            window.close()
+
+    def test_table_double_click_opens_workflow_for_pipeline_columns(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(jobs=[WorkflowJob(name="Job 1")])
+            window._refresh_table()
+            index = window.table.model().index(0, 4)
+
+            with patch.object(window, "_open_job_workflow") as open_workflow, patch.object(window, "_edit_job") as edit_job:
+                window._handle_table_double_click(index)
+
+            open_workflow.assert_called_once_with(0)
+            edit_job.assert_not_called()
+        finally:
+            window.close()
+
+    def test_table_double_click_keeps_wizard_for_name_column(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(jobs=[WorkflowJob(name="Job 1")])
+            window._refresh_table()
+            index = window.table.model().index(0, 1)
+
+            with patch.object(window, "_open_job_workflow") as open_workflow, patch.object(window, "_edit_job") as edit_job:
+                window._handle_table_double_click(index)
+
+            open_workflow.assert_not_called()
+            edit_job.assert_called_once_with(0)
         finally:
             window.close()

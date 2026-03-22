@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 from .settings import AppSettings, PROFILES
 from .encoder import available_encoder_choices
 from .file_list_widget import FileListWidget
+from .job_workflow_dialog import JobWorkflowDialog
 from .workflow import WorkflowJob, FileEntry
 from .kaderblick import fetch_video_types, fetch_cameras
 
@@ -163,6 +164,10 @@ class JobEditorDialog(QDialog):
         self._next_btn.setDefault(True)
         self._next_btn.clicked.connect(self._go_next)
         lay.addWidget(self._next_btn)
+
+        self._preview_btn = QPushButton("Workflow-Vorschau")
+        self._preview_btn.clicked.connect(self._open_workflow_preview)
+        lay.addWidget(self._preview_btn)
 
         self._finish_btn = QPushButton("✓  Fertig")
         self._finish_btn.setDefault(True)
@@ -745,6 +750,14 @@ class JobEditorDialog(QDialog):
             return
         self._write_job()
         self.accept()
+
+    def _open_workflow_preview(self) -> None:
+        if self._mode_group.checkedId() == -1:
+            QMessageBox.warning(self, "Keine Quelle", "Bitte zuerst eine Dateiquelle auswählen.")
+            return
+        self._write_job()
+        dlg = JobWorkflowDialog(self, self._job, allow_edit=False, settings=self._settings)
+        dlg.exec()
 
     # ════════════════════════════════════════════════════════
     #  Validation

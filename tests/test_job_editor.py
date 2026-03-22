@@ -303,6 +303,43 @@ class TestNavigation:
         assert dlg._current == 0
 
 
+class _DummyWorkflowDialog:
+    instances = []
+
+    def __init__(self, parent, job, allow_edit=False, settings=None):
+        self.parent = parent
+        self.job = job
+        self.allow_edit = allow_edit
+        self.settings = settings
+        _DummyWorkflowDialog.instances.append(self)
+
+    def exec(self):
+        return True
+
+
+class TestWorkflowPreview:
+    def test_preview_opens_workflow_dialog_with_current_job_state(self):
+        dlg = _new_dialog()
+        _DummyWorkflowDialog.instances.clear()
+
+        dlg._mode_group.button(0).setChecked(True)
+        dlg._name_edit.setText("Preview Job")
+        dlg._yt_upload_cb.setChecked(True)
+        dlg._tc_enabled_cb.setChecked(True)
+        dlg._file_list.load([FileEntry(source_path="/tmp/clip.mp4")])
+
+        with patch("src.job_editor.JobWorkflowDialog", _DummyWorkflowDialog):
+            dlg._open_workflow_preview()
+
+        assert len(_DummyWorkflowDialog.instances) == 1
+        opened = _DummyWorkflowDialog.instances[0]
+        assert opened.allow_edit is False
+        assert opened.job is dlg.result_job
+        assert opened.job.name == "Preview Job"
+        assert opened.job.upload_youtube is True
+        assert opened.job.title_card_enabled is True
+
+
 # ─── Validation ───────────────────────────────────────────────────────────────
 
 class TestValidation:

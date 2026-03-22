@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..workflow import WorkflowJob
 
@@ -9,7 +9,13 @@ from ..workflow import WorkflowJob
 class PiDownloadTransferStep:
     name = "pi-download-transfer"
 
-    def execute(self, executor: Any, orig_idx: int, job: WorkflowJob) -> list[str]:
+    def execute(
+        self,
+        executor: Any,
+        orig_idx: int,
+        job: WorkflowJob,
+        on_file_ready: Callable[[str], None] | None = None,
+    ) -> list[str]:
         executor.job_progress.emit(orig_idx, 0)
         device = next(
             (configured for configured in executor._settings.cameras.devices if configured.name == job.device_name),
@@ -67,11 +73,17 @@ class PiDownloadTransferStep:
                     f"  ↩ Download nicht möglich ({exc}) – nutze {len(fallback)} vorhandene Datei(en) im Zielverzeichnis"
                 )
                 executor._set_step_status(job, "transfer", "reused-target")
+                if on_file_ready is not None:
+                    for path in fallback:
+                        on_file_ready(path)
                 return fallback
             raise
 
         paths = [result[2] for result in results]
         if paths:
+            if on_file_ready is not None:
+                for path in paths:
+                    on_file_ready(path)
             return paths
 
         fallback = self._existing_targets(executor, job)
@@ -80,6 +92,9 @@ class PiDownloadTransferStep:
                 f"  ↩ Keine neue Übertragung – nutze {len(fallback)} vorhandene Datei(en) im Zielverzeichnis"
             )
             executor._set_step_status(job, "transfer", "reused-target")
+            if on_file_ready is not None:
+                for path in fallback:
+                    on_file_ready(path)
             return fallback
         return []
 

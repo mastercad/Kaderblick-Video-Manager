@@ -59,6 +59,7 @@ class FileListWidget(QWidget):
     # Emitted when the user confirms match data via any 🎬 dialog.
     # Arguments: home_team, away_team, date_iso (YYYY-MM-DD)
     match_data_changed = Signal(str, str, str)
+    files_changed = Signal()
 
     # Merge group colors (cycled by group hash)
     _MERGE_COLORS = [
@@ -99,6 +100,7 @@ class FileListWidget(QWidget):
         self._table.setRowCount(0)
         for entry in entries:
             self._append_row(entry)
+        self.files_changed.emit()
 
     def collect(self) -> list[FileEntry]:
         """Liest alle Tabellenzeilen als FileEntry-Liste aus."""
@@ -248,6 +250,7 @@ class FileListWidget(QWidget):
 
         # Merge-Visualisierung anwenden
         self._refresh_merge_visuals()
+        self.files_changed.emit()
 
     # ── Kaderblick-Optionen ───────────────────────────────────
 
@@ -298,6 +301,7 @@ class FileListWidget(QWidget):
                 self._propagate_merge_title(merge_id, dlg.video_title, dlg.playlist_title)
             m = dlg.match_data
             self.match_data_changed.emit(m.home_team, m.away_team, m.date_iso)
+            self.files_changed.emit()
 
     # ── Merge-Logik ───────────────────────────────────────────
 
@@ -338,6 +342,7 @@ class FileListWidget(QWidget):
             if item:
                 item.setData(self._ROLE_MERGE_ID, group_id)
         self._refresh_merge_visuals()
+        self.files_changed.emit()
         QMessageBox.information(
             self,
             "Zusammenführen",
@@ -372,6 +377,7 @@ class FileListWidget(QWidget):
             if item:
                 item.setData(self._ROLE_MERGE_ID, "")
         self._refresh_merge_visuals()
+        self.files_changed.emit()
         QMessageBox.information(
             self,
             "Auflösen",
@@ -464,6 +470,7 @@ class FileListWidget(QWidget):
                 path_item.setData(self._ROLE_KB_CAM,  dlg.kb_camera_id)
                 path_item.setData(self._ROLE_YT_DESC, build_video_description(match, seg))
         self.match_data_changed.emit(match.home_team, match.away_team, match.date_iso)
+        self.files_changed.emit()
 
     def _open_add_files_dialog(self) -> None:
         start = self._get_last_dir() or str(Path.home())
@@ -503,6 +510,7 @@ class FileListWidget(QWidget):
             return
         for row in rows:
             self._table.removeRow(row)
+        self.files_changed.emit()
 
     def _selected_rows(self) -> list[int]:
         return sorted({idx.row() for idx in self._table.selectedIndexes()})

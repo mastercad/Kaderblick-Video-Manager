@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..workflow import WorkflowJob
 from .transfer_io import emit_item_progress, transfer_files
@@ -10,7 +10,13 @@ from .transfer_io import emit_item_progress, transfer_files
 class DirectFilesTransferStep:
     name = "files-transfer"
 
-    def execute(self, executor: Any, orig_idx: int, job: WorkflowJob) -> list[str]:
+    def execute(
+        self,
+        executor: Any,
+        orig_idx: int,
+        job: WorkflowJob,
+        on_file_ready: Callable[[str], None] | None = None,
+    ) -> list[str]:
         paths: list[Path] = []
         total_entries = len(job.files)
         executor.job_progress.emit(orig_idx, 0)
@@ -46,12 +52,16 @@ class DirectFilesTransferStep:
         dst_dir = Path(job.copy_destination) if job.copy_destination else None
         if not dst_dir:
             executor.job_progress.emit(orig_idx, 100)
-            return [str(path) for path in paths]
+            ready = [str(path) for path in paths]
+            if on_file_ready is not None:
+                for path in ready:
+                    on_file_ready(path)
+            return ready
 
         dst_dir.mkdir(parents=True, exist_ok=True)
         verb = "verschieben" if job.move_files else "kopieren"
         executor.log_message.emit(f"📁 {job.name}: {len(paths)} Datei(en) {verb} …")
-        return transfer_files(executor, orig_idx, job, paths, dst_dir)
+        return transfer_files(executor, orig_idx, job, paths, dst_dir, on_file_ready=on_file_ready)
 
     @staticmethod
     def _should_keep_missing_entry_for_resume(job: WorkflowJob, source_path: Path) -> bool:

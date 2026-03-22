@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from ..workflow import WorkflowJob
 from .transfer_io import emit_item_progress, transfer_files
@@ -10,7 +10,13 @@ from .transfer_io import emit_item_progress, transfer_files
 class FolderScanTransferStep:
     name = "folder-scan-transfer"
 
-    def execute(self, executor: Any, orig_idx: int, job: WorkflowJob) -> list[str]:
+    def execute(
+        self,
+        executor: Any,
+        orig_idx: int,
+        job: WorkflowJob,
+        on_file_ready: Callable[[str], None] | None = None,
+    ) -> list[str]:
         src_dir = Path(job.source_folder)
         dst_dir = Path(job.copy_destination) if job.copy_destination else None
         pattern = job.file_pattern or "*.mp4"
@@ -48,12 +54,16 @@ class FolderScanTransferStep:
                 emit_item_progress(executor, orig_idx, file_idx, total_files)
             executor.log_message.emit(f"\n📁 {job.name}: {len(files)} Datei(en) gefunden")
             executor.job_progress.emit(orig_idx, 100)
-            return [str(path) for path in files]
+            ready = [str(path) for path in files]
+            if on_file_ready is not None:
+                for path in ready:
+                    on_file_ready(path)
+            return ready
 
         dst_dir.mkdir(parents=True, exist_ok=True)
         verb = "verschieben" if job.move_files else "kopieren"
         executor.log_message.emit(f"\n📁 {job.name}: {len(files)} Datei(en) {verb} …")
-        return transfer_files(executor, orig_idx, job, files, dst_dir)
+        return transfer_files(executor, orig_idx, job, files, dst_dir, on_file_ready=on_file_ready)
 
     @staticmethod
     def _existing_targets(job: WorkflowJob) -> list[str]:
