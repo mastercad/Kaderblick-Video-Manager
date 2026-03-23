@@ -1,0 +1,212 @@
+"""Main window facade for the video manager."""
+
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+from typing import Optional
+
+from PySide6.QtGui import QIcon
+from PySide6.QtWidgets import QMainWindow
+
+from ..workflow import Workflow
+from .execution import (
+    _cancel_workflow,
+    _on_dl_progress,
+    _on_job_progress,
+    _on_job_status,
+    _on_overall_progress,
+    _on_phase_changed,
+    _on_source_progress,
+    _on_source_status,
+    _on_workflow_done,
+    _start_all_active_workflows,
+    _start_selected_workflows,
+    _start_workflow,
+)
+from .settings_actions import (
+    _open_audio_settings,
+    _open_camera_settings,
+    _open_general_settings,
+    _open_kaderblick_settings,
+    _open_video_settings,
+    _open_youtube_settings,
+)
+from .ui_build import (
+    _append_log,
+    _build_central,
+    _build_menu,
+    _build_statusbar,
+    _build_toolbar,
+    _handle_table_double_click,
+    _refresh_table,
+    _reset_status_column,
+    _set_row_job_progress,
+    _set_row_progress,
+    _set_row_status,
+    _update_count,
+)
+from .workflow_actions import (
+    _add_all_cameras,
+    _add_job,
+    _apply_add_files,
+    _apply_workflow,
+    _ask_resume_behavior,
+    _clear_workflow,
+    _duplicate_job,
+    _edit_job,
+    _existing_job_names,
+    _has_resumeable_jobs,
+    _load_workflow,
+    _new_workflow,
+    _open_job_workflow,
+    _persist_workflow_state,
+    _remove_selected,
+    _resolve_job_name,
+    _restore_last_workflow,
+    _save_last_workflow,
+    _save_workflow,
+    _selected_job_row,
+    _selected_job_rows,
+)
+
+
+class ConverterApp(QMainWindow):
+    def __init__(self, cli_args: argparse.Namespace | None = None):
+        super().__init__()
+        from . import AppSettings
+
+        self.setWindowTitle("Video Manager")
+        self.resize(960, 640)
+        self.setMinimumSize(720, 460)
+
+        icon_path = Path(__file__).resolve().parent.parent.parent / "assets" / "icon.svg"
+        if icon_path.exists():
+            self.setWindowIcon(QIcon(str(icon_path)))
+
+        self.settings = AppSettings.load()
+
+        self._workflow: Workflow = Workflow()
+        self._wf_executor = None
+        self._wf_thread = None
+        self._wf_start_time: float = 0.0
+
+        self._build_menu()
+        self._build_toolbar()
+        self._build_central()
+        self._build_statusbar()
+
+        restore = self.settings.restore_last_workflow
+        if cli_args and cli_args.restore_last_workflow:
+            restore = True
+        elif cli_args and cli_args.no_restore_last_workflow:
+            restore = False
+        if restore:
+            self._restore_last_workflow()
+
+        if cli_args and cli_args.add:
+            self._apply_add_files(cli_args.add)
+
+        self._cli_workflow: str | None = cli_args.workflow if cli_args else None
+
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        if self._cli_workflow:
+            workflow_path = self._cli_workflow
+            self._cli_workflow = None
+            from PySide6.QtCore import QTimer
+
+            QTimer.singleShot(0, lambda: self._apply_workflow(workflow_path))
+
+    @staticmethod
+    def _format_duration(seconds: float) -> str:
+        total_seconds = int(seconds)
+        if total_seconds >= 3600:
+            hours = total_seconds // 3600
+            minutes = (total_seconds % 3600) // 60
+            return f"{hours}h {minutes:02d}min"
+        if total_seconds >= 60:
+            minutes = total_seconds // 60
+            secs = total_seconds % 60
+            return f"{minutes}min {secs:02d}s"
+        return f"{total_seconds}s"
+
+    def _set_busy(self, busy: bool):
+        self.act_start.setEnabled(not busy)
+        self.act_cancel.setEnabled(busy)
+
+    def closeEvent(self, event):
+        from . import QMessageBox
+
+        running = self._wf_thread and self._wf_thread.isRunning()
+        if running:
+            if QMessageBox.question(
+                self,
+                "Verarbeitung läuft",
+                "Workflow läuft noch. Wirklich beenden?",
+                QMessageBox.Yes | QMessageBox.No,
+            ) != QMessageBox.Yes:
+                event.ignore()
+                return
+            if self._wf_executor:
+                self._wf_executor.cancel()
+            if self._wf_thread:
+                self._wf_thread.quit()
+                if not self._wf_thread.wait(10_000):
+                    self._wf_thread.terminate()
+                    self._wf_thread.wait(2000)
+        self._save_last_workflow()
+        event.accept()
+
+
+ConverterApp._apply_add_files = _apply_add_files
+ConverterApp._apply_workflow = _apply_workflow
+ConverterApp._build_menu = _build_menu
+ConverterApp._build_toolbar = _build_toolbar
+ConverterApp._build_central = _build_central
+ConverterApp._build_statusbar = _build_statusbar
+ConverterApp._refresh_table = _refresh_table
+ConverterApp._set_row_status = _set_row_status
+ConverterApp._set_row_progress = _set_row_progress
+ConverterApp._set_row_job_progress = _set_row_job_progress
+ConverterApp._reset_status_column = _reset_status_column
+ConverterApp._append_log = _append_log
+ConverterApp._new_workflow = _new_workflow
+ConverterApp._add_job = _add_job
+ConverterApp._add_all_cameras = _add_all_cameras
+ConverterApp._remove_selected = _remove_selected
+ConverterApp._clear_workflow = _clear_workflow
+ConverterApp._selected_job_row = _selected_job_row
+ConverterApp._selected_job_rows = _selected_job_rows
+ConverterApp._handle_table_double_click = _handle_table_double_click
+ConverterApp._open_job_workflow = _open_job_workflow
+ConverterApp._edit_job = _edit_job
+ConverterApp._duplicate_job = _duplicate_job
+ConverterApp._update_count = _update_count
+ConverterApp._existing_job_names = _existing_job_names
+ConverterApp._resolve_job_name = _resolve_job_name
+ConverterApp._open_camera_settings = _open_camera_settings
+ConverterApp._open_video_settings = _open_video_settings
+ConverterApp._open_audio_settings = _open_audio_settings
+ConverterApp._open_youtube_settings = _open_youtube_settings
+ConverterApp._open_kaderblick_settings = _open_kaderblick_settings
+ConverterApp._open_general_settings = _open_general_settings
+ConverterApp._load_workflow = _load_workflow
+ConverterApp._save_workflow = _save_workflow
+ConverterApp._save_last_workflow = _save_last_workflow
+ConverterApp._persist_workflow_state = _persist_workflow_state
+ConverterApp._restore_last_workflow = _restore_last_workflow
+ConverterApp._has_resumeable_jobs = _has_resumeable_jobs
+ConverterApp._ask_resume_behavior = _ask_resume_behavior
+ConverterApp._start_selected_workflows = _start_selected_workflows
+ConverterApp._start_all_active_workflows = _start_all_active_workflows
+ConverterApp._start_workflow = _start_workflow
+ConverterApp._cancel_workflow = _cancel_workflow
+ConverterApp._on_job_status = _on_job_status
+ConverterApp._on_job_progress = _on_job_progress
+ConverterApp._on_source_status = _on_source_status
+ConverterApp._on_source_progress = _on_source_progress
+ConverterApp._on_dl_progress = _on_dl_progress
+ConverterApp._on_phase_changed = _on_phase_changed
+ConverterApp._on_overall_progress = _on_overall_progress
+ConverterApp._on_workflow_done = _on_workflow_done

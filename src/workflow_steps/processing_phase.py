@@ -121,13 +121,35 @@ class ProcessingPhase:
                 totals[item.orig_idx][0] += 1
                 remaining = totals[item.orig_idx][1] - totals[item.orig_idx][0]
                 self._update_job_progress(executor, item.orig_idx, totals[item.orig_idx])
-                if not executor._get_merge_group_id(item.job, str(item.cv_job.source_path)):
+                merge_group_id = executor._get_merge_group_id(item.job, str(item.cv_job.source_path))
+                if merge_group_id:
+                    entry = executor._find_file_entry(item.job, str(item.cv_job.source_path))
+                    if entry is not None and entry.title_card_before_merge:
+                        pre_merge_fail = executor._output_step_stack.execute_processing_steps(
+                            executor,
+                            PreparedOutput(
+                                orig_idx=item.orig_idx,
+                                job=item.job,
+                                cv_job=item.cv_job,
+                                per_settings=per_settings,
+                                mark_finished=False,
+                                title_card_enabled_override=True,
+                                graph_origin_node_id=executor._support.source_node_id_for_file(item.job, str(item.cv_job.source_path)),
+                            ),
+                            include_title_card=True,
+                            include_youtube_version=False,
+                        )
+                        if pre_merge_fail:
+                            fail += pre_merge_fail
+                    continue
+                if not merge_group_id:
                     fail += executor._run_output_steps(
                         PreparedOutput(
                             orig_idx=item.orig_idx,
                             job=item.job,
                             cv_job=item.cv_job,
                             per_settings=per_settings,
+                            graph_origin_node_id=executor._support.source_node_id_for_file(item.job, str(item.cv_job.source_path)),
                             status_prefix=(
                                 f"YouTube-Upload {totals[item.orig_idx][0]}/{totals[item.orig_idx][1]} …"
                                 if totals[item.orig_idx][1] > 1 else ""
@@ -230,6 +252,7 @@ class ProcessingPhase:
                     job=item.job,
                     cv_job=item.cv_job,
                     per_settings=per_settings,
+                    graph_origin_node_id=executor._support.source_node_id_for_file(item.job, str(item.cv_job.source_path)),
                     status_prefix=(
                         f"YouTube-Upload {done_count + 1}/{total_count} …"
                         if total_count > 1 else ""

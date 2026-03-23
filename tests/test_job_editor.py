@@ -22,7 +22,7 @@ _app = QApplication.instance() or QApplication(sys.argv)
 
 from src.settings import AppSettings
 from src.workflow import WorkflowJob, FileEntry
-from src.job_editor import JobEditorDialog
+from src.ui.job_editor import JobEditorDialog
 
 
 def _settings() -> AppSettings:
@@ -328,7 +328,7 @@ class TestWorkflowPreview:
         dlg._tc_enabled_cb.setChecked(True)
         dlg._file_list.load([FileEntry(source_path="/tmp/clip.mp4")])
 
-        with patch("src.job_editor.JobWorkflowDialog", _DummyWorkflowDialog):
+        with patch("src.ui.job_editor.JobWorkflowDialog", _DummyWorkflowDialog):
             dlg._open_workflow_preview()
 
         assert len(_DummyWorkflowDialog.instances) == 1
@@ -352,7 +352,7 @@ class TestValidation:
         dlg._mode_group.setExclusive(True)
         # Validation soll False zurückgeben (wir unterdrücken das QMessageBox)
         from unittest.mock import patch
-        with patch("src.job_editor.QMessageBox.warning"):
+        with patch("src.ui.job_editor.QMessageBox.warning"):
             result = dlg._validate_page(0)
         assert result is False
 
@@ -361,7 +361,7 @@ class TestValidation:
         dlg._mode_group.button(1).setChecked(True)   # folder_scan
         dlg._folder_src_edit.setText("")
         from unittest.mock import patch
-        with patch("src.job_editor.QMessageBox.warning"):
+        with patch("src.ui.job_editor.QMessageBox.warning"):
             result = dlg._validate_page(0)
         assert result is False
 

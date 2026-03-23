@@ -17,6 +17,7 @@ class PiDownloadTransferStep:
         on_file_ready: Callable[[str], None] | None = None,
     ) -> list[str]:
         executor.job_progress.emit(orig_idx, 0)
+        executor.source_progress.emit(orig_idx, 0)
         device = next(
             (configured for configured in executor._settings.cameras.devices if configured.name == job.device_name),
             None,
@@ -44,7 +45,9 @@ class PiDownloadTransferStep:
             elif state["last_t"] == 0:
                 state.update(last_b=transferred, last_t=now)
             if total > 0:
-                executor.job_progress.emit(orig_idx, int(transferred / total * 100))
+                pct = int(transferred / total * 100)
+                executor.job_progress.emit(orig_idx, pct)
+                executor.source_progress.emit(orig_idx, pct)
             executor.file_progress.emit(
                 device_name,
                 filename,
@@ -73,6 +76,7 @@ class PiDownloadTransferStep:
                     f"  ↩ Download nicht möglich ({exc}) – nutze {len(fallback)} vorhandene Datei(en) im Zielverzeichnis"
                 )
                 executor._set_step_status(job, "transfer", "reused-target")
+                executor.source_progress.emit(orig_idx, 100)
                 if on_file_ready is not None:
                     for path in fallback:
                         on_file_ready(path)
@@ -81,6 +85,11 @@ class PiDownloadTransferStep:
 
         paths = [result[2] for result in results]
         if paths:
+            executor._set_step_detail(
+                job,
+                "transfer",
+                f"Download von {device.name} ({device.ip}) | {len(paths)} Datei(en)",
+            )
             if on_file_ready is not None:
                 for path in paths:
                     on_file_ready(path)
@@ -92,6 +101,7 @@ class PiDownloadTransferStep:
                 f"  ↩ Keine neue Übertragung – nutze {len(fallback)} vorhandene Datei(en) im Zielverzeichnis"
             )
             executor._set_step_status(job, "transfer", "reused-target")
+            executor.source_progress.emit(orig_idx, 100)
             if on_file_ready is not None:
                 for path in fallback:
                     on_file_ready(path)

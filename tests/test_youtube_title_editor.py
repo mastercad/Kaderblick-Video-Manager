@@ -12,7 +12,7 @@ import pytest
 
 from PySide6.QtWidgets import QApplication
 
-from src.youtube_title_editor import (
+from src.integrations.youtube_title_editor import (
     MatchData,
     SegmentData,
     YouTubeTitleEditorDialog,
@@ -214,7 +214,7 @@ class TestBuildVideoDescription:
 class TestYouTubeTitleEditorDialog:
     def test_memory_kaderblick_ids_are_preselected_and_preserved(self, monkeypatch):
         monkeypatch.setattr(
-            "src.youtube_title_editor.load_memory",
+            "src.integrations.youtube_title_editor.load_memory",
             lambda: {
                 "last_match": {
                     "date_iso": "2026-03-21",
@@ -233,7 +233,7 @@ class TestYouTubeTitleEditorDialog:
                 },
             },
         )
-        monkeypatch.setattr("src.youtube_title_editor.save_memory", lambda data: None)
+        monkeypatch.setattr("src.integrations.youtube_title_editor.save_memory", lambda data: None)
 
         dlg = YouTubeTitleEditorDialog(
             mode="full",

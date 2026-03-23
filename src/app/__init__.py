@@ -1,0 +1,36 @@
+"""Public facade for the main application package."""
+
+from PySide6.QtCore import QThread
+from PySide6.QtWidgets import QMessageBox
+
+from ..job_workflow import JobWorkflowDialog
+from ..runtime.workflow_executor import WorkflowExecutor
+from ..settings import AppSettings
+from ..workflow import Workflow, WorkflowJob, FileEntry, WORKFLOW_DIR
+from .helpers import (
+    _compute_job_overall_progress,
+    _format_resume_tooltip,
+    _job_has_source_config,
+    _planned_job_steps,
+    _repair_restored_workflow,
+)
+from .window import ConverterApp
+
+
+__all__ = [
+    "ConverterApp",
+    "AppSettings",
+    "QThread",
+    "QMessageBox",
+    "WorkflowExecutor",
+    "JobWorkflowDialog",
+    "Workflow",
+    "WorkflowJob",
+    "FileEntry",
+    "WORKFLOW_DIR",
+    "_compute_job_overall_progress",
+    "_format_resume_tooltip",
+    "_job_has_source_config",
+    "_planned_job_steps",
+    "_repair_restored_workflow",
+]

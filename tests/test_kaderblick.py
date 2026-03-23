@@ -16,7 +16,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.kaderblick import (
+from src.integrations.kaderblick import (
     KaderblickRegistry,
     _headers,
     _PostPreservingRedirectHandler,
@@ -197,13 +197,13 @@ class TestPostPreservingRedirectHandler:
 
 class TestRefreshJwt:
     def test_no_refresh_token_returns_false(self):
-        from src.kaderblick import _refresh_jwt
+        from src.integrations.kaderblick import _refresh_jwt
         kb = _KB(auth_mode="jwt", jwt="old")
         kb.jwt_refresh_token = ""
         assert _refresh_jwt(kb) is False
 
     def test_successful_refresh_updates_token(self):
-        from src.kaderblick import _refresh_jwt
+        from src.integrations.kaderblick import _refresh_jwt
 
         kb = _KB(auth_mode="jwt", jwt="old_token")
         kb.jwt_refresh_token = "my_refresh"
@@ -221,7 +221,7 @@ class TestRefreshJwt:
         assert kb.jwt_token == "new_token_abc"
 
     def test_failed_refresh_returns_false(self):
-        from src.kaderblick import _refresh_jwt
+        from src.integrations.kaderblick import _refresh_jwt
         import urllib.error
 
         kb = _KB(auth_mode="jwt", jwt="old_token")
@@ -259,7 +259,7 @@ class TestPostToKaderblickSortIndex:
     def _call(settings, game_videos: list[dict], expect_sort: int,
               tmp: str, existing_yt_id: str = ""):
         """Ruft post_to_kaderblick mit gemockten HTTP-Calls auf und prüft sort."""
-        from src.kaderblick import post_to_kaderblick, KaderblickRegistry
+        from src.integrations.kaderblick import post_to_kaderblick, KaderblickRegistry
 
         src = Path(tmp) / "video.mp4"
         src.touch()
@@ -275,9 +275,9 @@ class TestPostToKaderblickSortIndex:
 
         reg_path = Path(tmp) / "reg.json"
 
-        with patch("src.kaderblick.fetch_game_videos", side_effect=fake_fetch_game_videos), \
-             patch("src.kaderblick.post_video", side_effect=fake_post_video), \
-             patch("src.kaderblick._get_registry",
+        with patch("src.integrations.kaderblick.fetch_game_videos", side_effect=fake_fetch_game_videos), \
+             patch("src.integrations.kaderblick.post_video", side_effect=fake_post_video), \
+             patch("src.integrations.kaderblick._get_registry",
                    return_value=KaderblickRegistry(path=reg_path)):
             result = post_to_kaderblick(
                 settings=settings,
@@ -354,7 +354,7 @@ class TestPostToKaderblickSortIndex:
     def test_duplicate_detection_skips_post(self):
         """Wenn youtubeId schon auf dem Server ist → kein POST."""
         from src.settings import AppSettings
-        from src.kaderblick import post_to_kaderblick, KaderblickRegistry
+        from src.integrations.kaderblick import post_to_kaderblick, KaderblickRegistry
 
         s = AppSettings()
         s.kaderblick.auth_mode    = "bearer"
@@ -368,9 +368,9 @@ class TestPostToKaderblickSortIndex:
             src = Path(tmp) / "v.mp4"; src.touch()
             reg_path = Path(tmp) / "reg.json"
 
-            with patch("src.kaderblick.fetch_game_videos", return_value=existing), \
-                 patch("src.kaderblick.post_video") as mock_post, \
-                 patch("src.kaderblick._get_registry",
+            with patch("src.integrations.kaderblick.fetch_game_videos", return_value=existing), \
+                 patch("src.integrations.kaderblick.post_video") as mock_post, \
+                 patch("src.integrations.kaderblick._get_registry",
                        return_value=KaderblickRegistry(path=reg_path)):
                 result = post_to_kaderblick(
                     settings=s,

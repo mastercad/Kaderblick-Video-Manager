@@ -8,8 +8,7 @@ __pycache__/
 .venv/
 
 # Settings (benutzerspezifisch)
-data/settings.json
-config/cameras.yaml
-data/session.json
-data/workflows/
+config/settings.json
 data/last_workflow.json
+data/integration_state.json
+workflows/

@@ -15,7 +15,14 @@ from pathlib import Path
 import pytest
 
 # --- Modulimport (kein Qt nötig) ---
-from src.workflow import FileEntry, WorkflowJob, Workflow, _migrate_source_to_job
+from src.workflow import (
+    FileEntry,
+    Workflow,
+    WorkflowJob,
+    _migrate_source_to_job,
+    graph_node_branch_has_targets,
+    graph_source_reaches_type,
+)
 
 
 # ─── FileEntry ────────────────────────────────────────────────────────────────
@@ -81,11 +88,19 @@ class TestWorkflowJob:
         job = WorkflowJob()
         job.status = "Läuft"
         job.progress_pct = 42
+        job.overall_progress_pct = 84
+        job.current_step_key = "convert"
         job.error_msg = "test"
+        job.transfer_status = "Transfer 1/3"
+        job.transfer_progress_pct = 66
         d = job.to_dict()
         assert "status" not in d
         assert "progress_pct" not in d
+        assert "overall_progress_pct" not in d
+        assert "current_step_key" not in d
         assert "error_msg" not in d
+        assert "transfer_status" not in d
+        assert "transfer_progress_pct" not in d
 
     def test_to_dict_contains_core_fields(self):
         job = WorkflowJob(name="Test", encoder="libx264", crf=22)
@@ -168,24 +183,40 @@ class TestWorkflowJob:
 
 class TestWorkflow:
     def _make_workflow(self) -> Workflow:
-        j1 = WorkflowJob(name="Job A")
-        j2 = WorkflowJob(name="Job B", upload_youtube=True)
-        return Workflow(name="Test-WF", jobs=[j1, j2])
+        job = WorkflowJob(name="Job A", upload_youtube=True)
+        return Workflow(name="Test-WF", job=job)
+
+    def _make_multi_workflow(self) -> Workflow:
+        return Workflow(
+            name="Test-WF",
+            jobs=[
+                WorkflowJob(name="Job A", upload_youtube=True),
+                WorkflowJob(name="Job B", upload_kaderblick=True),
+            ],
+        )
 
     def test_to_dict_structure(self):
         wf = self._make_workflow()
         d = wf.to_dict()
         assert d["name"] == "Test-WF"
-        assert isinstance(d["jobs"], list)
-        assert len(d["jobs"]) == 2
-        assert d["jobs"][0]["name"] == "Job A"
+        assert isinstance(d["job"], dict)
+        assert d["job"]["name"] == "Job A"
 
     def test_roundtrip(self):
         wf = self._make_workflow()
         restored = Workflow.from_dict(wf.to_dict())
         assert restored.name == "Test-WF"
-        assert len(restored.jobs) == 2
-        assert restored.jobs[1].upload_youtube is True
+        assert restored.job is not None
+        assert restored.job.upload_youtube is True
+
+    def test_roundtrip_preserves_all_jobs(self):
+        wf = self._make_multi_workflow()
+
+        restored = Workflow.from_dict(wf.to_dict())
+
+        assert [job.name for job in restored.jobs] == ["Job A", "Job B"]
+        assert restored.jobs[0].upload_youtube is True
+        assert restored.jobs[1].upload_kaderblick is True
 
     def test_save_and_load(self):
         wf = self._make_workflow()
@@ -195,7 +226,18 @@ class TestWorkflow:
             assert path.exists()
             loaded = Workflow.load(path)
         assert loaded.name == "Test-WF"
-        assert len(loaded.jobs) == 2
+        assert loaded.job is not None
+        assert loaded.job.name == "Job A"
+
+    def test_save_and_load_preserves_multiple_jobs(self):
+        wf = self._make_multi_workflow()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "workflow.json"
+            wf.save(path)
+            loaded = Workflow.load(path)
+
+        assert [job.name for job in loaded.jobs] == ["Job A", "Job B"]
 
     def test_save_creates_parent_dirs(self):
         wf = self._make_workflow()
@@ -204,7 +246,7 @@ class TestWorkflow:
             wf.save(path)
             assert path.exists()
             loaded = Workflow.load(path)
-        assert len(loaded.jobs) == 2
+        assert loaded.job is not None
 
     def test_shutdown_after_defaults_false(self):
         wf = Workflow()
@@ -213,9 +255,7 @@ class TestWorkflow:
         assert d["shutdown_after"] is False
 
     def test_json_valid_utf8(self):
-        wf = Workflow(name="Umlaut: äöü ß", jobs=[
-            WorkflowJob(name="Auftrag: Þórsmörk")
-        ])
+        wf = Workflow(name="Umlaut: äöü ß", job=WorkflowJob(name="Auftrag: Þórsmörk"))
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "wf.json"
             wf.save(path)
@@ -223,6 +263,49 @@ class TestWorkflow:
             # ensure_ascii=False → Umlaute werden direkt gespeichert
             assert "äöü" in raw
             assert "Þórsmörk" in raw
+
+    def test_branch_aware_reachability_filters_validation_outputs(self):
+        job = WorkflowJob(
+            name="Validation Graph",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4", graph_source_id="source-files-1")],
+            graph_nodes=[
+                {"id": "source-files-1", "type": "source_files"},
+                {"id": "validate-1", "type": "validate_surface"},
+                {"id": "repair-1", "type": "repair"},
+                {"id": "yt-1", "type": "yt_version"},
+            ],
+            graph_edges=[
+                {"source": "source-files-1", "target": "validate-1"},
+                {"source": "validate-1", "target": "repair-1", "branch": "repairable"},
+                {"source": "validate-1", "target": "yt-1", "branch": "ok"},
+                {"source": "repair-1", "target": "yt-1"},
+            ],
+        )
+
+        assert graph_source_reaches_type(job, "source-files-1", "repair") is True
+        assert graph_source_reaches_type(job, "source-files-1", "repair", {"validate-1": "ok"}) is False
+        assert graph_source_reaches_type(job, "source-files-1", "repair", {"validate-1": "repairable"}) is True
+        assert graph_source_reaches_type(job, "source-files-1", "yt_version", {"validate-1": "ok"}) is True
+
+    def test_validation_branch_target_detection_respects_connected_outputs(self):
+        job = WorkflowJob(
+            name="Validation Graph",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4", graph_source_id="source-files-1")],
+            graph_nodes=[
+                {"id": "source-files-1", "type": "source_files"},
+                {"id": "validate-1", "type": "validate_surface"},
+                {"id": "repair-1", "type": "repair"},
+            ],
+            graph_edges=[
+                {"source": "source-files-1", "target": "validate-1"},
+                {"source": "validate-1", "target": "repair-1", "branch": "repairable"},
+            ],
+        )
+
+        assert graph_node_branch_has_targets(job, "validate-1", "repairable") is True
+        assert graph_node_branch_has_targets(job, "validate-1", "irreparable") is False
 
 
 # ─── Migration ────────────────────────────────────────────────────────────────
@@ -278,8 +361,8 @@ class TestMigration:
             "sources": [self._old_source_pi()],
         }
         wf = Workflow.from_dict(old_data)
-        assert len(wf.jobs) == 1
-        assert wf.jobs[0].source_mode == "pi_download"
+        assert wf.job is not None
+        assert wf.job.source_mode == "pi_download"
 
     def test_folder_scan_migration(self):
         source = {

@@ -11,11 +11,10 @@ Aufruf:
     python main.py [OPTIONEN]
 
 Optionen:
-    --cameras-config PFAD   Kamera-YAML importieren statt gespeicherter Daten
     --workflow PFAD         Workflow-JSON laden und sofort ausführen
     --add DATEI [DATEI …]  Dateien beim Start in die Jobliste laden
-    --restore-session       Session-Wiederherstellung erzwingen
-    --no-restore-session    Session-Wiederherstellung unterdrücken
+    --restore-last-workflow       Wiederherstellung des letzten Workflows erzwingen
+    --no-restore-last-workflow    Wiederherstellung unterdrücken
 """
 
 import argparse
@@ -36,12 +35,6 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Video Manager – Video-Verarbeitung für Fußballverein-Kameras",
     )
     p.add_argument(
-        "--cameras-config",
-        metavar="PFAD",
-        help="Pfad zu einer cameras.yaml, deren Einstellungen beim Start "
-             "importiert werden (überschreibt die gespeicherten Kameradaten).",
-    )
-    p.add_argument(
         "--workflow",
         metavar="PFAD",
         help="Pfad zu einer Workflow-JSON-Datei. "
@@ -56,17 +49,17 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     session_grp = p.add_mutually_exclusive_group()
     session_grp.add_argument(
-        "--restore-session",
+        "--restore-last-workflow",
         action="store_true",
         default=None,
-        help="Session-Wiederherstellung erzwingen "
+        help="Wiederherstellung des letzten Workflows erzwingen "
              "(unabhängig von der gespeicherten Einstellung).",
     )
     session_grp.add_argument(
-        "--no-restore-session",
+        "--no-restore-last-workflow",
         action="store_true",
         default=None,
-        help="Session-Wiederherstellung unterdrücken.",
+        help="Wiederherstellung des letzten Workflows unterdrücken.",
     )
     return p
 

@@ -4,8 +4,9 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
-from ..merge import generate_title_card
-from ..ffmpeg_runner import get_resolution
+from ..media.merge import generate_title_card
+from ..media.ffmpeg_runner import get_resolution
+from ..media.step_reporting import format_media_artifact
 from .models import PreparedOutput
 
 
@@ -13,12 +14,16 @@ class TitleCardStep:
     name = "titlecard"
 
     def execute(self, executor: Any, prepared: PreparedOutput) -> int:
-        if not (prepared.job.title_card_enabled and prepared.cv_job.output_path):
+        title_card_enabled = prepared.title_card_enabled_override
+        if title_card_enabled is None:
+            title_card_enabled = prepared.job.title_card_enabled
+        if not (title_card_enabled and prepared.cv_job.output_path):
             return 0
         reused_path = self._find_existing_titlecard_output(prepared)
         if reused_path is not None and reused_path.exists() and not prepared.per_settings.video.overwrite:
             prepared.cv_job.output_path = reused_path
             executor._set_step_status(prepared.job, "titlecard", "reused-target")
+            executor._set_step_detail(prepared.job, "titlecard", format_media_artifact(reused_path))
             executor._set_job_status(prepared.orig_idx, f"Titelkarte OK (vorhanden): {reused_path.name}")
             executor.job_progress.emit(prepared.orig_idx, 100)
             return 0
@@ -36,9 +41,11 @@ class TitleCardStep:
         )
         if not success:
             executor._set_step_status(prepared.job, "titlecard", "error")
+            executor._set_step_detail(prepared.job, "titlecard", f"Titelkarte fehlgeschlagen für {prepared.cv_job.source_path.name}")
             executor._set_job_status(prepared.orig_idx, "Titelkarte fehlgeschlagen")
             return 0
         executor._set_step_status(prepared.job, "titlecard", "done")
+        executor._set_step_detail(prepared.job, "titlecard", format_media_artifact(prepared.cv_job.output_path))
         executor.job_progress.emit(prepared.orig_idx, 100)
         return 0
 

@@ -8,7 +8,7 @@ from PySide6.QtCore import Qt
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
-from src.dialogs import ShutdownCountdownDialog
+from src.ui.dialogs import ShutdownCountdownDialog
 
 
 class TestShutdownCountdownDialog:

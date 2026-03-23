@@ -81,21 +81,20 @@ python main.py
 
 | Option | Beschreibung |
 |---|---|
-| `--cameras-config PFAD` | Importiert die Kamera-Konfiguration aus einer `cameras.yaml` und überschreibt die gespeicherten Kameradaten. |
 | `--workflow PFAD` | Lädt eine Workflow-JSON-Datei und führt sie nach dem Start automatisch aus. |
 | `--add DATEI [DATEI …]` | Fügt die angegebenen Dateien (oder alle Dateien in Ordnern) beim Start in die Jobliste ein. |
-| `--restore-session` | Erzwingt die Wiederherstellung der letzten Jobliste (unabhängig von der Einstellung). |
-| `--no-restore-session` | Unterdrückt die Session-Wiederherstellung. |
+| `--restore-last-workflow` | Erzwingt die Wiederherstellung des zuletzt gespeicherten Workflows (unabhängig von der Einstellung). |
+| `--no-restore-last-workflow` | Unterdrückt die Wiederherstellung des zuletzt gespeicherten Workflows. |
 | `-h`, `--help` | Zeigt die Hilfe mit allen Optionen an. |
 
 **Beispiele:**
 
 ```bash
 # Workflow direkt aus der Kommandozeile laden und starten
-python main.py --workflow data/workflows/spieltag.json
+python main.py --workflow workflows/spieltag.json
 
-# Kamera-YAML importieren und Session erzwingen
-python main.py --cameras-config config/cameras.yaml --restore-session
+# Letzten Workflow explizit wiederherstellen
+python main.py --restore-last-workflow
 
 # Dateien vorladen
 python main.py --add /pfad/zu/video1.mjpg /pfad/zu/video2.mjpeg
@@ -109,15 +108,13 @@ python main.py --add /pfad/zu/video1.mjpg /pfad/zu/video2.mjpeg
 video-manager/
 ├── README.md                       <- Diese Datei
 ├── config/                         <- Konfigurationsdateien
-│   ├── cameras.yaml                <- Kamera-Konfiguration (benutzerspezifisch, nicht im Git)
-│   ├── cameras.yaml.dist           <- Vorlage für cameras.yaml
+│   ├── settings.json               <- Persistente App- und Kamera-Einstellungen
 │   └── client_secret.json          <- YouTube OAuth (manuell, nicht im Git)
 ├── data/                           <- Laufzeitdaten (automatisch erzeugt)
-│   ├── settings.json               <- Persistente GUI-Einstellungen
-│   ├── session.json                <- Letzte Jobliste (für Session-Restore)
-│   ├── last_workflow.json          <- Letzter Workflow (für Schnell-Wiederholung)
-│   ├── workflows/                  <- Gespeicherte Workflows (JSON)
+│   ├── last_workflow.json          <- Letzter Workflow-Zustand für Wiederherstellung
+│   ├── integration_state.json      <- Upload-Register und Metadaten-Historie
 │   └── youtube_token.json          <- YouTube OAuth-Token (automatisch)
+├── workflows/                      <- Manuell gespeicherte Workflow-Dateien (JSON)
 ├── docs/
 │   └── youtube_credentials.md     <- Doku: YouTube-API-Setup
 ├── main.py                         <- GUI-Einstiegspunkt
@@ -220,7 +217,7 @@ Pi-Kamera-Downloads werden als Aufträge über den **Job-Editor** angelegt:
 ### Kamera-Konfiguration
 
 Geräte werden über **Einstellungen → Kameras** verwaltet. Dort können Geräte angelegt, bearbeitet
-und gelöscht werden. Optional lassen sich Geräte aus einer bestehenden `cameras.yaml` importieren.
+und gelöscht werden.
 
 Jedes Gerät benötigt:
 
@@ -435,7 +432,7 @@ Die gesamte Auftragsliste kann als JSON-Datei gespeichert und wieder geladen wer
 - **Datei → Workflow laden … (Strg+I)** – Lädt Aufträge aus einer `.json`-Datei
 - **Toolbar: Laden / Speichern** – dieselben Funktionen direkt über die Toolbar
 
-Gespeicherte Workflows liegen standardmäßig unter `data/workflows/`. So lassen sich vorbereitete
+Gespeicherte Workflows liegen standardmäßig unter `workflows/`. So lassen sich vorbereitete
 Auftragslisten teilen oder für wiederkehrende Aufgaben (z. B. Spieltag) wiederverwenden.
 
 > **CLI:** Mit `--workflow PFAD` kann ein gespeicherter Workflow beim Start automatisch geladen und
@@ -513,7 +510,7 @@ Die Datei kann manuell bearbeitet werden – ungültige Werte werden durch Stand
     "upload_to_youtube": false
   },
   "last_directory": "/media/videos/Aufnahmen",
-  "restore_session": false
+  "restore_last_workflow": false
 }
 ```
 

@@ -48,6 +48,11 @@ class DirectFilesTransferStep:
             emit_item_progress(executor, orig_idx, entry_idx, total_entries)
 
         executor.log_message.emit(f"\n🗃 {job.name}: {len(paths)} Datei(en) bereit")
+        executor._set_step_detail(
+            job,
+            "transfer",
+            f"Bereit: {len(paths)} Datei(en) | {', '.join(path.name for path in paths[:4])}{' …' if len(paths) > 4 else ''}",
+        )
 
         dst_dir = Path(job.copy_destination) if job.copy_destination else None
         if not dst_dir:

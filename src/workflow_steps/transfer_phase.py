@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..converter import ConvertJob
+from ..media.converter import ConvertJob
 from ..workflow import WorkflowJob
 from .models import ConvertItem, TransferPhaseResult
 
@@ -16,9 +16,10 @@ class TransferPhase:
         transfer_fail = 0
 
         executor.phase_changed.emit("Phase 1 – Downloads …")
+        workflow_label = "1 aktiver Workflow" if len(active) == 1 else f"{len(active)} aktive Workflows"
         executor.log_message.emit(
             f"\n{'═' * 60}"
-            f"\n  📥 Phase 1: Transfer  ({len(active)} Auftrag/Aufträge)"
+            f"\n  📥 Phase 1: Transfer  ({workflow_label})"
             f"\n{'═' * 60}"
         )
 

@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from ..converter import ConvertJob
+from ..media.converter import ConvertJob
 from ..settings import AppSettings
+from ..media.step_reporting import format_encoder_summary, format_source_target_summary
 from ..workflow import WorkflowJob
 
 
@@ -26,6 +27,11 @@ class ConvertStep:
             cv_job.output_path = existing_output
             cv_job.status = "Fertig"
             executor._set_step_status(job, "convert", "reused-target")
+            executor._set_step_detail(
+                job,
+                "convert",
+                f"{format_source_target_summary(cv_job.source_path, existing_output)} | {format_encoder_summary(per_settings.video.encoder)}",
+            )
             executor._set_job_status(orig_idx, f"Konvertierung OK (vorhanden): {existing_output.name}")
             executor.job_progress.emit(orig_idx, 100)
             return "ready"
@@ -52,12 +58,23 @@ class ConvertStep:
 
         if success and cv_job.status == "Fertig":
             executor._set_step_status(job, "convert", "done")
+            executor._set_step_detail(
+                job,
+                "convert",
+                f"{format_source_target_summary(cv_job.source_path, cv_job.output_path)} | {format_encoder_summary(per_settings.video.encoder)}",
+            )
             return "ok"
         if cv_job.status == "Übersprungen":
             executor._set_step_status(job, "convert", "reused-target")
+            executor._set_step_detail(
+                job,
+                "convert",
+                f"{format_source_target_summary(cv_job.source_path, cv_job.output_path)} | {format_encoder_summary(per_settings.video.encoder)}",
+            )
             executor.job_progress.emit(orig_idx, 100)
             return "ready"
         executor._set_step_status(job, "convert", "error")
+        executor._set_step_detail(job, "convert", f"Quelle: {cv_job.source_path.name} | Fehler bei Konvertierung")
         return "error"
 
     @staticmethod

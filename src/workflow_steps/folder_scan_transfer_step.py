@@ -21,6 +21,7 @@ class FolderScanTransferStep:
         dst_dir = Path(job.copy_destination) if job.copy_destination else None
         pattern = job.file_pattern or "*.mp4"
         executor.job_progress.emit(orig_idx, 0)
+        executor.source_progress.emit(orig_idx, 0)
 
         if not src_dir.exists():
             fallback = self._existing_targets(job)
@@ -30,6 +31,7 @@ class FolderScanTransferStep:
                 )
                 executor._set_step_status(job, "transfer", "reused-target")
                 executor.job_progress.emit(orig_idx, 100)
+                executor.source_progress.emit(orig_idx, 100)
                 return fallback
             raise FileNotFoundError(f"Quellordner nicht gefunden: {src_dir}")
 
@@ -45,6 +47,7 @@ class FolderScanTransferStep:
                 return fallback
             executor.log_message.emit(f"  ⚠ Keine Dateien mit Muster '{pattern}' in {src_dir}")
             executor.job_progress.emit(orig_idx, 100)
+            executor.source_progress.emit(orig_idx, 100)
             return []
 
         if not dst_dir:
@@ -54,15 +57,26 @@ class FolderScanTransferStep:
                 emit_item_progress(executor, orig_idx, file_idx, total_files)
             executor.log_message.emit(f"\n📁 {job.name}: {len(files)} Datei(en) gefunden")
             executor.job_progress.emit(orig_idx, 100)
+            executor.source_progress.emit(orig_idx, 100)
             ready = [str(path) for path in files]
             if on_file_ready is not None:
                 for path in ready:
                     on_file_ready(path)
+            executor._set_step_detail(
+                job,
+                "transfer",
+                f"Gefunden: {len(files)} Datei(en) in {src_dir.name} | Muster: {pattern}",
+            )
             return ready
 
         dst_dir.mkdir(parents=True, exist_ok=True)
         verb = "verschieben" if job.move_files else "kopieren"
         executor.log_message.emit(f"\n📁 {job.name}: {len(files)} Datei(en) {verb} …")
+        executor._set_step_detail(
+            job,
+            "transfer",
+            f"Quelle: {src_dir.name} | {len(files)} Datei(en) werden {verb}",
+        )
         return transfer_files(executor, orig_idx, job, files, dst_dir, on_file_ready=on_file_ready)
 
     @staticmethod

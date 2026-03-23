@@ -10,11 +10,11 @@ import pytest
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from src.app import ConverterApp, _planned_job_steps
-from src.converter import ConvertJob
+from src.media.converter import ConvertJob
 from src.settings import AppSettings
 from src.workflow import FileEntry, Workflow, WorkflowJob
-from src.workflow_executor import WorkflowExecutor
-from src.workflow_steps import OutputStepStack, PreparedOutput
+from src.runtime.workflow_executor import WorkflowExecutor
+from src.workflow_steps import ExecutorSupport, OutputStepStack, PreparedOutput
 
 _app = QApplication.instance() or QApplication(sys.argv)
 
@@ -116,9 +116,10 @@ class _DummyThread:
 
 
 class _DummyExecutor:
-    def __init__(self, workflow, settings):
+    def __init__(self, workflow, settings, active_indices=None, **_kwargs):
         self.workflow = workflow
         self.settings = settings
+        self.active_indices = active_indices or []
         self.log_message = _DummySignal()
         self.job_status = _DummySignal()
         self.job_progress = _DummySignal()
@@ -148,6 +149,7 @@ class _FakeExecutor:
         self.phase_changed = _Emitter()
         self.job_progress = _Emitter()
         self.status_updates = []
+        self.step_details = []
 
     def _set_step_status(self, job, step, status):
         if not isinstance(job.step_statuses, dict):
@@ -157,6 +159,12 @@ class _FakeExecutor:
     def _set_job_status(self, orig_idx, status):
         self.status_updates.append((orig_idx, status))
 
+    def _set_step_detail(self, job, step, detail):
+        if not isinstance(job.step_details, dict):
+            job.step_details = {}
+        job.step_details[step] = detail
+        self.step_details.append((step, detail))
+
     @staticmethod
     def _find_file_entry(job, file_path):
         target = Path(file_path).name
@@ -164,6 +172,18 @@ class _FakeExecutor:
             if Path(entry.source_path).name == target:
                 return entry
         return None
+
+    @staticmethod
+    def _prepared_output_reaches_type(prepared, target_type):
+        return ExecutorSupport.prepared_output_reaches_type(prepared, target_type)
+
+    @staticmethod
+    def _graph_node_id_for_type(job, node_type):
+        return ExecutorSupport.graph_node_id_for_type(job, node_type)
+
+    @staticmethod
+    def _validation_branch_has_targets(prepared, node_type, branch):
+        return ExecutorSupport.validation_branch_has_targets(prepared, node_type, branch)
 
 
 class _Emitter:
@@ -281,7 +301,7 @@ def test_restart_clears_resume_state_for_all_step_constellations(scenario: StepS
         job.step_statuses = {step: "done" for step in scenario.expected_steps}
         window._workflow = Workflow(jobs=[job])
         window._refresh_table()
-        window._save_session = MagicMock()
+        window._save_last_workflow = MagicMock()
 
         with patch.object(window, "_ask_resume_behavior", return_value=QMessageBox.No), patch(
             "src.app.QThread", _DummyThread
@@ -306,7 +326,7 @@ def test_resume_preserves_state_for_all_step_constellations(scenario: StepScenar
         job.step_statuses = {step: "done" for step in scenario.expected_steps}
         window._workflow = Workflow(jobs=[job])
         window._refresh_table()
-        window._save_session = MagicMock()
+        window._save_last_workflow = MagicMock()
 
         with patch.object(window, "_ask_resume_behavior", return_value=QMessageBox.Yes), patch(
             "src.app.QThread", _DummyThread
@@ -331,7 +351,7 @@ def test_workflow_completion_matrix(tmp_path, scenario: StepScenario):
     executor.finished.connect(lambda ok, skip, fail: finished.append((ok, skip, fail)))
 
     with patch("src.workflow_steps.title_card_step.generate_title_card", side_effect=_fake_generate_title_card), patch(
-        "src.workflow_executor.get_youtube_service",
+        "src.runtime.workflow_executor.get_youtube_service",
         return_value=MagicMock() if scenario.youtube_upload else None,
     ), patch(
         "src.workflow_steps.youtube_upload_step.get_video_id_for_output",
@@ -377,6 +397,9 @@ def test_output_step_resume_matrix(tmp_path, scenario: StepScenario):
     with patch(
         "src.workflow_steps.title_card_step.TitleCardStep._prepend_title_card",
         side_effect=AssertionError("titlecard should be reused, not regenerated"),
+    ), patch(
+        "src.workflow_steps.youtube_version_step.validate_media_output",
+        return_value=True,
     ), patch(
         "src.workflow_steps.youtube_upload_step.get_video_id_for_output",
         return_value="video-123" if scenario.youtube_upload else None,

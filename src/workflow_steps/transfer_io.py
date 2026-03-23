@@ -24,6 +24,7 @@ def transfer_files(
     result: list[str] = []
 
     executor.job_progress.emit(orig_idx, 0)
+    executor.source_progress.emit(orig_idx, 0)
 
     for file_idx, source_path in enumerate(paths, start=1):
         if executor._cancel.is_set():
@@ -65,14 +66,18 @@ def transfer_files(
 
     if not executor._cancel.is_set():
         executor.job_progress.emit(orig_idx, 100)
+        executor.source_progress.emit(orig_idx, 100)
     return result
 
 
 def emit_item_progress(executor: Any, orig_idx: int, done: int, total: int) -> None:
     if total <= 0:
         executor.job_progress.emit(orig_idx, 100)
+        executor.source_progress.emit(orig_idx, 100)
         return
-    executor.job_progress.emit(orig_idx, int(done / total * 100))
+    pct = int(done / total * 100)
+    executor.job_progress.emit(orig_idx, pct)
+    executor.source_progress.emit(orig_idx, pct)
 
 
 def _move_path_with_progress(
@@ -147,6 +152,7 @@ def _emit_progress(
     else:
         pct = 100
     executor.job_progress.emit(orig_idx, pct)
+    executor.source_progress.emit(orig_idx, pct)
 
 
 def _path_size(path: Path) -> int:

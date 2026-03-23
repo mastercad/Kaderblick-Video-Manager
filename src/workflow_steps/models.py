@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
-from ..converter import ConvertJob
+from ..media.converter import ConvertJob
 from ..settings import AppSettings
 from ..workflow import WorkflowJob
 
@@ -15,6 +15,15 @@ class PreparedOutput:
     per_settings: AppSettings
     status_prefix: str = ""
     mark_finished: bool = True
+    title_card_enabled_override: bool | None = None
+    repair_enabled_override: bool | None = None
+    youtube_version_enabled_override: bool | None = None
+    youtube_upload_enabled_override: bool | None = None
+    kaderblick_enabled_override: bool | None = None
+    graph_origin_node_id: str = ""
+    graph_origin_kind: str = "source"
+    validation_results: dict[str, str] = field(default_factory=dict)
+    terminal_status_text: str = ""
 
 
 @dataclass

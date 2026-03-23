@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from ..kaderblick import get_recorded_kaderblick_id, post_to_kaderblick as kaderblick_post
-from ..youtube import get_video_id_for_output
+from ..integrations.kaderblick import get_recorded_kaderblick_id, post_to_kaderblick as kaderblick_post
+from ..integrations.youtube import get_video_id_for_output
 from .models import PreparedOutput
 
 
@@ -16,7 +17,10 @@ class KaderblickPostStep:
         prepared: PreparedOutput,
         kb_sort_index: dict[tuple[str, str], int],
     ) -> int:
-        if not (prepared.job.upload_kaderblick and prepared.job.upload_youtube):
+        kaderblick_enabled = prepared.kaderblick_enabled_override
+        if kaderblick_enabled is None:
+            kaderblick_enabled = prepared.job.upload_kaderblick and prepared.job.upload_youtube
+        if not kaderblick_enabled:
             return 0
         existing_video_id = None
         if prepared.cv_job.output_path:
@@ -24,6 +28,11 @@ class KaderblickPostStep:
         existing_kaderblick_id = get_recorded_kaderblick_id(existing_video_id or "")
         if existing_kaderblick_id is not None:
             executor._set_step_status(prepared.job, "kaderblick", "reused-target")
+            executor._set_step_detail(
+                prepared.job,
+                "kaderblick",
+                self._build_summary(executor, prepared, existing_video_id, existing_kaderblick_id, kb_sort_index),
+            )
             executor._set_job_status(prepared.orig_idx, f"Kaderblick OK (vorhanden): {existing_kaderblick_id}")
             executor.job_progress.emit(prepared.orig_idx, 100)
             return 0
@@ -40,9 +49,17 @@ class KaderblickPostStep:
         )
         if not ok:
             executor._set_step_status(prepared.job, "kaderblick", "error")
+            executor._set_step_detail(prepared.job, "kaderblick", self._build_error_summary(executor, prepared, kb_sort_index))
             executor._set_job_status(prepared.orig_idx, "Kaderblick fehlgeschlagen")
             return 1
         executor._set_step_status(prepared.job, "kaderblick", "done")
+        current_video_id = get_video_id_for_output(prepared.cv_job.output_path) if prepared.cv_job.output_path else None
+        current_kaderblick_id = get_recorded_kaderblick_id(current_video_id or "")
+        executor._set_step_detail(
+            prepared.job,
+            "kaderblick",
+            self._build_summary(executor, prepared, current_video_id, current_kaderblick_id, kb_sort_index),
+        )
         executor.job_progress.emit(prepared.orig_idx, 100)
         return 0
 
@@ -80,11 +97,19 @@ class KaderblickPostStep:
         )
         game_start = entry.kaderblick_game_start if entry else 0
         video_type_id = (
-            (entry.kaderblick_video_type_id if entry and entry.kaderblick_video_type_id else 0)
+            (
+                job.merge_output_kaderblick_video_type_id
+                if entry and entry.merge_group_id and job.merge_output_kaderblick_video_type_id
+                else (entry.kaderblick_video_type_id if entry and entry.kaderblick_video_type_id else 0)
+            )
             or job.default_kaderblick_video_type_id
         )
         camera_id = (
-            (entry.kaderblick_camera_id if entry and entry.kaderblick_camera_id else 0)
+            (
+                job.merge_output_kaderblick_camera_id
+                if entry and entry.merge_group_id and job.merge_output_kaderblick_camera_id
+                else (entry.kaderblick_camera_id if entry and entry.kaderblick_camera_id else 0)
+            )
             or job.default_kaderblick_camera_id
         )
 
@@ -102,3 +127,34 @@ class KaderblickPostStep:
             sort_index=sort_index,
             log_callback=executor.log_message.emit,
         )
+
+    @staticmethod
+    def _build_error_summary(executor: Any, prepared: PreparedOutput, kb_sort_index: dict[tuple[str, str], int]) -> str:
+        entry = executor._find_file_entry(prepared.job, str(prepared.cv_job.source_path))
+        game_id = (entry.kaderblick_game_id if entry and entry.kaderblick_game_id else "") or prepared.job.default_kaderblick_game_id
+        return f"Video: {prepared.cv_job.youtube_title or prepared.cv_job.source_path.stem} | Spiel: {game_id or '-'} | Ergebnis: Kaderblick fehlgeschlagen"
+
+    @staticmethod
+    def _build_summary(executor: Any, prepared: PreparedOutput, youtube_video_id: str | None, kaderblick_id: int | None, kb_sort_index: dict[tuple[str, str], int]) -> str:
+        entry = executor._find_file_entry(prepared.job, str(prepared.cv_job.source_path))
+        game_id = (entry.kaderblick_game_id if entry and entry.kaderblick_game_id else "") or prepared.job.default_kaderblick_game_id
+        video_type_id = (
+            (entry.kaderblick_video_type_id if entry and entry.kaderblick_video_type_id else 0)
+            or prepared.job.default_kaderblick_video_type_id
+        )
+        camera_id = (
+            (entry.kaderblick_camera_id if entry and entry.kaderblick_camera_id else 0)
+            or prepared.job.default_kaderblick_camera_id
+        )
+        sort_index = kb_sort_index.get((game_id, Path(prepared.cv_job.source_path).name), 1)
+        parts = [
+            f"Video: {prepared.cv_job.youtube_title or prepared.cv_job.source_path.stem}",
+            f"YouTube-ID: {youtube_video_id or '-'}",
+            f"Spiel: {game_id or '-'}",
+            f"Video-Typ: {video_type_id or '-'}",
+            f"Kamera: {camera_id or '-'}",
+            f"Sortierung: {sort_index}",
+        ]
+        if kaderblick_id is not None:
+            parts.append(f"Kaderblick-ID: {kaderblick_id}")
+        return " | ".join(parts)

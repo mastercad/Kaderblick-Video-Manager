@@ -22,4 +22,3 @@ google-auth-oauthlib>=1.1.0
 # Der eigentliche Dateitransfer läuft bevorzugt über rsync (System-Paket).
 # Systemabhängigkeiten (optional): rsync, sshpass (sudo apt install rsync sshpass)
 paramiko>=2.11.0
-PyYAML>=6.0

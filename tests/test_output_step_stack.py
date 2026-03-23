@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 import pytest
 
-from src.converter import ConvertJob
+from src.media.converter import ConvertJob
 from src.settings import AppSettings
 from src.workflow import FileEntry, WorkflowJob
-from src.workflow_steps import OutputStepStack, PreparedOutput
+from src.workflow_steps import ExecutorSupport, OutputStepStack, PreparedOutput
 
 
 class _DummyEmitter:
@@ -28,6 +28,7 @@ class _FakeExecutor:
         self.phase_changed = _DummyEmitter()
         self.job_progress = _DummyEmitter()
         self.status_updates = []
+        self.step_details = []
 
     def _set_step_status(self, job, step, status):
         if not isinstance(job.step_statuses, dict):
@@ -37,6 +38,12 @@ class _FakeExecutor:
     def _set_job_status(self, orig_idx, status):
         self.status_updates.append((orig_idx, status))
 
+    def _set_step_detail(self, job, step, detail):
+        if not isinstance(job.step_details, dict):
+            job.step_details = {}
+        job.step_details[step] = detail
+        self.step_details.append((step, detail))
+
     @staticmethod
     def _find_file_entry(job, file_path):
         target = Path(file_path).name
@@ -44,6 +51,18 @@ class _FakeExecutor:
             if Path(entry.source_path).name == target:
                 return entry
         return None
+
+    @staticmethod
+    def _prepared_output_reaches_type(prepared, target_type):
+        return ExecutorSupport.prepared_output_reaches_type(prepared, target_type)
+
+    @staticmethod
+    def _graph_node_id_for_type(job, node_type):
+        return ExecutorSupport.graph_node_id_for_type(job, node_type)
+
+    @staticmethod
+    def _validation_branch_has_targets(prepared, node_type, branch):
+        return ExecutorSupport.validation_branch_has_targets(prepared, node_type, branch)
 
 
 def _prepared_output(tmp_path, *, title=False, yt_version=False, yt_upload=False, kaderblick=False):
@@ -359,12 +378,13 @@ def test_output_step_stack_reuses_existing_youtube_version(tmp_path):
         AssertionError("yt version should be reused, not regenerated")
     )
 
-    failures = stack.execute(
-        executor,
-        prepared,
-        yt_service=object(),
-        kb_sort_index={},
-    )
+    with patch("src.workflow_steps.youtube_version_step.validate_media_output", return_value=True):
+        failures = stack.execute(
+            executor,
+            prepared,
+            yt_service=object(),
+            kb_sort_index={},
+        )
 
     assert failures == 0
     assert prepared.job.step_statuses["yt_version"] == "reused-target"

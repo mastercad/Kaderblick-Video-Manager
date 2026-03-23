@@ -9,10 +9,14 @@ from .convert_step import ConvertStep
 from .delete_sources_step import DeleteSourcesStep
 from .merge_group_step import MergeGroupStep
 from .processing_phase import ProcessingPhase
+from .cleanup_output_step import CleanupOutputStep
+from .repair_output_step import RepairOutputStep
+from .stop_output_step import StopOutputStep
 from .title_card_step import TitleCardStep
 from .youtube_version_step import YoutubeVersionStep
 from .youtube_upload_step import YoutubeUploadStep
 from .kaderblick_post_step import KaderblickPostStep
+from .output_validation_step import OutputValidationStep
 from .output_step_stack import OutputStepStack
 
 __all__ = [
@@ -30,9 +34,13 @@ __all__ = [
     "DeleteSourcesStep",
     "MergeGroupStep",
     "ProcessingPhase",
+    "CleanupOutputStep",
+    "RepairOutputStep",
+    "StopOutputStep",
     "TitleCardStep",
     "YoutubeVersionStep",
     "YoutubeUploadStep",
     "KaderblickPostStep",
+    "OutputValidationStep",
     "OutputStepStack",
 ]
