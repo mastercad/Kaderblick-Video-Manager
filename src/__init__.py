@@ -1,1 +1,1 @@
-"""Video Manager – Modulpaket."""
+"""Kaderblick — Video Manager — Modulpaket."""

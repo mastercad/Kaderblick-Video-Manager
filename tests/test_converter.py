@@ -118,8 +118,8 @@ class TestEmbeddedMetadata:
         assert "title=2026-03-22 | Heim vs Gast | 1. Halbzeit" in args
         assert "description=Beschreibung zum Spiel" in args
         assert any(value.startswith("comment=Beschreibung zum Spiel") for value in args)
-        assert "software=Kaderblick Video Manager" in args
-        assert "author=Kaderblick Video Manager" in args
+        assert "software=Kaderblick — Video Manager" in args
+        assert "author=Kaderblick — Video Manager" in args
         assert "album=22.03.2026 | Liga | Heim vs Gast" in args
         assert "keywords=Fußball, Liga, Heim, Gast" in args
 
@@ -357,7 +357,7 @@ class TestRunConcat:
         cmd = mock_ffmpeg.call_args[0][0]
         assert "title=Merge Titel" in cmd
         assert "description=Merge Beschreibung" in cmd
-        assert "software=Kaderblick Video Manager" in cmd
+        assert "software=Kaderblick" in cmd
 
 
 class TestRunYouTubeConvert:
@@ -428,7 +428,7 @@ class TestRunYouTubeConvert:
         assert "title=Merge Titel" in cmd
         assert "description=Ausführliche Beschreibung" in cmd
         assert "album=Merge Playlist" in cmd
-        assert "software=Kaderblick Video Manager" in cmd
+        assert "software=Kaderblick" in cmd
 
     @patch("src.media.converter.validate_media_output", return_value=True)
     @patch("src.media.converter.build_video_encoder_args",

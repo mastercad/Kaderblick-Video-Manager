@@ -8,7 +8,7 @@ from .defs import _NODE_DEFINITIONS, _node_visual_state, _paint_node_card
 
 
 class _WorkflowNodePalette(QListWidget):
-    MIME_TYPE = "application/x-video-manager-node"
+    MIME_TYPE = "application/x-kaderblick-video-manager-node"
     ROLE_KIND = Qt.ItemDataRole.UserRole + 50
     ROLE_NODE_TYPE = Qt.ItemDataRole.UserRole + 51
     KIND_HEADER = "header"

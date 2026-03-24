@@ -1,4 +1,4 @@
-# Fussballverein – Video Manager
+# Kaderblick — Video Manager
 
 Grafische Oberfläche für die Video-Konvertierung und den Download von Videos von Raspberry Pi
 Kamera-Systemen (Kaderblick). Unterstützt sowohl MJPEG-Rohstreams (Pi-Kameras) als auch reguläre
@@ -8,7 +8,7 @@ Halbzeit-Zusammenführung, persistenten Einstellungen, Hintergrund-Verarbeitung 
 **Job-Editor** für die komfortable Konfiguration einzelner Verarbeitungs-Aufträge.
 
 <p align="center">
-  <img src="assets/application_main.png" alt="Video Manager — Hauptbildschirm" width="600">
+  <img src="assets/application_main.png" alt="Kaderblick — Video Manager — Hauptbildschirm" width="600">
 </p>
 
 Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_credentials.md)
@@ -105,7 +105,7 @@ python main.py --add /pfad/zu/video1.mjpg /pfad/zu/video2.mjpeg
 ## Projektstruktur
 
 ```
-video-manager/
+projekt-root/
 ├── README.md                       <- Diese Datei
 ├── config/                         <- Konfigurationsdateien
 │   ├── settings.json               <- Persistente App- und Kamera-Einstellungen
@@ -116,28 +116,11 @@ video-manager/
 │   └── youtube_token.json          <- YouTube OAuth-Token (automatisch)
 ├── workflows/                      <- Manuell gespeicherte Workflow-Dateien (JSON)
 ├── docs/
-│   └── youtube_credentials.md     <- Doku: YouTube-API-Setup
+│   └── youtube_credentials.md      <- Doku: YouTube-API-Setup
 ├── main.py                         <- GUI-Einstiegspunkt
 ├── src/                            <- Anwendungspaket
 │   ├── __init__.py
-│   ├── app.py                      <- Hauptfenster (QMainWindow)
-│   ├── converter.py                <- Konvertierungslogik (MJPEG + Container) und Job-Datenklasse
-│   ├── delegates.py                <- Fortschrittsbalken in der Tabelle
-│   ├── diagnostics.py              <- GPU- und System-Diagnose
-│   ├── dialogs.py                  <- Einstellungs- und Bearbeitungsdialoge
-│   ├── download_dialog.py          <- Dialog: Raspberry Pi Download
-│   ├── download_worker.py          <- Worker-Thread: Download (rsync/SFTP)
-│   ├── downloader.py               <- Download-Logik (rsync primär, SFTP Fallback)
-│   ├── encoder.py                  <- Encoder-Auflösung und ffmpeg-Argumente
-│   ├── ffmpeg_runner.py            <- ffmpeg-Prozesssteuerung und ffprobe-Helfer
-│   ├── file_list_widget.py         <- Wiederverwendbares Dateilisten-Widget
-│   ├── job_editor.py               <- Job-Editor-Dialog (Quelle, Verarbeitung, Audio, YouTube)
-│   ├── merge.py                    <- Halbzeiten zusammenführen
-│   ├── settings.py                 <- Einstellungen, Profile, Persistenz
-│   ├── worker.py                   <- Worker-Thread: Konvertierung
-│   ├── workflow.py                 <- Workflow-Datenmodell (Aufträge + Einträge)
-│   ├── workflow_dialog.py          <- Auftragslisten-Dialog (Verwalten, Laden, Speichern, Starten)
-│   ├── workflow_executor.py        <- Workflow-Ausführung (Transfer → Konvertierung)
+│   └── ...
 │   └── youtube.py                  <- YouTube-Upload und OAuth
 └── requirements.txt                <- Python-Abhängigkeiten
 ```

@@ -29,7 +29,7 @@ from ..integrations.youtube_title_editor import build_output_filename_from_title
 # Rohe MJPEG-Streams benötigen -framerate/-f mjpeg Input-Flags.
 # Alles andere ist ein regulärer Container.
 _MJPEG_EXTS = {".mjpg", ".mjpeg"}
-_EMBEDDED_METADATA_SOFTWARE = "Kaderblick Video Manager"
+_EMBEDDED_METADATA_SOFTWARE = "Kaderblick — Video Manager "
 
 
 def _build_scale_pad_filter(width: int, height: int) -> str:

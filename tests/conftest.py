@@ -1,4 +1,4 @@
-"""pytest-Konfiguration für das video-manager Projekt."""
+"""pytest-Konfiguration für das Kaderblick — Video Manager-Projekt."""
 
 import sys
 from pathlib import Path

@@ -1,4 +1,4 @@
-"""Main window facade for the video manager."""
+"""Main window facade for Kaderblick — Video Manager."""
 
 from __future__ import annotations
 
@@ -80,7 +80,7 @@ class ConverterApp(QMainWindow):
         super().__init__()
         from . import AppSettings
 
-        self.setWindowTitle("Video Manager")
+        self.setWindowTitle("Kaderblick — Video Manager")
         self.resize(960, 640)
         self.setMinimumSize(720, 460)
 

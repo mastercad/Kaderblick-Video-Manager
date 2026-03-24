@@ -122,7 +122,6 @@ class WorkflowExecutorPipelineMixin:
             upload_thread = threading.Thread(target=_upload_worker, name="workflow-upload", daemon=True)
             upload_thread.start()
 
-        self.phase_changed.emit("Pipeline – Transfer & Verarbeitung …")
         workflow_label = "1 aktiver Workflow" if len(active) == 1 else f"{len(active)} aktive Workflows"
         self.log_message.emit(
             f"\n{'═' * 60}"

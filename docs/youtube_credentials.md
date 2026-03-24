@@ -18,7 +18,7 @@ Der Upload verwendet die **YouTube Data API v3** mit **OAuth 2.0 (Desktop-App)**
 Die Dateien liegen in den Unterverzeichnissen `config/` und `data/`:
 
 ```
-video-manager/
+projekt-root/
 ├── main.py                     ← GUI-Einstiegspunkt
 ├── src/                        ← Anwendungspaket
 ├── config/
@@ -50,7 +50,7 @@ video-manager/
 
 1. **APIs & Services → OAuth-Zustimmungsbildschirm**
 2. Nutzertyp: **Extern** (oder **Intern** bei Google Workspace)
-3. App-Name: z. B. `Video Manager`
+3. App-Name: z. B. `Kaderblick — Video Manager`
 4. Support-E-Mail: deine eigene
 5. Unter **Scopes** hinzufügen:
    - `https://www.googleapis.com/auth/youtube.upload`
@@ -61,11 +61,11 @@ video-manager/
 
 1. **APIs & Services → Anmeldedaten → + Anmeldedaten erstellen → OAuth-Client-ID**
 2. Anwendungstyp: **Desktop-App**
-3. Name: z. B. `Video Manager Desktop`
+3. Name: z. B. `Kaderblick — Video Manager — Desktop`
 4. **Erstellen** klicken
 5. Im Dialog auf **JSON herunterladen** klicken
 6. Die heruntergeladene Datei umbenennen in **`client_secret.json`**
-7. Die Datei in das `video-manager/config/`-Verzeichnis verschieben
+7. Die Datei in das `config/`-Verzeichnis des Projekts verschieben
 
 ## Schritt 5: Erster Upload (Token-Erstellung)
 

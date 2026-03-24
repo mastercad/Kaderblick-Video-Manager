@@ -365,7 +365,7 @@ def upload_to_youtube(job, settings: AppSettings,
     title = job.youtube_title or upload_file.stem
     source_name = job.source_path.name if job.source_path else upload_file.name
     description = getattr(job, "youtube_description", "") or (
-        f"Hochgeladen mit Kaderblick - Video Manager\n"
+        f"Hochgeladen mit Kaderblick — Video Manager\n"
         f"Quelldatei: {source_name}"
     )
     tags = getattr(job, "youtube_tags", []) or []

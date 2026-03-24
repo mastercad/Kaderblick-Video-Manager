@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Video Manager – Haupteinstiegspunkt.
+"""Kaderblick — Video Manager – Haupteinstiegspunkt.
 
 Startet die PySide6-GUI für die Video-Verarbeitung mit:
   - Profil-System (KI Auswertung / YouTube / Benutzerdefiniert)
@@ -32,7 +32,7 @@ _ICON = Path(__file__).resolve().parent / "assets" / "icon.svg"
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Video Manager – Video-Verarbeitung für Fußballverein-Kameras",
+        description="Kaderblick — Video Manager – Video-Verarbeitung für Fußballverein-Kameras",
     )
     p.add_argument(
         "--workflow",
@@ -70,6 +70,7 @@ def main():
 
     # Qt bekommt nur die nicht von argparse konsumierten Argumente
     app = QApplication([sys.argv[0]] + qt_args)
+    app.setApplicationName("Kaderblick — Video Manager")
     if _ICON.exists():
         app.setWindowIcon(QIcon(str(_ICON)))
     window = ConverterApp(cli_args=args)
