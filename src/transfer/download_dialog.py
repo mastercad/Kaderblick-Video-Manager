@@ -27,7 +27,7 @@ class DownloadDialog(QDialog):
     Bezieht Gerätekonfiguration aus AppSettings.cameras.
     Nach dem Download sind die heruntergeladenen .mjpg-Pfade in
     ``downloaded_mjpg_files`` verfügbar.
-    Wenn ``auto_convert`` in den Kamera-Einstellungen aktiv ist, schließt
+    Wenn ``auto_convert`` im Dialog aktiv ist, schließt
     sich der Dialog nach dem Download automatisch mit Accepted.
     """
 
@@ -56,7 +56,7 @@ class DownloadDialog(QDialog):
         dest_form = QFormLayout()
         dest_row = QHBoxLayout()
         self._dest_edit = QLineEdit()
-        self._dest_edit.setPlaceholderText("(aus Kamera-Einstellungen übernommen)")
+        self._dest_edit.setPlaceholderText("Lokales Zielverzeichnis")
         dest_row.addWidget(self._dest_edit)
         dest_browse = QPushButton("Durchsuchen …")
         dest_browse.clicked.connect(self._browse_destination)
@@ -159,13 +159,10 @@ class DownloadDialog(QDialog):
     def _reload_from_settings(self) -> None:
         if not self._settings:
             return
-        cam = self._settings.cameras
-        if not self._dest_edit.text() and cam.destination:
-            self._dest_edit.setText(cam.destination)
-        self._auto_convert_chk.setChecked(cam.auto_convert)
-        self._delete_chk.setChecked(cam.delete_after_download)
+        self._auto_convert_chk.setChecked(False)
+        self._delete_chk.setChecked(False)
         self._populate_device_table()
-        self._start_btn.setEnabled(bool(cam.devices))
+        self._start_btn.setEnabled(bool(self._settings.cameras.devices))
 
     def _populate_device_table(self) -> None:
         if not self._settings:
@@ -235,18 +232,14 @@ class DownloadDialog(QDialog):
             return
 
         dest_override = self._dest_edit.text().strip()
-        if not dest_override and not self._settings.cameras.destination:
+        if not dest_override:
             QMessageBox.warning(self, "Kein Zielverzeichnis",
                                 "Bitte ein Zielverzeichnis angeben.")
             return
 
-        # Einstellungen aus UI übernehmen und speichern
         cam = self._settings.cameras
-        cam.auto_convert = self._auto_convert_chk.isChecked()
-        cam.delete_after_download = self._delete_chk.isChecked()
-        if dest_override:
-            cam.destination = dest_override
-        self._settings.save()
+        auto_convert = self._auto_convert_chk.isChecked()
+        delete_after_download = self._delete_chk.isChecked()
 
         self._log.clear()
         self.downloaded_mjpg_files.clear()
@@ -260,7 +253,7 @@ class DownloadDialog(QDialog):
             config=cam,
             devices=devices,
             destination_override=dest_override,
-            delete_after_download=cam.delete_after_download,
+            delete_after_download=delete_after_download,
         )
         self._worker.moveToThread(self._thread)
 

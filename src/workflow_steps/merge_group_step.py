@@ -9,6 +9,7 @@ from ..media.step_reporting import format_encoder_summary, format_list_summary, 
 from ..workflow import WorkflowJob
 from ..integrations.youtube_title_editor import MatchData, SegmentData, build_output_filename_from_title, build_playlist_title, build_video_description, build_video_tags, build_video_title
 from .delete_sources_step import DeleteSourcesStep
+from .executor_support import ExecutorSupport
 from .models import ConvertItem, PreparedOutput
 
 
@@ -106,6 +107,7 @@ class MergeGroupStep:
         executor._set_step_status(first_job, "merge", "running")
         executor._set_job_status(first_orig_idx, "Zusammenführen …")
         executor.job_progress.emit(first_orig_idx, 0)
+        merged_path.parent.mkdir(parents=True, exist_ok=True)
         concat_ok = executor._concat_func(
             source_paths,
             merged_path,
@@ -113,11 +115,12 @@ class MergeGroupStep:
             log_callback=executor.log_message.emit,
             progress_callback=lambda pct: executor.job_progress.emit(first_orig_idx, pct),
             overwrite=per_settings.video.overwrite,
-            no_bframes=per_settings.video.no_bframes,
+            no_bframes=first_job.merge_no_bframes,
             keyframe_interval=per_settings.video.keyframe_interval,
             encoder=per_settings.video.encoder,
-            preset=per_settings.video.preset,
+            preset=first_job.merge_preset or per_settings.video.preset,
             crf=per_settings.video.crf,
+            target_resolution=first_job.merge_output_resolution,
             metadata_job=first_cv,
         )
         if not concat_ok:
@@ -164,11 +167,12 @@ class MergeGroupStep:
     @staticmethod
     def _expected_merged_path(first_job: WorkflowJob, cv_job: ConvertJob):
         base = cv_job.output_path or cv_job.source_path
+        target_extension = ExecutorSupport.resolve_container_extension(first_job.merge_output_format, base)
         if first_job.merge_output_title or cv_job.youtube_title:
             stem = build_output_filename_from_title(
                 first_job.merge_output_title or cv_job.youtube_title,
                 fallback=base.stem,
             )
             if stem != base.stem:
-                return base.with_stem(stem)
-        return base.with_stem(base.stem + "_merged")
+                return ExecutorSupport.derived_output_path(cv_job, base, stem=stem, extension=target_extension)
+        return ExecutorSupport.derived_output_path(cv_job, base, suffix="_merged", extension=target_extension)

@@ -91,17 +91,8 @@ class WorkflowDialogStateController:
             self._dialog._draft.title_card_enabled = False
             self._dialog._draft.create_youtube_version = False
 
-        self._dialog._yt_title_edit.setEnabled(self._dialog._draft.upload_youtube)
-        self._dialog._yt_playlist_edit.setEnabled(self._dialog._draft.upload_youtube)
-        self._dialog._yt_competition_edit.setEnabled(self._dialog._draft.upload_youtube)
-        self._dialog._playlist_helper_btn.setEnabled(self._dialog._draft.upload_youtube)
+        self._dialog._youtube_panel.sync_enabled_state(self._dialog._draft.upload_youtube)
         self._dialog._kb_game_id_edit.setEnabled(
-            self._dialog._draft.upload_youtube and self._dialog._draft.upload_kaderblick
-        )
-        self._dialog._kb_type_combo.setEnabled(
-            self._dialog._draft.upload_youtube and self._dialog._draft.upload_kaderblick
-        )
-        self._dialog._kb_camera_combo.setEnabled(
             self._dialog._draft.upload_youtube and self._dialog._draft.upload_kaderblick
         )
         self._dialog._kb_reload_btn.setEnabled(
@@ -121,6 +112,7 @@ class WorkflowDialogStateController:
             self._dialog._youtube_panel.set_merge_output_mode(
                 bool((merge_sources or merge_count) and self._dialog._draft.upload_youtube)
             )
+            self._dialog._load_youtube_panel_from_draft()
 
         titlecard_enabled = self._dialog._draft.title_card_enabled and has_output_stack
         self._dialog._tc_home_edit.setEnabled(titlecard_enabled)
@@ -131,15 +123,6 @@ class WorkflowDialogStateController:
         self._dialog._tc_bg_edit.setEnabled(titlecard_enabled)
         self._dialog._tc_fg_edit.setEnabled(titlecard_enabled)
         self._dialog._amplify_db_spin.setEnabled(self._dialog._draft.amplify_audio)
-
-        if merge_sources or merge_count:
-            self._dialog._merge_label.setText(
-                "Merge ist aktiv: Eingänge werden aus dem Canvas zu einer gemeinsamen Gruppe zusammengeführt."
-            )
-        else:
-            self._dialog._merge_label.setText(
-                "Kein Merge aktiv. Für kombinierte Videos verbindest du mehrere Quellen mit dem Merge-Node im Canvas."
-            )
 
         hints: list[str] = []
         if not has_output_stack:

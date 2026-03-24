@@ -162,6 +162,7 @@ def _duplicate_job(self):
     clone.name = resolved_name
     self._workflow.jobs.insert(row + 1, clone)
     self._refresh_table()
+    self.table.selectRow(row + 1)
     self._update_count()
     self._persist_workflow_state()
 
@@ -240,6 +241,9 @@ def _save_workflow(self):
 
 def _save_last_workflow(self):
     try:
+        snapshot = getattr(self, "_snapshot_runtime_durations", None)
+        if callable(snapshot):
+            snapshot(persist=False)
         self._workflow.save_as_last()
     except Exception:
         pass

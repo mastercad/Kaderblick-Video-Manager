@@ -5,6 +5,7 @@ from typing import Any
 
 from ..media.ffmpeg_runner import validate_media_output
 from ..media.step_reporting import format_encoder_summary, format_source_target_summary
+from .executor_support import ExecutorSupport
 from .models import PreparedOutput
 
 
@@ -49,6 +50,10 @@ class YoutubeVersionStep:
             cancel_flag=executor._cancel,
             log_callback=executor.log_message.emit,
             progress_callback=lambda pct: executor.job_progress.emit(prepared.orig_idx, pct),
+            preset=prepared.job.yt_version_preset or prepared.per_settings.video.preset,
+            no_bframes=prepared.job.yt_version_no_bframes,
+            output_format=prepared.job.yt_version_output_format,
+            output_resolution=prepared.job.yt_version_output_resolution,
         )
         if not ok:
             executor._set_step_status(prepared.job, "yt_version", "error")
@@ -72,4 +77,13 @@ class YoutubeVersionStep:
         output_path = prepared.cv_job.output_path
         if output_path is None:
             return None
-        return output_path.with_stem(output_path.stem + "_youtube")
+        target_extension = ExecutorSupport.resolve_container_extension(
+            prepared.job.yt_version_output_format,
+            output_path,
+        )
+        return ExecutorSupport.derived_output_path(
+            prepared.cv_job,
+            output_path,
+            suffix="_youtube",
+            extension=target_extension,
+        )

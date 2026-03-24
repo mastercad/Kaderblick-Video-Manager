@@ -24,6 +24,7 @@ class FileEntry:
     """Metadaten fuer eine einzelne Quelldatei innerhalb eines Auftrags."""
 
     source_path: str = ""
+    source_size_bytes: int = 0
     output_filename: str = ""
     youtube_title: str = ""
     youtube_description: str = ""
@@ -63,8 +64,10 @@ class WorkflowJob:
     encoder: str = "auto"
     crf: int = 18
     preset: str = "medium"
+    no_bframes: bool = True
     fps: int = 25
     output_format: str = "mp4"
+    output_resolution: str = "source"
     overwrite: bool = False
 
     merge_audio: bool = False
@@ -76,7 +79,12 @@ class WorkflowJob:
     upload_youtube: bool = False
     default_youtube_title: str = ""
     default_youtube_playlist: str = ""
+    default_youtube_description: str = ""
     default_youtube_competition: str = ""
+    youtube_match_data: dict = field(default_factory=dict)
+    youtube_segment_data: dict = field(default_factory=dict)
+    youtube_kaderblick_video_type_id: int = 0
+    youtube_kaderblick_camera_id: int = 0
     merge_output_title: str = ""
     merge_output_playlist: str = ""
     merge_output_description: str = ""
@@ -84,11 +92,19 @@ class WorkflowJob:
     merge_segment_data: dict = field(default_factory=dict)
     merge_output_kaderblick_video_type_id: int = 0
     merge_output_kaderblick_camera_id: int = 0
+    merge_preset: str = "medium"
+    merge_no_bframes: bool = True
+    merge_output_format: str = "source"
+    merge_output_resolution: str = "source"
 
     upload_kaderblick: bool = False
     default_kaderblick_game_id: str = ""
     default_kaderblick_video_type_id: int = 0
     default_kaderblick_camera_id: int = 0
+    yt_version_preset: str = "medium"
+    yt_version_no_bframes: bool = True
+    yt_version_output_format: str = "source"
+    yt_version_output_resolution: str = "source"
 
     title_card_enabled: bool = False
     title_card_logo_path: str = ""
@@ -112,6 +128,9 @@ class WorkflowJob:
     error_msg: str = ""
     transfer_status: str = ""
     transfer_progress_pct: int = 0
+    run_started_at: str = ""
+    run_finished_at: str = ""
+    run_elapsed_seconds: float = 0.0
 
     def to_dict(self) -> dict:
         payload = asdict(self)
@@ -135,6 +154,21 @@ class WorkflowJob:
         return cls(files=files, **filtered)
 
 
+def workflow_output_device_name(job: WorkflowJob) -> str:
+    explicit_device = (job.device_name or "").strip()
+    if explicit_device:
+        return explicit_device
+
+    for segment_data in (job.merge_segment_data, job.youtube_segment_data):
+        if not isinstance(segment_data, dict):
+            continue
+        camera = str(segment_data.get("camera") or "").strip()
+        if camera and camera not in {"–", "(Keine Kamera)"}:
+            return camera
+
+    return ""
+
+
 @dataclass(init=False)
 class Workflow:
     """Kompletter Workflow: Liste von Workflow-Jobs plus globale Optionen."""
@@ -143,6 +177,9 @@ class Workflow:
     jobs: list[WorkflowJob] = field(default_factory=list)
     shutdown_after: bool = False
     created_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+    last_run_started_at: str = ""
+    last_run_finished_at: str = ""
+    last_run_elapsed_seconds: float = 0.0
 
     def __init__(
         self,
@@ -151,6 +188,9 @@ class Workflow:
         jobs: list[WorkflowJob] | None = None,
         shutdown_after: bool = False,
         created_at: str | None = None,
+        last_run_started_at: str = "",
+        last_run_finished_at: str = "",
+        last_run_elapsed_seconds: float = 0.0,
     ):
         self.name = name
         if jobs is not None:
@@ -161,6 +201,9 @@ class Workflow:
             self.jobs = []
         self.shutdown_after = shutdown_after
         self.created_at = created_at or datetime.now().isoformat(timespec="seconds")
+        self.last_run_started_at = last_run_started_at
+        self.last_run_finished_at = last_run_finished_at
+        self.last_run_elapsed_seconds = float(last_run_elapsed_seconds or 0.0)
 
     @property
     def job(self) -> WorkflowJob | None:
@@ -181,6 +224,9 @@ class Workflow:
             "name": self.name,
             "shutdown_after": self.shutdown_after,
             "created_at": self.created_at,
+            "last_run_started_at": self.last_run_started_at,
+            "last_run_finished_at": self.last_run_finished_at,
+            "last_run_elapsed_seconds": self.last_run_elapsed_seconds,
             "job": self.job.to_dict() if self.job is not None else None,
             "jobs": [job.to_dict() for job in self.jobs],
         }
@@ -207,6 +253,9 @@ class Workflow:
             jobs=jobs,
             shutdown_after=data.get("shutdown_after", False),
             created_at=data.get("created_at", ""),
+            last_run_started_at=data.get("last_run_started_at", ""),
+            last_run_finished_at=data.get("last_run_finished_at", ""),
+            last_run_elapsed_seconds=data.get("last_run_elapsed_seconds", 0.0),
         )
 
     def save(self, path: Path) -> None:

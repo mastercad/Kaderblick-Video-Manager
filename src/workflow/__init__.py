@@ -23,7 +23,7 @@ from .graph import (
     graph_source_reaches_type,
 )
 from .migration import _migrate_source_to_job
-from .model import FileEntry, Workflow, WorkflowJob
+from .model import FileEntry, Workflow, WorkflowJob, workflow_output_device_name
 from .naming import increment_workflow_name, normalize_workflow_name
 from .storage import LAST_WORKFLOW_FILE, WORKFLOW_DIR
 
@@ -32,6 +32,7 @@ __all__ = [
     "FileEntry",
     "Workflow",
     "WorkflowJob",
+    "workflow_output_device_name",
     "WORKFLOW_DIR",
     "LAST_WORKFLOW_FILE",
     "normalize_workflow_name",

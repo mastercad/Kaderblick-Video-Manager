@@ -20,6 +20,23 @@ from PySide6.QtWidgets import (
 
 from ...media.encoder import available_encoder_choices
 from ...settings import PROFILES
+from ...settings.profiles import (
+    VIDEO_FORMAT_OPTIONS,
+    VIDEO_LABEL_CONTAINER,
+    VIDEO_LABEL_FPS,
+    VIDEO_LABEL_PRESET,
+    VIDEO_LABEL_PROFILE,
+    VIDEO_LABEL_RESOLUTION,
+    VIDEO_PRESET_OPTIONS,
+    VIDEO_RESOLUTION_OPTIONS,
+    VIDEO_TEXT_NO_BFRAMES,
+    VIDEO_TOOLTIP_AUDIO_SYNC,
+    VIDEO_TOOLTIP_CONTAINER,
+    VIDEO_TOOLTIP_NO_BFRAMES,
+    VIDEO_TOOLTIP_OVERWRITE,
+    VIDEO_TOOLTIP_PRESET,
+    VIDEO_TOOLTIP_RESOLUTION,
+)
 
 
 class JobEditorPagesMixin:
@@ -41,7 +58,7 @@ class JobEditorPagesMixin:
         enc_lay = QVBoxLayout(self._encoding_widget)
 
         prof_row = QHBoxLayout()
-        prof_row.addWidget(QLabel("Schnell-Profil:"))
+        prof_row.addWidget(QLabel(VIDEO_LABEL_PROFILE))
         for pname in PROFILES:
             btn = QPushButton(pname)
             btn.setFlat(True)
@@ -60,11 +77,15 @@ class JobEditorPagesMixin:
         enc_form.addRow("Encoder:", self._encoder_combo)
 
         self._preset_combo = QComboBox()
-        self._preset_combo.addItems([
-            "ultrafast", "superfast", "veryfast", "faster", "fast",
-            "medium", "slow", "slower", "veryslow",
-        ])
-        enc_form.addRow("Preset:", self._preset_combo)
+        self._preset_combo.addItems(VIDEO_PRESET_OPTIONS)
+        self._preset_combo.setToolTip(VIDEO_TOOLTIP_PRESET)
+        enc_form.addRow(VIDEO_LABEL_PRESET, self._preset_combo)
+
+        self._resolution_combo = QComboBox()
+        for value, label in VIDEO_RESOLUTION_OPTIONS:
+            self._resolution_combo.addItem(label, value)
+        self._resolution_combo.setToolTip(VIDEO_TOOLTIP_RESOLUTION)
+        enc_form.addRow(VIDEO_LABEL_RESOLUTION, self._resolution_combo)
 
         crf_row = QHBoxLayout()
         self._crf_spin = QSpinBox()
@@ -84,18 +105,23 @@ class JobEditorPagesMixin:
         fps_row.addWidget(self._fps_spin)
         fps_row.addWidget(QLabel("fps"))
         fps_row.addStretch()
-        enc_form.addRow("Framerate:", fps_row)
+        enc_form.addRow(VIDEO_LABEL_FPS, fps_row)
+
+        self._no_bframes_cb = QCheckBox(VIDEO_TEXT_NO_BFRAMES)
+        self._no_bframes_cb.setToolTip(VIDEO_TOOLTIP_NO_BFRAMES)
+        enc_form.addRow("", self._no_bframes_cb)
 
         self._format_combo = QComboBox()
-        self._format_combo.addItems(["mp4", "avi"])
-        enc_form.addRow("Format:", self._format_combo)
+        for value, label in VIDEO_FORMAT_OPTIONS:
+            self._format_combo.addItem(label, value)
+        self._format_combo.setToolTip(VIDEO_TOOLTIP_CONTAINER)
+        enc_form.addRow(VIDEO_LABEL_CONTAINER, self._format_combo)
 
         self._overwrite_cb = QCheckBox(
             "Vorhandene Ausgabedateien überschreiben  (Skip-Schutz deaktivieren)"
         )
         self._overwrite_cb.setToolTip(
-            "Wenn aktiviert, werden bereits konvertierte Dateien erneut verarbeitet.\n"
-            "Normalerweise deaktiviert lassen – dann werden fertige Dateien übersprungen."
+            VIDEO_TOOLTIP_OVERWRITE + "\nNormalerweise deaktiviert lassen – dann werden fertige Dateien übersprungen."
         )
         enc_form.addRow("", self._overwrite_cb)
 
@@ -126,6 +152,7 @@ class JobEditorPagesMixin:
         self._audio_sync_cb = QCheckBox(
             "Audio-Sync aktivieren  (Frame-Drop-Korrektur für Pi-Kameras)"
         )
+        self._audio_sync_cb.setToolTip(VIDEO_TOOLTIP_AUDIO_SYNC)
         audio_lay.addWidget(self._audio_sync_cb)
 
         lay.addWidget(audio_box)
@@ -370,7 +397,11 @@ class JobEditorPagesMixin:
                 self._encoder_combo.setCurrentIndex(idx)
         if "preset" in values:
             self._preset_combo.setCurrentText(values["preset"])
+        if "output_resolution" in values:
+            self._resolution_combo.setCurrentIndex(max(self._resolution_combo.findData(values["output_resolution"]), 0))
         if "crf" in values:
             self._crf_spin.setValue(values["crf"])
         if "output_format" in values:
-            self._format_combo.setCurrentText(values["output_format"])
+            self._format_combo.setCurrentIndex(max(self._format_combo.findData(values["output_format"]), 0))
+        if "no_bframes" in values:
+            self._no_bframes_cb.setChecked(bool(values["no_bframes"]))

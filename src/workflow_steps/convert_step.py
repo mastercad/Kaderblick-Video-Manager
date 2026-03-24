@@ -48,6 +48,9 @@ class ConvertStep:
             executor.job_progress.emit(_oi, composite)
             executor.convert_progress.emit(_done, pct)
 
+        if cv_job.output_path is not None:
+            cv_job.output_path.parent.mkdir(parents=True, exist_ok=True)
+
         success = executor._convert_func(
             cv_job,
             per_settings,

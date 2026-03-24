@@ -6,6 +6,7 @@ import argparse
 from pathlib import Path
 from typing import Optional
 
+from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMainWindow
 
@@ -20,6 +21,8 @@ from .execution import (
     _on_source_progress,
     _on_source_status,
     _on_workflow_done,
+    _refresh_runtime_durations,
+    _snapshot_runtime_durations,
     _start_all_active_workflows,
     _start_selected_workflows,
     _start_workflow,
@@ -41,6 +44,7 @@ from .ui_build import (
     _handle_table_double_click,
     _refresh_table,
     _reset_status_column,
+    _set_row_duration,
     _set_row_job_progress,
     _set_row_progress,
     _set_row_status,
@@ -90,11 +94,19 @@ class ConverterApp(QMainWindow):
         self._wf_executor = None
         self._wf_thread = None
         self._wf_start_time: float = 0.0
+        self._active_run_indices: set[int] = set()
+        self._job_run_started_monotonic: dict[str, float] = {}
+        self._job_run_elapsed_base_seconds: dict[str, float] = {}
+        self._workflow_run_started_monotonic: float = 0.0
+        self._workflow_run_elapsed_base_seconds: float = 0.0
 
         self._build_menu()
         self._build_toolbar()
         self._build_central()
         self._build_statusbar()
+        self._duration_timer = QTimer(self)
+        self._duration_timer.setInterval(1000)
+        self._duration_timer.timeout.connect(self._refresh_runtime_durations)
 
         restore = self.settings.restore_last_workflow
         if cli_args and cli_args.restore_last_workflow:
@@ -155,6 +167,7 @@ class ConverterApp(QMainWindow):
                 if not self._wf_thread.wait(10_000):
                     self._wf_thread.terminate()
                     self._wf_thread.wait(2000)
+            self._snapshot_runtime_durations(persist=False)
         self._save_last_workflow()
         event.accept()
 
@@ -169,6 +182,7 @@ ConverterApp._refresh_table = _refresh_table
 ConverterApp._set_row_status = _set_row_status
 ConverterApp._set_row_progress = _set_row_progress
 ConverterApp._set_row_job_progress = _set_row_job_progress
+ConverterApp._set_row_duration = _set_row_duration
 ConverterApp._reset_status_column = _reset_status_column
 ConverterApp._append_log = _append_log
 ConverterApp._new_workflow = _new_workflow
@@ -210,3 +224,5 @@ ConverterApp._on_dl_progress = _on_dl_progress
 ConverterApp._on_phase_changed = _on_phase_changed
 ConverterApp._on_overall_progress = _on_overall_progress
 ConverterApp._on_workflow_done = _on_workflow_done
+ConverterApp._refresh_runtime_durations = _refresh_runtime_durations
+ConverterApp._snapshot_runtime_durations = _snapshot_runtime_durations

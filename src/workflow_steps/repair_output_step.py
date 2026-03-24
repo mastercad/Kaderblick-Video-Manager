@@ -6,6 +6,7 @@ from typing import Any
 from ..media.converter import run_repair_output
 from ..media.ffmpeg_runner import validate_media_output
 from ..media.step_reporting import format_media_artifact
+from .executor_support import ExecutorSupport
 from .models import PreparedOutput
 
 
@@ -25,7 +26,7 @@ class RepairOutputStep:
             executor._set_job_status(prepared.orig_idx, "Reparatur ohne gueltiges Eingangsartefakt")
             return 1
 
-        repaired_path = self._repaired_path(current_output)
+        repaired_path = self._repaired_path(prepared, current_output)
         if repaired_path.exists() and not prepared.per_settings.video.overwrite:
             if validate_media_output(repaired_path, require_video=True, decode_probe=True, log_callback=executor.log_message.emit):
                 prepared.cv_job.output_path = repaired_path
@@ -65,5 +66,10 @@ class RepairOutputStep:
         return 0
 
     @staticmethod
-    def _repaired_path(current_output: Path) -> Path:
-        return current_output.with_stem(current_output.stem + "_repaired").with_suffix(".mp4")
+    def _repaired_path(prepared: PreparedOutput, current_output: Path) -> Path:
+        return ExecutorSupport.derived_output_path(
+            prepared.cv_job,
+            current_output,
+            suffix="_repaired",
+            extension=".mp4",
+        )

@@ -7,6 +7,7 @@ from typing import Any
 from ..media.merge import generate_title_card
 from ..media.ffmpeg_runner import get_resolution
 from ..media.step_reporting import format_media_artifact
+from .executor_support import ExecutorSupport
 from .models import PreparedOutput
 
 
@@ -57,11 +58,14 @@ class TitleCardStep:
 
         entry = executor._find_file_entry(job, str(cv_job.source_path))
 
+        home_team = (job.title_card_home_team or "").strip()
+        away_team = (job.title_card_away_team or "").strip()
+
         title = ""
-        if job.title_card_home_team and job.title_card_away_team:
-            title = f"{job.title_card_home_team} vs {job.title_card_away_team}"
-        elif job.title_card_home_team or job.title_card_away_team:
-            title = job.title_card_home_team or job.title_card_away_team
+        if home_team and away_team:
+            title = f"{home_team} vs {away_team}"
+        elif home_team or away_team:
+            title = home_team or away_team
 
         subtitle = (
             (entry.title_card_subtitle if entry and entry.title_card_subtitle else "")
@@ -101,9 +105,15 @@ class TitleCardStep:
         executor._set_job_status(orig_idx, "Titelkarte zusammenführen …")
         executor.job_progress.emit(orig_idx, 50)
         if preserve_original:
-            with_intro_path = video_path.with_stem(video_path.stem + "_titlecard")
+            with_intro_path = ExecutorSupport.derived_output_path(
+                cv_job,
+                video_path,
+                suffix="_titlecard",
+                extension=video_path.suffix,
+            )
         else:
             with_intro_path = video_path.with_stem(video_path.stem + "_tmp_intro")
+        with_intro_path.parent.mkdir(parents=True, exist_ok=True)
         concat_ok = executor._concat_func(
             [card_path, video_path],
             with_intro_path,
@@ -138,7 +148,12 @@ class TitleCardStep:
         if output_path is None:
             return None
 
-        titlecard_path = output_path.with_stem(output_path.stem + "_titlecard")
+        titlecard_path = ExecutorSupport.derived_output_path(
+            prepared.cv_job,
+            output_path,
+            suffix="_titlecard",
+            extension=output_path.suffix,
+        )
         if titlecard_path.exists():
             return titlecard_path
 

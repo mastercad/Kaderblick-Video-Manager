@@ -5,12 +5,14 @@ Video-Container (MP4, MKV, AVI, MOV) mit eingebetteter Tonspur.
 """
 
 import json
+import re
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from ..settings import AppSettings
+from ..settings.profiles import resolution_dimensions
 from .encoder import (
     build_video_encoder_args,
     build_aac_audio_args,
@@ -28,6 +30,14 @@ from ..integrations.youtube_title_editor import build_output_filename_from_title
 # Alles andere ist ein regulärer Container.
 _MJPEG_EXTS = {".mjpg", ".mjpeg"}
 _EMBEDDED_METADATA_SOFTWARE = "Kaderblick Video Manager"
+
+
+def _build_scale_pad_filter(width: int, height: int) -> str:
+    return (
+        f"scale=w={width}:h={height}:force_original_aspect_ratio=decrease,"
+        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        "setsar=1"
+    )
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -102,10 +112,13 @@ def build_embedded_metadata_args(job: ConvertJob) -> list[str]:
     else:
         comment = f"Erstellt mit {_EMBEDDED_METADATA_SOFTWARE}"
 
+    keywords = _embedded_keywords(job)
+
     args = [
         "-metadata", f"software={_EMBEDDED_METADATA_SOFTWARE}",
         "-metadata", f"encoded_by={_EMBEDDED_METADATA_SOFTWARE}",
         "-metadata", f"encoder={_EMBEDDED_METADATA_SOFTWARE}",
+        "-metadata", f"author={_EMBEDDED_METADATA_SOFTWARE}",
         "-metadata", f"artist={_EMBEDDED_METADATA_SOFTWARE}",
         "-metadata", f"comment={comment}",
     ]
@@ -115,7 +128,27 @@ def build_embedded_metadata_args(job: ConvertJob) -> list[str]:
         args += ["-metadata", f"description={description}"]
     if playlist:
         args += ["-metadata", f"album={playlist}"]
+    if keywords:
+        args += ["-metadata", f"keywords={', '.join(keywords)}"]
     return args
+
+
+def _embedded_keywords(job: ConvertJob) -> list[str]:
+    raw_tags = [str(tag or "").strip() for tag in getattr(job, "youtube_tags", [])]
+    tags = [tag for tag in raw_tags if tag]
+    if not tags:
+        hashtags = re.findall(r"#([\wÄÖÜäöüß]+)", job.youtube_description or "")
+        tags = [tag.strip() for tag in hashtags if tag.strip()]
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for tag in tags:
+        key = tag.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(tag)
+    return unique
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -156,6 +189,7 @@ def run_convert(job: ConvertJob, settings: AppSettings,
     if out_path == src:
         out_path = src.with_stem(f"{src.stem}_converted").with_suffix(f".{ext}")
     job.output_path = out_path
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
     if out_path.exists() and not vs.overwrite:
         job.status = "Übersprungen"
@@ -267,11 +301,13 @@ def run_convert(job: ConvertJob, settings: AppSettings,
             log(f"Quell-Bitrate: ~{raw_kbps // 1000} Mbit/s (MJPEG, aus Dateigröße)")
         else:
             src_info = get_video_stream_info(src)
-            if src_info.get("bit_rate"):
-                src_maxrate_kbps = src_info["bit_rate"] // 1000
+            source_bit_rate = src_info.get("bit_rate")
+            if source_bit_rate is not None:
+                src_maxrate_kbps = source_bit_rate // 1000
                 codec = src_info.get("codec_name", "?")
+                bitrate_mbit = source_bit_rate // 1_000_000
                 log(f"Quell-Codec: {codec}, "
-                    f"Bitrate: ~{src_maxrate_kbps // 1000} Mbit/s")
+                    f"Bitrate: ~{bitrate_mbit} Mbit/s")
 
     # Quell-FPS für Container-Formate übernehmen (nicht aus Settings erzwingen)
     if not is_raw_mjpeg:
@@ -286,6 +322,9 @@ def run_convert(job: ConvertJob, settings: AppSettings,
     # MP4-Ausgaben werden immer standardisiert re-encodiert, damit Profil,
     # Pixel-Format, CFR und AAC-Spur auf allen Zielsystemen konsistent sind.
     use_stream_copy = False
+    target_dimensions = resolution_dimensions(vs.output_resolution)
+    if target_dimensions is not None:
+        log(f"Ziel-Auflösung: {target_dimensions[0]}x{target_dimensions[1]}")
 
     cmd = ffmpeg_cmd("-hide_banner", "-y")
 
@@ -327,6 +366,9 @@ def run_convert(job: ConvertJob, settings: AppSettings,
             cmd += encoder_args
         else:
             cmd += ["-c:v", "mjpeg", "-q:v", "2", "-r", str(vs.fps)]
+
+        if target_dimensions is not None:
+            cmd += ["-vf", _build_scale_pad_filter(target_dimensions[0], target_dimensions[1])]
 
         # Explizite Stream-Auswahl vermeidet Metadaten-/Spur-Reihenfolge-Probleme.
         if wav_path:
@@ -430,7 +472,12 @@ def run_repair_output(job: ConvertJob, settings: AppSettings,
         log("❌ Reparatur fehlgeschlagen: Eingangsdatei fehlt")
         return False
 
-    repaired = src.with_stem(src.stem + "_repaired").with_suffix(".mp4")
+    derived_dir = str(getattr(job, "derived_output_dir", "") or "").strip()
+    if derived_dir:
+        repaired = Path(derived_dir) / f"{src.stem}_repaired.mp4"
+    else:
+        repaired = src.with_stem(src.stem + "_repaired").with_suffix(".mp4")
+    repaired.parent.mkdir(parents=True, exist_ok=True)
     if repaired.exists() and not vs.overwrite:
         if validate_media_output(repaired, require_video=True, decode_probe=True, log_callback=log_callback):
             job.output_path = repaired
@@ -571,7 +618,11 @@ def run_repair_output(job: ConvertJob, settings: AppSettings,
 def run_youtube_convert(job: ConvertJob, settings: AppSettings,
                         cancel_flag: Optional[threading.Event] = None,
                         log_callback=None,
-                        progress_callback=None) -> bool:
+                        progress_callback=None,
+                        preset: str | None = None,
+                        no_bframes: bool | None = None,
+                        output_format: str | None = None,
+                        output_resolution: str | None = None) -> bool:
     """Erstellt eine YouTube-optimierte Variante des konvertierten Videos."""
     vs = settings.video
     yt = settings.youtube
@@ -579,7 +630,13 @@ def run_youtube_convert(job: ConvertJob, settings: AppSettings,
     if not mp4 or not mp4.exists():
         return False
 
-    yt_path = mp4.with_stem(mp4.stem + "_youtube")
+    target_ext = mp4.suffix if not output_format or output_format == "source" else f".{output_format}"
+    derived_dir = str(getattr(job, "derived_output_dir", "") or "").strip()
+    if derived_dir:
+        yt_path = Path(derived_dir) / f"{mp4.stem}_youtube{target_ext}"
+    else:
+        yt_path = mp4.with_name(f"{mp4.stem}_youtube{target_ext}")
+    yt_path.parent.mkdir(parents=True, exist_ok=True)
 
     def log(msg: str):
         if log_callback:
@@ -601,13 +658,16 @@ def run_youtube_convert(job: ConvertJob, settings: AppSettings,
 
     src_info = get_video_stream_info(mp4)
     source_fps = src_info.get("fps") or vs.fps
+    target_dimensions = resolution_dimensions(output_resolution or vs.output_resolution)
+    if target_dimensions is not None:
+        log(f"YT-Ziel-Auflösung: {target_dimensions[0]}x{target_dimensions[1]}")
     encoder, encoder_args = build_video_encoder_args(
         vs.encoder,
-        preset=vs.preset,
+        preset=preset or vs.preset,
         crf=yt.youtube_crf,
         lossless=False,
         fps=source_fps,
-        no_bframes=vs.no_bframes,
+        no_bframes=vs.no_bframes if no_bframes is None else no_bframes,
         keyframe_interval=vs.keyframe_interval,
         log_callback=log_callback,
     )
@@ -626,10 +686,12 @@ def run_youtube_convert(job: ConvertJob, settings: AppSettings,
             "-maxrate", yt.youtube_maxrate,
             "-bufsize", yt.youtube_bufsize,
             *build_aac_audio_args(yt.youtube_audio_bitrate),
-            *build_mp4_output_args(faststart=faststart),
-            *build_embedded_metadata_args(job),
         ]
-        cmd += [str(yt_path)]
+        if target_dimensions is not None:
+            cmd += ["-vf", _build_scale_pad_filter(target_dimensions[0], target_dimensions[1])]
+        if yt_path.suffix.lower() == ".mp4":
+            cmd += build_mp4_output_args(faststart=faststart)
+        cmd += [*build_embedded_metadata_args(job), str(yt_path)]
         return cmd
 
     def run_attempt(*, faststart: bool) -> int:
@@ -652,16 +714,21 @@ def run_youtube_convert(job: ConvertJob, settings: AppSettings,
         if yt_path.exists():
             yt_path.unlink()
         log(f"YouTube-Fehler (exit {rc})")
-        log("YouTube-Version ohne MP4-Faststart erneut versuchen …")
-        rc = run_attempt(faststart=False)
-        if rc == -1:
+        if yt_path.suffix.lower() == ".mp4":
+            log("YouTube-Version ohne MP4-Faststart erneut versuchen …")
+            rc = run_attempt(faststart=False)
+            if rc == -1:
+                if yt_path.exists():
+                    yt_path.unlink()
+                return False
+            if rc != 0:
+                if yt_path.exists():
+                    yt_path.unlink()
+                log(f"YouTube-Fehler (exit {rc})")
+                return False
+        else:
             if yt_path.exists():
                 yt_path.unlink()
-            return False
-        if rc != 0:
-            if yt_path.exists():
-                yt_path.unlink()
-            log(f"YouTube-Fehler (exit {rc})")
             return False
 
     if yt_path.exists():
@@ -690,6 +757,7 @@ def run_concat(
     encoder: str = "auto",
     no_bframes: bool = True,
     keyframe_interval: int = 1,
+    target_resolution: str | None = None,
     metadata_job: ConvertJob | None = None,
 ) -> bool:
     """Verbindet mehrere Videos mit dem ffmpeg concat-Filter (mit Re-Encode).
@@ -729,9 +797,17 @@ def run_concat(
     if not source_fps:
         source_fps = 25.0
 
-    # filter_complex: [0:v][0:a][1:v][1:a]...concat=n=N:v=1:a=1[outv][outa]
-    filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n))
-    filter_complex = f"{filter_inputs}concat=n={n}:v=1:a=1[outv][outa]"
+    target_dimensions = resolution_dimensions(target_resolution)
+    if target_dimensions is not None:
+        log(f"Merge-Ziel-Auflösung: {target_dimensions[0]}x{target_dimensions[1]}")
+        scale_filter = _build_scale_pad_filter(target_dimensions[0], target_dimensions[1])
+        filter_parts = [f"[{i}:v]{scale_filter}[v{i}]" for i in range(n)]
+        filter_inputs = "".join(f"[v{i}][{i}:a]" for i in range(n))
+        filter_parts.append(f"{filter_inputs}concat=n={n}:v=1:a=1[outv][outa]")
+        filter_complex = ";".join(filter_parts)
+    else:
+        filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n))
+        filter_complex = f"{filter_inputs}concat=n={n}:v=1:a=1[outv][outa]"
 
     resolved, enc_args = build_video_encoder_args(
         encoder,
@@ -753,10 +829,11 @@ def run_concat(
         "-map", "[outa]",
         *enc_args,
         *build_aac_audio_args("192k"),
-        *build_mp4_output_args(),
         *(build_embedded_metadata_args(metadata_job) if metadata_job is not None else []),
-        str(output),
     ]
+    if output.suffix.lower() == ".mp4":
+        cmd += build_mp4_output_args()
+    cmd += [str(output)]
 
     total_duration = sum(
         current_duration

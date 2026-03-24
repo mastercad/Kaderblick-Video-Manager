@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -22,6 +23,7 @@ from .inspector import (
     KaderblickPanel,
     ProcessingPanel,
     RepairPanel,
+    StepEncodingPanel,
     StopPanel,
     TitlecardPanel,
     ValidationPanel,
@@ -119,12 +121,8 @@ class WorkflowDialogLayoutBuilder:
         return box
 
     def build_inspector_box(self) -> QWidget:
-        scroll = QScrollArea(self._dialog)
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        content = QWidget(self._dialog)
-        layout = QVBoxLayout(content)
+        container = QWidget(self._dialog)
+        layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(10)
         layout.addWidget(self._dialog._summary_box)
@@ -145,12 +143,22 @@ class WorkflowDialogLayoutBuilder:
         self.register_property_page("stop", self.build_stop_box())
         self.register_property_page("youtube_upload", self.build_youtube_box())
         self.register_property_page("kaderblick", self.build_kaderblick_box())
-        layout.addWidget(self._dialog._property_stack)
-        layout.addWidget(self._dialog._notes_box)
-        layout.addStretch()
+        property_scroll = QScrollArea(self._dialog)
+        property_scroll.setWidgetResizable(True)
+        property_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        property_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-        scroll.setWidget(content)
-        return scroll
+        property_content = QWidget(self._dialog)
+        property_layout = QVBoxLayout(property_content)
+        property_layout.setContentsMargins(0, 0, 0, 0)
+        property_layout.setSpacing(10)
+        property_layout.addWidget(self._dialog._property_stack)
+        property_layout.addWidget(self._dialog._notes_box)
+        property_layout.addStretch()
+
+        property_scroll.setWidget(property_content)
+        layout.addWidget(property_scroll, 1)
+        return container
 
     def build_workflow_box(self) -> QWidget:
         box = QGroupBox("Workflow", self._dialog)
@@ -202,6 +210,15 @@ class WorkflowDialogLayoutBuilder:
     def register_property_page(self, key: str, widget: QWidget) -> None:
         self._dialog._property_pages[key] = self._dialog._property_stack.addWidget(widget)
 
+    def _wrap_compact_property_panel(self, widget: QWidget) -> QWidget:
+        container = QWidget(self._dialog)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.addWidget(widget)
+        layout.addStretch()
+        return container
+
     def build_source_box(self) -> QWidget:
         self._dialog._source_panel = WorkflowSourcePanel(
             self._dialog,
@@ -234,7 +251,7 @@ class WorkflowDialogLayoutBuilder:
         self._dialog._pi_load_status = self._dialog._source_panel._pi_load_status
         self._dialog._pi_file_list = self._dialog._source_panel._pi_file_list
         self._dialog._source_panel.set_mode(self._dialog._draft.source_mode)
-        return self._dialog._source_panel
+        return self._wrap_compact_property_panel(self._dialog._source_panel)
 
     def build_processing_box(self) -> QWidget:
         self._dialog._processing_panel = ProcessingPanel(
@@ -243,8 +260,10 @@ class WorkflowDialogLayoutBuilder:
             on_crf_changed=lambda value: self._dialog._update_int_field("crf", value),
             on_encoder_changed=self._dialog._on_encoder_changed,
             on_preset_changed=lambda text: self._dialog._update_text_field("preset", text),
+            on_no_bframes_changed=lambda checked: self._dialog._update_bool_field("no_bframes", checked),
             on_fps_changed=lambda value: self._dialog._update_int_field("fps", value),
             on_format_changed=lambda text: self._dialog._update_text_field("output_format", text),
+            on_resolution_changed=lambda text: self._dialog._update_text_field("output_resolution", text),
             on_merge_audio_changed=lambda checked: self._dialog._update_bool_field("merge_audio", checked),
             on_amplify_toggled=self._dialog._on_amplify_toggled,
             on_amplify_db_changed=lambda value: self._dialog._update_float_field("amplify_db", value),
@@ -253,7 +272,9 @@ class WorkflowDialogLayoutBuilder:
         self._dialog._crf_spin = self._dialog._processing_panel._crf_spin
         self._dialog._encoder_combo = self._dialog._processing_panel._encoder_combo
         self._dialog._preset_combo = self._dialog._processing_panel._preset_combo
+        self._dialog._no_bframes_cb = self._dialog._processing_panel._no_bframes_cb
         self._dialog._fps_spin = self._dialog._processing_panel._fps_spin
+        self._dialog._resolution_combo = self._dialog._processing_panel._resolution_combo
         self._dialog._format_combo = self._dialog._processing_panel._format_combo
         self._dialog._merge_audio_cb = self._dialog._processing_panel._merge_audio_cb
         self._dialog._amplify_audio_cb = self._dialog._processing_panel._amplify_audio_cb
@@ -280,15 +301,11 @@ class WorkflowDialogLayoutBuilder:
     def build_youtube_box(self) -> QWidget:
         self._dialog._youtube_panel = YouTubeUploadPanel(
             self._dialog,
-            on_title_changed=lambda text: self._dialog._update_text_field("default_youtube_title", text),
-            on_playlist_changed=lambda text: self._dialog._update_text_field("default_youtube_playlist", text),
-            on_competition_changed=lambda text: self._dialog._update_text_field("default_youtube_competition", text),
+            on_metadata_changed=self._dialog._on_youtube_metadata_changed,
             on_playlist_helper=self._dialog._open_match_editor_for_playlist,
         )
-        self._dialog._yt_title_edit = self._dialog._youtube_panel._yt_title_edit
-        self._dialog._yt_playlist_edit = self._dialog._youtube_panel._yt_playlist_edit
         self._dialog._playlist_helper_btn = self._dialog._youtube_panel._playlist_helper_btn
-        self._dialog._yt_competition_edit = self._dialog._youtube_panel._yt_competition_edit
+        self._dialog._youtube_metadata_panel = self._dialog._youtube_panel._metadata_panel
         return self._dialog._youtube_panel
 
     def build_kaderblick_box(self) -> QWidget:
@@ -347,13 +364,29 @@ class WorkflowDialogLayoutBuilder:
         info.setWordWrap(True)
         info.setStyleSheet("color: #475569;")
         layout.addWidget(info)
+        self._dialog._merge_encoding_panel = StepEncodingPanel(
+            "Merge-Encoding",
+            self._dialog,
+            on_preset_changed=lambda text: self._dialog._update_text_field("merge_preset", text),
+            on_no_bframes_changed=lambda checked: self._dialog._update_bool_field("merge_no_bframes", checked),
+            on_format_changed=lambda text: self._dialog._update_text_field("merge_output_format", text),
+            on_resolution_changed=lambda text: self._dialog._update_text_field("merge_output_resolution", text),
+        )
+        layout.addWidget(self._dialog._merge_encoding_panel)
         self._dialog._merge_panel = MergeMetadataPanel(self._dialog)
         self._dialog._merge_panel.metadata_changed.connect(self._dialog._on_merge_metadata_changed)
         layout.addWidget(self._dialog._merge_panel)
         return box
 
     def build_yt_version_box(self) -> QWidget:
-        return YTVersionPanel(self._dialog)
+        self._dialog._yt_version_panel = YTVersionPanel(
+            self._dialog,
+            on_preset_changed=lambda text: self._dialog._update_text_field("yt_version_preset", text),
+            on_no_bframes_changed=lambda checked: self._dialog._update_bool_field("yt_version_no_bframes", checked),
+            on_format_changed=lambda text: self._dialog._update_text_field("yt_version_output_format", text),
+            on_resolution_changed=lambda text: self._dialog._update_text_field("yt_version_output_resolution", text),
+        )
+        return self._dialog._yt_version_panel
 
     def build_stop_box(self) -> QWidget:
         self._dialog._stop_panel = StopPanel(self._dialog)

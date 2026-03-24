@@ -11,6 +11,7 @@ from .profiles import PROFILES
 class VideoSettings:
     fps: int = 25
     output_format: str = "mp4"
+    output_resolution: str = "source"
     crf: int = 18
     lossless: bool = False
     preset: str = "medium"
@@ -76,7 +77,4 @@ class DeviceSettings:
 @dataclass
 class CameraSettings:
     source: str = "/home/kaderblick/camera_api/recordings"
-    destination: str = ""
-    delete_after_download: bool = False
-    auto_convert: bool = True
     devices: list = field(default_factory=list)

@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..workflow import WorkflowJob
+from .executor_support import ExecutorSupport
 
 
 class PiDownloadTransferStep:
@@ -55,8 +56,11 @@ class PiDownloadTransferStep:
                 float(total),
                 state["speed"],
             )
+            if hasattr(executor, "_pump_pipeline_events"):
+                executor._pump_pipeline_events()
 
         selective = {Path(entry.source_path).stem for entry in job.files} if job.files else None
+        destination_root = ExecutorSupport.resolve_download_destination(executor._settings, job)
 
         try:
             results = executor._download_func(
@@ -65,12 +69,13 @@ class PiDownloadTransferStep:
                 log_cb=executor.log_message.emit,
                 progress_cb=_on_progress,
                 cancel_flag=executor._cancel,
-                destination_override=job.download_destination,
+                destination_override=str(destination_root) if destination_root is not None else "",
+                create_device_subdir=False,
                 delete_after_download=job.delete_after_download,
                 selective_bases=selective,
             )
         except Exception as exc:
-            fallback = self._existing_targets(executor, job)
+            fallback = self._existing_targets(executor, job) if ExecutorSupport.allow_reuse_existing(executor) else []
             if fallback:
                 executor.log_message.emit(
                     f"  ↩ Download nicht möglich ({exc}) – nutze {len(fallback)} vorhandene Datei(en) im Zielverzeichnis"
@@ -95,7 +100,7 @@ class PiDownloadTransferStep:
                     on_file_ready(path)
             return paths
 
-        fallback = self._existing_targets(executor, job)
+        fallback = self._existing_targets(executor, job) if ExecutorSupport.allow_reuse_existing(executor) else []
         if fallback:
             executor.log_message.emit(
                 f"  ↩ Keine neue Übertragung – nutze {len(fallback)} vorhandene Datei(en) im Zielverzeichnis"
@@ -110,8 +115,10 @@ class PiDownloadTransferStep:
 
     @staticmethod
     def _existing_targets(executor: Any, job: WorkflowJob) -> list[str]:
-        dest_root = Path(job.download_destination or executor._settings.cameras.destination)
-        local_dir = dest_root / job.device_name if job.device_name else dest_root
+        dest_root = ExecutorSupport.resolve_download_destination(executor._settings, job)
+        if dest_root is None:
+            return []
+        local_dir = dest_root
         if not local_dir.exists():
             return []
         if job.files:

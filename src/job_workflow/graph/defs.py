@@ -357,7 +357,13 @@ def _node_visual_state(node_type: str, job: WorkflowJob | None = None) -> NodeVi
     label, _bg, fg, _default_pct = _STATE_META[state]
     progress = _step_progress(job, step_key, state) if job is not None and step_key else 0
     if is_source_node and job is not None:
-        progress = max(0, min(getattr(job, "transfer_progress_pct", progress), 100))
+        transfer_progress = max(0, min(getattr(job, "transfer_progress_pct", progress), 100))
+        if state in {"done", "reused-target", "skipped", "ok"}:
+            progress = 100
+        elif state == "error":
+            progress = transfer_progress if transfer_progress > 0 else progress
+        else:
+            progress = transfer_progress
     lane_color = QColor(_LANE_NODE_COLORS[lane])
     base = QColor(_NODE_IDLE_FILL)
     progress_fill = QColor(lane_color)

@@ -30,6 +30,7 @@ _X264_TO_NVENC_PRESET: dict[str, str] = {
     "slow": "p6",
     "slower": "p7",
     "veryslow": "p7",
+    "placebo": "p7",
 }
 
 _H264_PROFILE = "high"

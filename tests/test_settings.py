@@ -1,9 +1,11 @@
 import json
+from datetime import date
 
 from PySide6.QtWidgets import QApplication
 
 from src import settings as settings_module
-from src.ui.dialogs import KaderblickSettingsDialog
+from src.settings import DeviceSettings
+from src.ui.dialogs import CameraSettingsDialog, GeneralSettingsDialog, KaderblickSettingsDialog
 
 
 _app = QApplication.instance() or QApplication([])
@@ -11,7 +13,8 @@ _app = QApplication.instance() or QApplication([])
 
 class TestSettingsPaths:
     def test_settings_file_is_stored_in_config_directory(self):
-        assert settings_module.SETTINGS_FILE == settings_module._CONFIG_DIR / "settings.json"
+        assert settings_module.SETTINGS_FILE.name == "settings.json"
+        assert settings_module.SETTINGS_FILE.parent.name == "config"
 
 
 class TestAppSettingsLoad:
@@ -219,6 +222,47 @@ class TestAppSettingsLoad:
         payload = json.loads(config_file.read_text(encoding="utf-8"))
         assert payload["restore_last_workflow"] is True
 
+    def test_save_and_load_preserve_global_workflow_output_root(self, monkeypatch, tmp_path):
+        config_file = tmp_path / "config" / "settings.json"
+        monkeypatch.setattr(settings_module, "SETTINGS_FILE", config_file)
+
+        app_settings = settings_module.AppSettings()
+        app_settings.workflow_output_root = "/media/video/workflows"
+        app_settings.save()
+
+        loaded = settings_module.AppSettings.load()
+
+        assert loaded.workflow_output_root == "/media/video/workflows"
+        assert loaded.workflow_output_dir_for("Spieltag 23") == f"/media/video/workflows/Spieltag 23 {date.today().isoformat()}"
+        assert loaded.workflow_output_dir_for("Spieltag 23", "Pi Nord") == "/media/video/workflows/Pi Nord"
+
+    def test_save_and_load_preserve_camera_settings(self, monkeypatch, tmp_path):
+        config_file = tmp_path / "config" / "settings.json"
+        monkeypatch.setattr(settings_module, "SETTINGS_FILE", config_file)
+
+        app_settings = settings_module.AppSettings()
+        app_settings.cameras.source = "/srv/pi/recordings"
+        app_settings.cameras.devices = [
+            DeviceSettings(
+                name="Pi Nord",
+                ip="10.0.0.10",
+                port=2222,
+                username="pi",
+                password="secret",
+                ssh_key="/home/test/.ssh/pi_nord",
+            )
+        ]
+
+        app_settings.save()
+        loaded = settings_module.AppSettings.load()
+
+        assert loaded.cameras.source == "/srv/pi/recordings"
+        assert len(loaded.cameras.devices) == 1
+        assert loaded.cameras.devices[0].name == "Pi Nord"
+        assert loaded.cameras.devices[0].ip == "10.0.0.10"
+        assert loaded.cameras.devices[0].port == 2222
+        assert loaded.cameras.devices[0].ssh_key == "/home/test/.ssh/pi_nord"
+
 
 class TestKaderblickSettingsDialog:
     def test_dialog_restores_bearer_selection(self):
@@ -253,3 +297,88 @@ class TestKaderblickSettingsDialog:
         assert settings.kaderblick.auth_mode == "bearer"
         payload = json.loads(config_file.read_text(encoding="utf-8"))
         assert payload["kaderblick"]["auth_mode"] == "bearer"
+
+
+class TestCameraSettingsDialog:
+    def test_dialog_save_persists_camera_settings(self, monkeypatch, tmp_path):
+        config_file = tmp_path / "config" / "settings.json"
+        monkeypatch.setattr(settings_module, "SETTINGS_FILE", config_file)
+
+        settings = settings_module.AppSettings()
+        settings.cameras.devices = [
+            DeviceSettings(name="Pi Süd", ip="10.0.0.11", port=22, username="pi", password="pw")
+        ]
+        dlg = CameraSettingsDialog(None, settings)
+        dlg._source_edit.setText("/srv/cameras")
+
+        dlg._save()
+
+        payload = json.loads(config_file.read_text(encoding="utf-8"))
+        assert payload["cameras"]["source"] == "/srv/cameras"
+        assert "destination" not in payload["cameras"]
+        assert "delete_after_download" not in payload["cameras"]
+        assert "auto_convert" not in payload["cameras"]
+        assert payload["cameras"]["devices"][0]["name"] == "Pi Süd"
+        assert payload["cameras"]["devices"][0]["ip"] == "10.0.0.11"
+
+
+class TestGeneralSettingsDialog:
+    def test_dialog_save_persists_global_workflow_output_root(self, monkeypatch, tmp_path):
+        config_file = tmp_path / "config" / "settings.json"
+        monkeypatch.setattr(settings_module, "SETTINGS_FILE", config_file)
+
+        settings = settings_module.AppSettings()
+        dlg = GeneralSettingsDialog(None, settings)
+        dlg.output_root_edit.setText("/srv/video/workflows")
+
+        dlg._save()
+
+        payload = json.loads(config_file.read_text(encoding="utf-8"))
+        assert settings.workflow_output_root == "/srv/video/workflows"
+        assert payload["workflow_output_root"] == "/srv/video/workflows"
+
+    def test_dialog_uses_history_dropdowns_and_persists_match_memory(self, monkeypatch, tmp_path):
+        config_file = tmp_path / "config" / "settings.json"
+        monkeypatch.setattr(settings_module, "SETTINGS_FILE", config_file)
+
+        saved_memory = {}
+
+        monkeypatch.setattr(
+            "src.ui.dialogs.general.load_memory",
+            lambda: {
+                "last_match": {
+                    "date_iso": "2026-03-20",
+                    "competition": "Liga",
+                    "home_team": "Heim Alt",
+                    "away_team": "Gast Alt",
+                },
+                "history_competition": ["Liga", "Pokal"],
+                "history_home_team": ["Heim Alt"],
+                "history_away_team": ["Gast Alt"],
+            },
+        )
+        monkeypatch.setattr("src.ui.dialogs.general.save_memory", lambda data: saved_memory.update(data))
+
+        settings = settings_module.AppSettings()
+        dlg = GeneralSettingsDialog(None, settings)
+
+        assert dlg.match_competition_edit.currentText() == "Liga"
+        assert dlg.match_competition_edit.count() == 2
+        assert dlg.match_home_edit.currentText() == "Heim Alt"
+        assert dlg.match_away_edit.currentText() == "Gast Alt"
+        assert dlg.match_date_edit.date().toString("yyyy-MM-dd") == date.today().isoformat()
+
+        dlg.match_competition_edit.setCurrentText("Kreispokal")
+        dlg.match_home_edit.setCurrentText("FC Heim")
+        dlg.match_away_edit.setCurrentText("FC Gast")
+        dlg._save()
+
+        payload = json.loads(config_file.read_text(encoding="utf-8"))
+        assert payload["workflow_output_root"] == ""
+        assert saved_memory["last_match"]["date_iso"] == date.today().isoformat()
+        assert saved_memory["last_match"]["competition"] == "Kreispokal"
+        assert saved_memory["last_match"]["home_team"] == "FC Heim"
+        assert saved_memory["last_match"]["away_team"] == "FC Gast"
+        assert saved_memory["history_competition"][0] == "Kreispokal"
+        assert saved_memory["history_home_team"][0] == "FC Heim"
+        assert saved_memory["history_away_team"][0] == "FC Gast"

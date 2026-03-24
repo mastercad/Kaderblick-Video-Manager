@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 from PySide6.QtWidgets import QFileDialog, QHBoxLayout, QPushButton, QLineEdit
@@ -68,13 +69,21 @@ class JobEditorStateMixin:
                 if not self._device_combo.currentData():
                     QMessageBox.warning(self, "Kein Gerät", "Bitte ein Pi-Kamera-Gerät auswählen.")
                     return False
-                if not self._pi_dest_edit.text().strip():
+                workflow_name = self._name_edit.text().strip()
+                device_name = self._device_combo.currentData() or ""
+                default_pi_dest = self._settings.workflow_raw_dir_for(workflow_name, device_name)
+                if not self._pi_dest_edit.text().strip() and not default_pi_dest:
                     QMessageBox.warning(self, "Kein Zielverzeichnis", "Bitte ein lokales Zielverzeichnis angeben.")
                     return False
         return True
 
     def _populate_from_job(self) -> None:
+        from ...integrations.youtube_title_editor import load_memory
+
         job = self._job
+        mem = load_memory()
+        last_match = mem.get("last_match", {})
+        today_iso = date.today().isoformat()
         self._name_edit.setText(job.name)
 
         mode_map = {"files": 0, "folder_scan": 1, "pi_download": 2}
@@ -97,7 +106,7 @@ class JobEditorStateMixin:
         dev_idx = self._device_combo.findData(job.device_name)
         if dev_idx >= 0:
             self._device_combo.setCurrentIndex(dev_idx)
-        self._pi_dest_edit.setText(job.download_destination or self._settings.cameras.destination)
+        self._pi_dest_edit.setText(job.download_destination)
         self._delete_after_dl_cb.setChecked(job.delete_after_download)
         self._pi_prefix_edit.setText(job.output_prefix)
         if job.source_mode == "pi_download" and job.files:
@@ -114,7 +123,9 @@ class JobEditorStateMixin:
         self._preset_combo.setCurrentText(job.preset)
         self._crf_spin.setValue(job.crf)
         self._fps_spin.setValue(job.fps)
-        self._format_combo.setCurrentText(job.output_format)
+        self._resolution_combo.setCurrentIndex(max(self._resolution_combo.findData(job.output_resolution), 0))
+        self._format_combo.setCurrentIndex(max(self._format_combo.findData(job.output_format), 0))
+        self._no_bframes_cb.setChecked(job.no_bframes)
         self._overwrite_cb.setChecked(job.overwrite)
 
         self._merge_audio_cb.setChecked(job.merge_audio)
@@ -127,7 +138,7 @@ class JobEditorStateMixin:
         self._yt_create_cb.setChecked(job.create_youtube_version)
         self._yt_title_edit.setText(job.default_youtube_title)
         self._yt_playlist_edit.setText(job.default_youtube_playlist)
-        self._yt_competition = job.default_youtube_competition
+        self._yt_competition = job.default_youtube_competition or str(last_match.get("competition", ""))
         self._yt_details.setVisible(job.upload_youtube)
 
         self._kb_upload_cb.setChecked(job.upload_kaderblick)
@@ -138,24 +149,16 @@ class JobEditorStateMixin:
         self._tc_enabled_cb.setChecked(job.title_card_enabled)
         self._tc_details.setEnabled(job.title_card_enabled)
         self._tc_logo_edit.setText(job.title_card_logo_path)
-        self._tc_home_edit.setText(job.title_card_home_team)
-        self._tc_away_edit.setText(job.title_card_away_team)
-        self._tc_date_edit.setText(job.title_card_date)
-        if not job.title_card_home_team or not job.title_card_away_team or not job.title_card_date:
-            from ...integrations.youtube_title_editor import load_memory
-
-            mem = load_memory()
-            last_match = mem.get("last_match", {})
-            if not job.title_card_home_team and last_match.get("home_team"):
-                self._tc_home_edit.setText(last_match["home_team"])
-            if not job.title_card_away_team and last_match.get("away_team"):
-                self._tc_away_edit.setText(last_match["away_team"])
-            if not job.title_card_date and last_match.get("date_iso"):
-                try:
-                    year, month, day = last_match["date_iso"].split("-")
-                    self._tc_date_edit.setText(f"{day}.{month}.{year}")
-                except Exception:
-                    self._tc_date_edit.setText(last_match["date_iso"])
+        self._tc_home_edit.setText(job.title_card_home_team or str(last_match.get("home_team", "")))
+        self._tc_away_edit.setText(job.title_card_away_team or str(last_match.get("away_team", "")))
+        date_value = job.title_card_date.strip() if job.title_card_date else ""
+        if not date_value:
+            try:
+                year, month, day = today_iso.split("-")
+                date_value = f"{day}.{month}.{year}"
+            except Exception:
+                date_value = today_iso
+        self._tc_date_edit.setText(date_value)
         self._tc_duration_spin.setValue(job.title_card_duration)
         bg = job.title_card_bg_color or "#000000"
         fg = job.title_card_fg_color or "#FFFFFF"
@@ -204,7 +207,9 @@ class JobEditorStateMixin:
         job.preset = self._preset_combo.currentText()
         job.crf = self._crf_spin.value()
         job.fps = self._fps_spin.value()
-        job.output_format = self._format_combo.currentText()
+        job.output_resolution = str(self._resolution_combo.currentData() or "source")
+        job.output_format = str(self._format_combo.currentData() or "mp4")
+        job.no_bframes = self._no_bframes_cb.isChecked()
         job.overwrite = self._overwrite_cb.isChecked()
 
         job.merge_audio = self._merge_audio_cb.isChecked()

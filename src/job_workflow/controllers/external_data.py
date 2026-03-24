@@ -40,6 +40,7 @@ class WorkflowExternalDataController:
         get_kaderblick_reload_button: Callable[[], object],
         get_kaderblick_status_label: Callable[[], object],
         get_device_name: Callable[[], str],
+        get_workflow_name: Callable[[], str],
         get_pi_destination: Callable[[], str],
         get_pi_load_button: Callable[[], object],
         get_pi_load_status: Callable[[], object],
@@ -56,6 +57,7 @@ class WorkflowExternalDataController:
         self._get_kaderblick_reload_button = get_kaderblick_reload_button
         self._get_kaderblick_status_label = get_kaderblick_status_label
         self._get_device_name = get_device_name
+        self._get_workflow_name = get_workflow_name
         self._get_pi_destination = get_pi_destination
         self._get_pi_load_button = get_pi_load_button
         self._get_pi_load_status = get_pi_load_status
@@ -96,7 +98,6 @@ class WorkflowExternalDataController:
         reload_button.setEnabled(False)
         status_label.setText("⏳ Lade von API …")
         status_label.setStyleSheet("color: #64748B;")
-        QCoreApplication.processEvents()
 
         errors: list[str] = []
         video_types: list[dict] = []
@@ -161,12 +162,16 @@ class WorkflowExternalDataController:
             self._on_pi_load_failed()
             return
 
-        destination = self._get_pi_destination().strip() or (settings.cameras.destination if settings is not None else "")
-        device_name = self._get_device_name() or ""
+        default_destination = ""
+        if settings is not None:
+            workflow_name = self._get_workflow_name()
+            device_name = self._get_device_name() or ""
+            default_destination = settings.workflow_raw_dir_for(workflow_name, device_name)
+        destination = self._get_pi_destination().strip() or default_destination
         entries = [
             FileEntry(
-                source_path=str(Path(destination) / device_name / f"{item['base']}.mjpg"),
-                youtube_title=item["base"],
+                source_path=str(Path(destination) / f"{item['base']}.mjpg"),
+                source_size_bytes=int(item.get("total_size") or 0),
             )
             for item in files
         ]

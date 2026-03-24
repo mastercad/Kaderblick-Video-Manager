@@ -20,7 +20,7 @@ from PySide6.QtGui import QFont, QColor
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton,
     QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QFileDialog, QMessageBox,
+    QFileDialog, QMessageBox, QSizePolicy,
 )
 
 from ..workflow import FileEntry
@@ -47,6 +47,20 @@ class FileListWidget(QWidget):
     _COL_YT_TITLE = 3
     _COL_PLAYLIST = 4
     _COL_KB_START = 5
+    _COL_MIN_WIDTHS = {
+        _COL_PATH: 220,
+        _COL_SIZE: 86,
+        _COL_OUTNAME: 180,
+        _COL_YT_TITLE: 260,
+        _COL_PLAYLIST: 160,
+        _COL_KB_START: 92,
+    }
+    _COL_MAX_WIDTHS = {
+        _COL_PATH: 420,
+        _COL_OUTNAME: 320,
+        _COL_YT_TITLE: 520,
+        _COL_PLAYLIST: 280,
+    }
     # UserRole offsets on the path item
     _ROLE_KB_TYPE  = Qt.UserRole
     _ROLE_KB_CAM   = Qt.UserRole + 1
@@ -70,13 +84,14 @@ class FileListWidget(QWidget):
         QColor("#ffe0cc"),   # orange
     ]
 
+    _MIN_VISIBLE_ROWS = 4
+    _DEFAULT_VISIBLE_ROWS = 5
+    _MAX_VISIBLE_ROWS = 5
+    _ROW_HEIGHT = 28
+
     @staticmethod
-    def _fmt_size(path: str) -> str:
-        """Gibt die Dateigröße als lesbaren String zurück (KB/MB/GB)."""
-        try:
-            b = Path(path).stat().st_size
-        except OSError:
-            return "?"
+    def _format_bytes(b: int) -> str:
+        """Gibt eine Byte-Anzahl als lesbaren String zurück (KB/MB/GB)."""
         if b >= 1_073_741_824:
             return f"{b / 1_073_741_824:.1f} GB"
         if b >= 1_048_576:
@@ -84,6 +99,17 @@ class FileListWidget(QWidget):
         if b >= 1_024:
             return f"{b / 1_024:.0f} KB"
         return f"{b} B"
+
+    @classmethod
+    def _size_text(cls, entry: FileEntry) -> str:
+        if entry.source_size_bytes > 0:
+            return cls._format_bytes(entry.source_size_bytes)
+        if not entry.source_path:
+            return ""
+        try:
+            return cls._format_bytes(Path(entry.source_path).stat().st_size)
+        except OSError:
+            return "?"
 
     def __init__(self, last_dir_getter, last_dir_setter, parent=None):
         super().__init__(parent)
@@ -100,6 +126,8 @@ class FileListWidget(QWidget):
         self._table.setRowCount(0)
         for entry in entries:
             self._append_row(entry)
+        self._autosize_content_columns()
+        self._update_table_height()
         self.files_changed.emit()
 
     def collect(self) -> list[FileEntry]:
@@ -121,6 +149,7 @@ class FileListWidget(QWidget):
             tc_before = bool(path_item.data(self._ROLE_TC_BEFORE)) if path_item else False
             result.append(FileEntry(
                 source_path=self._cell_text(row, self._COL_PATH),
+                source_size_bytes=int(path_item.data(Qt.UserRole + 10) or 0) if path_item else 0,
                 output_filename=self._cell_text(row, self._COL_OUTNAME),
                 youtube_title=self._cell_text(row, self._COL_YT_TITLE),
                 youtube_description=kb_desc,
@@ -144,6 +173,7 @@ class FileListWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self._table = QTableWidget(0, 6)
         self._table.setHorizontalHeaderLabels(
@@ -151,23 +181,24 @@ class FileListWidget(QWidget):
              "Playlist", "KB-Start (s)"])
 
         hdr = self._table.horizontalHeader()
-        hdr.setSectionResizeMode(self._COL_PATH,     QHeaderView.Stretch)
+        hdr.setSectionResizeMode(self._COL_PATH,     QHeaderView.Interactive)
         hdr.setSectionResizeMode(self._COL_SIZE,     QHeaderView.Fixed)
         hdr.setSectionResizeMode(self._COL_OUTNAME,  QHeaderView.Interactive)
-        hdr.setSectionResizeMode(self._COL_YT_TITLE, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(self._COL_YT_TITLE, QHeaderView.Interactive)
         hdr.setSectionResizeMode(self._COL_PLAYLIST, QHeaderView.Interactive)
         hdr.setSectionResizeMode(self._COL_KB_START, QHeaderView.Fixed)
-        hdr.resizeSection(self._COL_SIZE,      72)
-        hdr.resizeSection(self._COL_OUTNAME,  160)
-        hdr.resizeSection(self._COL_PLAYLIST, 140)
-        hdr.resizeSection(self._COL_KB_START,  80)
+        hdr.setStretchLastSection(False)
+        hdr.setMinimumSectionSize(60)
+        self._apply_initial_column_widths()
 
         self._table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QAbstractItemView.MultiSelection)
         self._table.verticalHeader().setVisible(False)
         self._table.setAlternatingRowColors(True)
-        self._table.setMinimumHeight(130)
+        self._table.verticalHeader().setDefaultSectionSize(self._ROW_HEIGHT)
+        self._table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._table.installEventFilter(self)
+        self._update_table_height()
         layout.addWidget(self._table)
 
         btn_row = QHBoxLayout()
@@ -194,6 +225,7 @@ class FileListWidget(QWidget):
         btn_row.addWidget(bulk_btn)
 
         layout.addLayout(btn_row)
+        self._update_widget_height()
 
     # ── Interne Hilfsmethoden ─────────────────────────────────
 
@@ -213,10 +245,10 @@ class FileListWidget(QWidget):
         name_item.setData(self._ROLE_TC_SUB, getattr(entry, 'title_card_subtitle', '') or "")
         name_item.setData(self._ROLE_GRAPH_SRC, getattr(entry, 'graph_source_id', '') or "")
         name_item.setData(self._ROLE_TC_BEFORE, bool(getattr(entry, 'title_card_before_merge', False)))
+        name_item.setData(Qt.UserRole + 10, int(entry.source_size_bytes or 0))
         self._table.setItem(row, self._COL_PATH, name_item)
 
-        size_item = QTableWidgetItem(self._fmt_size(entry.source_path)
-                                     if entry.source_path else "")
+        size_item = QTableWidgetItem(self._size_text(entry))
         size_item.setFlags(size_item.flags() & ~Qt.ItemIsEditable)
         size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         size_item.setFont(QFont("Monospace", 9))
@@ -234,11 +266,45 @@ class FileListWidget(QWidget):
         kb_start_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._table.setItem(row, self._COL_KB_START, kb_start_item)
 
-        self._table.setRowHeight(row, 28)
+        self._table.setRowHeight(row, self._ROW_HEIGHT)
 
         # Merge-Visualisierung anwenden
         self._refresh_merge_visuals()
+        self._update_table_height()
         self.files_changed.emit()
+
+    def _update_table_height(self) -> None:
+        row_count = self._table.rowCount()
+        visible_rows = max(min(row_count, self._MAX_VISIBLE_ROWS), self._MIN_VISIBLE_ROWS)
+        if row_count == 0:
+            visible_rows = self._MIN_VISIBLE_ROWS
+        frame = self._table.frameWidth() * 2
+        header_height = self._table.horizontalHeader().height()
+        height = header_height + (visible_rows * self._ROW_HEIGHT) + frame
+        self._table.setMinimumHeight(height)
+        self._table.setMaximumHeight(height)
+        self._update_widget_height()
+
+    def _update_widget_height(self) -> None:
+        if self.layout() is None:
+            return
+        self.layout().activate()
+        height = self.layout().sizeHint().height()
+        self.setMinimumHeight(height)
+        self.setMaximumHeight(height)
+
+    def _apply_initial_column_widths(self) -> None:
+        for column, width in self._COL_MIN_WIDTHS.items():
+            self._table.setColumnWidth(column, width)
+
+    def _autosize_content_columns(self) -> None:
+        self._table.resizeColumnsToContents()
+        for column, min_width in self._COL_MIN_WIDTHS.items():
+            width = max(self._table.columnWidth(column), min_width)
+            max_width = self._COL_MAX_WIDTHS.get(column)
+            if max_width is not None:
+                width = min(width, max_width)
+            self._table.setColumnWidth(column, width)
 
     # ── Kaderblick-Optionen ───────────────────────────────────
 
@@ -331,10 +397,8 @@ class FileListWidget(QWidget):
             return
         self._set_last_dir(str(Path(paths[0]).parent))
         for p in sorted(paths):
-            stem = Path(p).stem
             self._append_row(FileEntry(
                 source_path=p,
-                youtube_title=stem,
             ))
 
     def eventFilter(self, obj, event) -> bool:
@@ -359,6 +423,7 @@ class FileListWidget(QWidget):
             return
         for row in rows:
             self._table.removeRow(row)
+        self._update_table_height()
         self.files_changed.emit()
 
     def _selected_rows(self) -> list[int]:

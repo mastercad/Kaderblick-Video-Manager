@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..workflow import WorkflowJob
+from .executor_support import ExecutorSupport
 from .transfer_io import emit_item_progress, transfer_files
 
 
@@ -18,6 +19,7 @@ class DirectFilesTransferStep:
         on_file_ready: Callable[[str], None] | None = None,
     ) -> list[str]:
         paths: list[Path] = []
+        dst_dir = ExecutorSupport.resolve_copy_destination(executor._settings, job)
         total_entries = len(job.files)
         executor.job_progress.emit(orig_idx, 0)
         for entry_idx, entry in enumerate(job.files, start=1):
@@ -29,8 +31,8 @@ class DirectFilesTransferStep:
                 continue
 
             fallback = None
-            if job.copy_destination:
-                candidate = Path(job.copy_destination) / source_path.name
+            if dst_dir is not None and ExecutorSupport.allow_reuse_existing(executor):
+                candidate = dst_dir / source_path.name
                 if candidate.exists():
                     fallback = candidate
             if fallback:
@@ -54,7 +56,6 @@ class DirectFilesTransferStep:
             f"Bereit: {len(paths)} Datei(en) | {', '.join(path.name for path in paths[:4])}{' …' if len(paths) > 4 else ''}",
         )
 
-        dst_dir = Path(job.copy_destination) if job.copy_destination else None
         if not dst_dir:
             executor.job_progress.emit(orig_idx, 100)
             ready = [str(path) for path in paths]

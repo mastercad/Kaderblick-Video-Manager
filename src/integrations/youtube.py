@@ -1,12 +1,76 @@
 """YouTube-Upload: Authentifizierung, Upload und Playlist-Management."""
 
 import json
+import mimetypes
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
 from ..settings import CLIENT_SECRET_FILE, TOKEN_FILE, AppSettings
 from .state_store import load_section, save_section
+
+
+_YOUTUBE_VARIANT_EXTENSIONS = (".mp4", ".avi")
+
+
+def _youtube_variant_name_candidates(output_path: Path) -> list[str]:
+    base_name = f"{output_path.stem}_youtube"
+    candidates = [f"{base_name}{output_path.suffix}"] if output_path.suffix else []
+    for ext in _YOUTUBE_VARIANT_EXTENSIONS:
+        name = f"{base_name}{ext}"
+        if name not in candidates:
+            candidates.append(name)
+    return candidates
+
+
+def _youtube_variant_candidates(output_path: Path, derived_output_dir: str = "") -> list[Path]:
+    candidates: list[Path] = []
+    normalized_dir = (derived_output_dir or "").strip()
+    candidate_names = _youtube_variant_name_candidates(output_path)
+    if normalized_dir:
+        derived_path = Path(normalized_dir)
+        for candidate_name in candidate_names:
+            candidates.append(derived_path / candidate_name)
+    for candidate_name in candidate_names:
+        candidates.append(output_path.with_name(candidate_name))
+    if output_path.parent.name.lower() != "processed":
+        processed_dir = output_path.parent / "processed"
+        for candidate_name in candidate_names:
+            candidates.append(processed_dir / candidate_name)
+
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        key = str(candidate)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(candidate)
+    return unique
+
+
+def _upload_mime_type(file_path: Path) -> str:
+    guessed, _ = mimetypes.guess_type(str(file_path))
+    return guessed or "application/octet-stream"
+
+
+def _is_retriable_upload_error(error: Exception, retriable_status: set[int]) -> bool:
+    err_str = str(error)
+    err_lower = err_str.lower()
+    if "timed out" in err_lower or "timeout" in err_lower:
+        return True
+    if "connection" in err_lower:
+        return True
+    if "eof occurred in violation of protocol" in err_lower:
+        return True
+    if "ssl" in err_lower and ("eof" in err_lower or "wrong version number" in err_lower or "decryption failed" in err_lower):
+        return True
+    if "http error 5" in err_lower or "httperror 5" in err_lower:
+        return True
+    if "httperror" in type(error).__name__.lower() and any(f" {status}" in err_str for status in retriable_status):
+        return True
+    return False
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -281,10 +345,10 @@ def upload_to_youtube(job, settings: AppSettings,
         log("Keine Ausgabedatei zum Hochladen vorhanden.")
         return False
 
-    yt_version = mp4.with_stem(mp4.stem + "_youtube")
-    if yt_version.exists():
-        upload_file = yt_version
-        log(f"Verwende YouTube-optimierte Version: {yt_version.name}")
+    derived_dir = str(getattr(job, "derived_output_dir", "") or "")
+    upload_file = next((candidate for candidate in _youtube_variant_candidates(mp4, derived_dir) if candidate.exists()), None)
+    if upload_file is not None:
+        log(f"Verwende YouTube-optimierte Version: {upload_file.name}")
     elif mp4.exists():
         upload_file = mp4
         log(f"Verwende Originaldatei (keine _youtube-Version gefunden): {mp4.name}")
@@ -330,7 +394,7 @@ def upload_to_youtube(job, settings: AppSettings,
             log(f"  Session gültig – setze fort bei {offset / (1024 * 1024):.1f} MB")
             media = MediaFileUpload(
                 str(upload_file),
-                mimetype="video/mp4",
+                mimetype=_upload_mime_type(upload_file),
                 resumable=True,
                 chunksize=10 * 1024 * 1024,
             )
@@ -350,7 +414,7 @@ def upload_to_youtube(job, settings: AppSettings,
         log(f"YouTube-Upload: {upload_file.name} → \"{title}\"")
         media = MediaFileUpload(
             str(upload_file),
-            mimetype="video/mp4",
+            mimetype=_upload_mime_type(upload_file),
             resumable=True,
             chunksize=10 * 1024 * 1024,
         )
@@ -358,7 +422,6 @@ def upload_to_youtube(job, settings: AppSettings,
             part="snippet,status", body=body, media_body=media)
 
     # ── Upload-Schleife ───────────────────────────────────────
-    import time
     _RETRY_STATUS = {500, 502, 503, 504}
     _MAX_RETRIES = 5
 
@@ -373,14 +436,7 @@ def upload_to_youtube(job, settings: AppSettings,
                 chunk_status, response = upload_request.next_chunk()
                 retries = 0  # Erfolgreicher Chunk → Zähler zurücksetzen
             except Exception as e:
-                err_str = str(e)
-                # Wiederherstellbare Fehler: Timeout, 5xx, Verbindungsabbruch
-                retriable = (
-                    "timed out" in err_str.lower()
-                    or "connection" in err_str.lower()
-                    or "HttpError" in type(e).__name__
-                    and any(f" {s}" in err_str for s in _RETRY_STATUS)
-                )
+                retriable = _is_retriable_upload_error(e, _RETRY_STATUS)
                 if retriable and retries < _MAX_RETRIES:
                     retries += 1
                     wait = 2 ** retries  # 2, 4, 8, 16, 32 s
@@ -440,16 +496,16 @@ def get_video_id_for_output(output_path: Path) -> Optional[str]:
     Prüft zunächst die _youtube-Version, dann die Originaldatei.
     Gibt None zurück wenn noch kein Upload registriert ist.
     """
-    yt_version = output_path.with_stem(output_path.stem + "_youtube")
-    vid = _registry.already_uploaded(yt_version)
-    if vid:
-        return vid
+    for yt_version in _youtube_variant_candidates(output_path):
+        vid = _registry.already_uploaded(yt_version)
+        if vid:
+            return vid
     return _registry.already_uploaded(output_path)
 
 
 def get_registry_entry_for_output(output_path: Path) -> dict | None:
-    yt_version = output_path.with_stem(output_path.stem + "_youtube")
-    key_candidates = [str(yt_version.resolve()), str(output_path.resolve())]
+    key_candidates = [str(path.resolve()) for path in _youtube_variant_candidates(output_path)]
+    key_candidates.append(str(output_path.resolve()))
     for key in key_candidates:
         entry = _registry._data.get(key)
         if entry:

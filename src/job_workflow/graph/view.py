@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections import defaultdict
 import uuid
 
-from PySide6.QtCore import QPointF, QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QPainter, QPen, QColor
 from PySide6.QtWidgets import QFrame, QGraphicsPathItem, QGraphicsScene, QGraphicsView
 
@@ -22,6 +22,9 @@ class _WorkflowGraphView(QGraphicsView):
     graph_changed = Signal()
     SNAP_DISTANCE = 28
     PORT_PICK_DISTANCE = 18
+    ZOOM_STEP = 1.15
+    MIN_ZOOM = 0.55
+    MAX_ZOOM = 2.5
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -33,10 +36,13 @@ class _WorkflowGraphView(QGraphicsView):
         self.setStyleSheet("background: #F8FAFC; border: 1px solid #D7E0EA; border-radius: 12px;")
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
         self.setCacheMode(QGraphicsView.CacheModeFlag.CacheNone)
+        self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setAcceptDrops(True)
         self._nodes: dict[str, _StepNodeItem] = {}
         self._edges: list[tuple[str, str, str, _GraphEdgeItem]] = []
         self._draft_job: WorkflowJob | None = None
+        self._is_panning = False
+        self._last_pan_pos: QPoint | None = None
         self._interaction = _WorkflowGraphInteraction(self)
         self._scene.selectionChanged.connect(self._interaction.emit_selection)
 
@@ -54,6 +60,19 @@ class _WorkflowGraphView(QGraphicsView):
         rect = self._scene.itemsBoundingRect().adjusted(-30, -30, 30, 30)
         if not rect.isNull():
             self.setSceneRect(rect)
+
+    def fit_scene_contents(self) -> None:
+        rect = self.sceneRect()
+        if rect.isNull():
+            return
+        viewport = self.viewport()
+        if viewport is None or viewport.width() <= 0 or viewport.height() <= 0:
+            return
+        self.resetTransform()
+        self.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        if self.transform().m11() > 1.0 or self.transform().m22() > 1.0:
+            self.resetTransform()
+            self.centerOn(rect.center())
 
     def graph_nodes(self) -> list[dict[str, str | float]]:
         return serialize_graph_nodes(self._nodes)
@@ -184,6 +203,10 @@ class _WorkflowGraphView(QGraphicsView):
         super().dragMoveEvent(event)
 
     def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton:
+            self._start_panning(event.pos())
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton and not self.has_pending_connection():
             scene_pos = self.mapToScene(event.pos())
             branch_hit = self._node_output_branch_at_scene_pos(scene_pos)
@@ -204,16 +227,61 @@ class _WorkflowGraphView(QGraphicsView):
         super().dropEvent(event)
 
     def mouseMoveEvent(self, event):
+        if self._is_panning:
+            self._pan_to(event.pos())
+            event.accept()
+            return
         if self.has_pending_connection():
             self.update_temporary_connection(self.mapToScene(event.pos()))
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.MiddleButton and self._is_panning:
+            self._stop_panning()
+            event.accept()
+            return
         if self.has_pending_connection():
             self.complete_connection_at(self.mapToScene(event.pos()))
             event.accept()
             return
         super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event):
+        delta = event.angleDelta().y()
+        if delta == 0:
+            super().wheelEvent(event)
+            return
+        factor = self.ZOOM_STEP if delta > 0 else 1 / self.ZOOM_STEP
+        self._apply_zoom_factor(factor)
+        event.accept()
+
+    def _apply_zoom_factor(self, factor: float) -> None:
+        current_zoom = self.transform().m11()
+        if current_zoom <= 0:
+            return
+        target_zoom = max(self.MIN_ZOOM, min(self.MAX_ZOOM, current_zoom * factor))
+        scale_factor = target_zoom / current_zoom
+        if abs(scale_factor - 1.0) < 1e-6:
+            return
+        self.scale(scale_factor, scale_factor)
+
+    def _start_panning(self, pos: QPoint) -> None:
+        self._is_panning = True
+        self._last_pan_pos = QPoint(pos)
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def _pan_to(self, pos: QPoint) -> None:
+        if not self._is_panning or self._last_pan_pos is None:
+            return
+        delta = pos - self._last_pan_pos
+        self._last_pan_pos = QPoint(pos)
+        self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+        self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+
+    def _stop_panning(self) -> None:
+        self._is_panning = False
+        self._last_pan_pos = None
+        self.unsetCursor()
 
     def update_edges(self) -> None:
         self._update_edge_paths()

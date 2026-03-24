@@ -62,12 +62,16 @@ class CleanupOutputStep:
         stems: set[str] = set()
         parents: set[Path] = set()
         suffixes: set[str] = {".mp4"}
+        derived_output_dir = str(getattr(prepared.cv_job, "derived_output_dir", "") or "").strip()
 
         for path in base_paths:
             parents.add(path.parent)
             if path.suffix:
                 suffixes.add(path.suffix)
             stems.add(cls._normalize_stem(path.stem))
+
+        if derived_output_dir:
+            parents.add(Path(derived_output_dir))
 
         candidates: set[Path] = set()
         for parent in parents:

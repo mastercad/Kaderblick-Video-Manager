@@ -63,6 +63,8 @@ class JobEditorDialog(JobEditorSourceMixin, JobEditorPagesMixin, JobEditorStateM
         job.preset = settings.video.preset
         job.fps = settings.video.fps
         job.output_format = settings.video.output_format
+        job.output_resolution = settings.video.output_resolution
+        job.no_bframes = settings.video.no_bframes
         job.amplify_audio = settings.audio.amplify_audio
         job.amplify_db = settings.audio.amplify_db
         return job

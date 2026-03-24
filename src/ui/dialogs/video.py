@@ -18,6 +18,23 @@ from PySide6.QtWidgets import (
 from ...media.diagnostics import gpu_diagnostics
 from ...media.encoder import available_encoder_choices, encoder_display_name, resolve_encoder
 from ...settings import AppSettings, PROFILES
+from ...settings.profiles import (
+    VIDEO_FORMAT_OPTIONS,
+    VIDEO_LABEL_CONTAINER,
+    VIDEO_LABEL_FPS,
+    VIDEO_LABEL_PRESET,
+    VIDEO_LABEL_PROFILE,
+    VIDEO_LABEL_RESOLUTION,
+    VIDEO_PRESET_OPTIONS,
+    VIDEO_RESOLUTION_OPTIONS,
+    VIDEO_TEXT_NO_BFRAMES,
+    VIDEO_TOOLTIP_AUDIO_SYNC,
+    VIDEO_TOOLTIP_CONTAINER,
+    VIDEO_TOOLTIP_NO_BFRAMES,
+    VIDEO_TOOLTIP_OVERWRITE,
+    VIDEO_TOOLTIP_PRESET,
+    VIDEO_TOOLTIP_RESOLUTION,
+)
 
 
 class VideoSettingsDialog(QDialog):
@@ -37,7 +54,7 @@ class VideoSettingsDialog(QDialog):
             self.profile_combo.addItem(name)
         self.profile_combo.setCurrentText(vs.profile)
         self.profile_combo.currentTextChanged.connect(self._on_profile_changed)
-        profile_form.addRow("Profil:", self.profile_combo)
+        profile_form.addRow(VIDEO_LABEL_PROFILE, self.profile_combo)
         profile_group.setLayout(profile_form)
         layout.addWidget(profile_group)
 
@@ -73,13 +90,23 @@ class VideoSettingsDialog(QDialog):
         self.fps_spin = QSpinBox()
         self.fps_spin.setRange(1, 120)
         self.fps_spin.setValue(vs.fps)
-        form.addRow("Framerate (FPS):", self.fps_spin)
+        form.addRow(VIDEO_LABEL_FPS, self.fps_spin)
+
+        self.resolution_combo = QComboBox()
+        for value, label in VIDEO_RESOLUTION_OPTIONS:
+            self.resolution_combo.addItem(label, value)
+        self.resolution_combo.setCurrentIndex(max(self.resolution_combo.findData(vs.output_resolution), 0))
+        self.resolution_combo.currentIndexChanged.connect(self._on_setting_changed)
+        self.resolution_combo.setToolTip(VIDEO_TOOLTIP_RESOLUTION)
+        form.addRow(VIDEO_LABEL_RESOLUTION, self.resolution_combo)
 
         self.fmt_combo = QComboBox()
-        self.fmt_combo.addItems(["mp4", "avi"])
-        self.fmt_combo.setCurrentText(vs.output_format)
-        self.fmt_combo.currentTextChanged.connect(self._on_setting_changed)
-        form.addRow("Ausgabeformat:", self.fmt_combo)
+        for value, label in VIDEO_FORMAT_OPTIONS:
+            self.fmt_combo.addItem(label, value)
+        self.fmt_combo.setCurrentIndex(max(self.fmt_combo.findData(vs.output_format), 0))
+        self.fmt_combo.currentIndexChanged.connect(self._on_setting_changed)
+        self.fmt_combo.setToolTip(VIDEO_TOOLTIP_CONTAINER)
+        form.addRow(VIDEO_LABEL_CONTAINER, self.fmt_combo)
 
         self.crf_spin = QSpinBox()
         self.crf_spin.setRange(0, 51)
@@ -94,10 +121,11 @@ class VideoSettingsDialog(QDialog):
         form.addRow("CRF / CQ (Qualität):", crf_row)
 
         self.preset_combo = QComboBox()
-        self.preset_combo.addItems(["ultrafast", "superfast", "veryfast", "faster", "fast", "medium", "slow", "slower", "veryslow"])
+        self.preset_combo.addItems(VIDEO_PRESET_OPTIONS)
         self.preset_combo.setCurrentText(vs.preset)
         self.preset_combo.currentTextChanged.connect(self._on_setting_changed)
-        form.addRow("Preset:", self.preset_combo)
+        self.preset_combo.setToolTip(VIDEO_TOOLTIP_PRESET)
+        form.addRow(VIDEO_LABEL_PRESET, self.preset_combo)
 
         self.lossless_cb = QCheckBox("Verlustfrei")
         self.lossless_cb.setChecked(vs.lossless)
@@ -106,27 +134,17 @@ class VideoSettingsDialog(QDialog):
 
         self.audio_sync_cb = QCheckBox("Audio-Video-Sync (Frame-Drop-Korrektur)")
         self.audio_sync_cb.setChecked(vs.audio_sync)
-        self.audio_sync_cb.setToolTip(
-            "Zählt alle Frames in der MJPEG-Datei und passt die\n"
-            "Framerate an die Audio-Dauer an, um Drift durch\n"
-            "Frame-Drops auszugleichen.\n\n"
-            "Dauert bei großen Dateien (>200 GB) einige Minuten."
-        )
+        self.audio_sync_cb.setToolTip(VIDEO_TOOLTIP_AUDIO_SYNC)
         form.addRow("", self.audio_sync_cb)
 
         self.overwrite_cb = QCheckBox("Vorhandene Dateien überschreiben")
         self.overwrite_cb.setChecked(vs.overwrite)
-        self.overwrite_cb.setToolTip("Wenn aktiv, werden bestehende .mp4-Dateien erneut erstellt")
+        self.overwrite_cb.setToolTip(VIDEO_TOOLTIP_OVERWRITE)
         form.addRow("", self.overwrite_cb)
 
-        self.no_bframes_cb = QCheckBox("B-Frames deaktivieren (KI-Analyse / Random-Access)")
+        self.no_bframes_cb = QCheckBox(VIDEO_TEXT_NO_BFRAMES)
         self.no_bframes_cb.setChecked(vs.no_bframes)
-        self.no_bframes_cb.setToolTip(
-            "B-Frames benötigen Referenzframes aus der Zukunft – das kann bei\n"
-            "KI-Tools oder Seeking-Operationen zu Problemen führen.\n\n"
-            "Aktivieren: jeder Frame ist unabhängig decodierbar.\n"
-            "Nachteil: leicht größere Dateigröße."
-        )
+        self.no_bframes_cb.setToolTip(VIDEO_TOOLTIP_NO_BFRAMES)
         form.addRow("", self.no_bframes_cb)
 
         kf_row = QHBoxLayout()
@@ -186,7 +204,9 @@ class VideoSettingsDialog(QDialog):
         if "crf" in values:
             self.crf_spin.setValue(values["crf"])
         if "output_format" in values:
-            self.fmt_combo.setCurrentText(values["output_format"])
+            self.fmt_combo.setCurrentIndex(max(self.fmt_combo.findData(values["output_format"]), 0))
+        if "output_resolution" in values:
+            self.resolution_combo.setCurrentIndex(max(self.resolution_combo.findData(values["output_resolution"]), 0))
         if "no_bframes" in values:
             self.no_bframes_cb.setChecked(values["no_bframes"])
         if "keyframe_interval" in values:
@@ -211,7 +231,8 @@ class VideoSettingsDialog(QDialog):
         vs.profile = self.profile_combo.currentText()
         vs.encoder = self.encoder_combo.currentData()
         vs.fps = self.fps_spin.value()
-        vs.output_format = self.fmt_combo.currentText()
+        vs.output_resolution = str(self.resolution_combo.currentData() or "source")
+        vs.output_format = str(self.fmt_combo.currentData() or "mp4")
         vs.crf = self.crf_spin.value()
         vs.preset = self.preset_combo.currentText()
         vs.lossless = self.lossless_cb.isChecked()

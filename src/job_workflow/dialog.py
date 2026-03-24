@@ -65,6 +65,7 @@ class JobWorkflowDialog(QDialog):
             get_kaderblick_reload_button=lambda: self._kb_reload_btn,
             get_kaderblick_status_label=lambda: self._kb_status_label,
             get_device_name=lambda: self._device_combo.currentData() or "",
+            get_workflow_name=lambda: self._draft.name or self._job.name or "Workflow",
             get_pi_destination=lambda: self._pi_dest_edit.text(),
             get_pi_load_button=lambda: self._pi_load_btn,
             get_pi_load_status=lambda: self._pi_load_status,
@@ -85,8 +86,8 @@ class JobWorkflowDialog(QDialog):
         self._last_runtime_snapshot = None
 
         self.setWindowTitle(f"Workflow-Ansicht – {job.name or 'Workflow'}")
-        self.resize(920, 620)
-        self.setMinimumSize(760, 480)
+        self.resize(1560, 920)
+        self.setMinimumSize(1220, 760)
         self._build_ui()
         self._sync_runtime_state_from_job()
         self._live_update_timer.start()
@@ -116,25 +117,24 @@ class JobWorkflowDialog(QDialog):
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal, self)
         main_splitter.setChildrenCollapsible(False)
+        main_splitter.setHandleWidth(10)
+        main_splitter.setOpaqueResize(True)
         self._main_splitter = main_splitter
         if self._allow_edit:
             self._palette_box = self._build_palette_box()
             self._inspector_box = self._build_inspector_box()
-            self._palette_box.setMinimumWidth(200)
-            self._palette_box.setMaximumWidth(260)
-            self._inspector_box.setMinimumWidth(320)
-            self._inspector_box.setMaximumWidth(460)
+            self._palette_box.setMinimumWidth(260)
+            self._inspector_box.setMinimumWidth(480)
             main_splitter.addWidget(self._palette_box)
             main_splitter.addWidget(self._graph_box)
             main_splitter.addWidget(self._inspector_box)
-            main_splitter.setStretchFactor(0, 1)
-            main_splitter.setStretchFactor(1, 6)
-            main_splitter.setStretchFactor(2, 1)
-            main_splitter.setSizes([220, 940, 380])
+            main_splitter.setStretchFactor(0, 2)
+            main_splitter.setStretchFactor(1, 8)
+            main_splitter.setStretchFactor(2, 4)
+            main_splitter.setSizes([320, 980, 560])
         else:
             info_column = QWidget(self)
-            info_column.setMinimumWidth(300)
-            info_column.setMaximumWidth(420)
+            info_column.setMinimumWidth(420)
             self._info_column = info_column
             info_layout = QVBoxLayout(info_column)
             info_layout.setContentsMargins(0, 0, 0, 0)
@@ -144,9 +144,9 @@ class JobWorkflowDialog(QDialog):
             info_layout.addStretch()
             main_splitter.addWidget(self._graph_box)
             main_splitter.addWidget(info_column)
-            main_splitter.setStretchFactor(0, 6)
-            main_splitter.setStretchFactor(1, 1)
-            main_splitter.setSizes([1020, 340])
+            main_splitter.setStretchFactor(0, 7)
+            main_splitter.setStretchFactor(1, 3)
+            main_splitter.setSizes([1080, 480])
         root.addWidget(main_splitter, 1)
 
         if self._allow_edit:
@@ -292,14 +292,26 @@ class JobWorkflowDialog(QDialog):
     def _load_merge_panel_from_draft(self) -> None:
         self._editor_controller.load_merge_panel_from_draft()
 
+    def _load_youtube_panel_from_draft(self) -> None:
+        self._editor_controller.load_youtube_panel_from_draft()
+
     def _sync_draft_from_merge_panel(self, *, sync_related_fields: bool = False, persist_memory: bool = False) -> None:
         self._editor_controller.sync_draft_from_merge_panel(
             sync_related_fields=sync_related_fields,
             persist_memory=persist_memory,
         )
 
+    def _sync_draft_from_youtube_panel(self, *, sync_related_fields: bool = False, persist_memory: bool = False) -> None:
+        self._editor_controller.sync_draft_from_youtube_panel(
+            sync_related_fields=sync_related_fields,
+            persist_memory=persist_memory,
+        )
+
     def _on_merge_metadata_changed(self) -> None:
         self._editor_controller.on_merge_metadata_changed()
+
+    def _on_youtube_metadata_changed(self) -> None:
+        self._editor_controller.on_youtube_metadata_changed()
 
     def _on_files_changed(self) -> None:
         self._editor_controller.on_files_changed()
@@ -370,28 +382,8 @@ class JobWorkflowDialog(QDialog):
         self._state_controller.on_pi_load_failed()
 
     def _open_match_editor_for_playlist(self) -> None:
-        tc_date = self._tc_date_edit.text().strip()
-        tc_date_iso = ""
-        if tc_date:
-            parts = tc_date.split(".")
-            if len(parts) == 3:
-                tc_date_iso = f"{parts[2]}-{parts[1]}-{parts[0]}"
-            else:
-                tc_date_iso = tc_date
-        initial = MatchData(
-            competition=self._draft.default_youtube_competition.strip(),
-            home_team=self._draft.title_card_home_team.strip(),
-            away_team=self._draft.title_card_away_team.strip(),
-            date_iso=tc_date_iso,
-        )
+        initial = self._youtube_metadata_panel.current_match()
         dlg = YouTubeTitleEditorDialog(self, mode="playlist", initial_match=initial)
         if not dlg.exec():
             return
-        self._yt_playlist_edit.setText(dlg.playlist_title)
-        self._yt_competition_edit.setText(dlg.match_data.competition)
-        if dlg.match_data.home_team:
-            self._tc_home_edit.setText(dlg.match_data.home_team)
-        if dlg.match_data.away_team:
-            self._tc_away_edit.setText(dlg.match_data.away_team)
-        if dlg.match_data.date_iso:
-            self._tc_date_edit.setText(dlg.match_data.date_iso)
+        self._youtube_metadata_panel.apply_match_data(dlg.match_data)

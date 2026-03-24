@@ -57,6 +57,11 @@ def apply_settings_payload(
             setattr(settings.cameras, key, value)
 
     settings.last_directory = data.get("last_directory", settings.last_directory)
+    settings.workflow_output_root = data.get("workflow_output_root", getattr(settings, "workflow_output_root", ""))
+    settings.default_match_date = data.get("default_match_date", getattr(settings, "default_match_date", ""))
+    settings.default_match_competition = data.get("default_match_competition", getattr(settings, "default_match_competition", ""))
+    settings.default_match_home_team = data.get("default_match_home_team", getattr(settings, "default_match_home_team", ""))
+    settings.default_match_away_team = data.get("default_match_away_team", getattr(settings, "default_match_away_team", ""))
     settings.restore_last_workflow = data.get("restore_last_workflow", settings.restore_last_workflow)
 
 

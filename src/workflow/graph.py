@@ -11,11 +11,10 @@ _VALIDATION_BRANCHES = {"ok", "repairable", "irreparable"}
 
 def _job_attr(job: WorkflowJob, name: str, default):
     try:
-        return object.__getattribute__(job, name)
-    except AttributeError:
-        return default
-    except RecursionError:
-        return vars(job).get(name, default)
+        raw_dict = object.__getattribute__(job, "__dict__")
+    except Exception:
+        raw_dict = {}
+    return raw_dict.get(name, default)
 
 
 def graph_node_map(job: WorkflowJob) -> dict[str, str]:

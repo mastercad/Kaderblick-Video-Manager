@@ -34,13 +34,21 @@ class WorkflowExecutor(WorkflowExecutorPipelineMixin, WorkflowExecutorSupportMix
     source_progress = Signal(int, int)
     convert_progress = Signal(int, int)
 
-    def __init__(self, workflow: Workflow, settings: AppSettings, *, active_indices: set[int] | None = None):
+    def __init__(
+        self,
+        workflow: Workflow,
+        settings: AppSettings,
+        *,
+        active_indices: set[int] | None = None,
+        allow_reuse_existing: bool = True,
+    ):
         super().__init__()
         from . import download_device, run_concat, run_convert, run_youtube_convert
 
         self._workflow = workflow
         self._settings = settings
         self._active_indices = set(active_indices or set())
+        self._allow_reuse_existing = allow_reuse_existing
         self._cancel = threading.Event()
         self._convert_func = run_convert
         self._concat_func = run_concat

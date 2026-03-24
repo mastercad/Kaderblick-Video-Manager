@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..workflow import WorkflowJob
+from .executor_support import ExecutorSupport
 from .transfer_io import emit_item_progress, transfer_files
 
 
@@ -18,13 +19,13 @@ class FolderScanTransferStep:
         on_file_ready: Callable[[str], None] | None = None,
     ) -> list[str]:
         src_dir = Path(job.source_folder)
-        dst_dir = Path(job.copy_destination) if job.copy_destination else None
+        dst_dir = ExecutorSupport.resolve_copy_destination(executor._settings, job)
         pattern = job.file_pattern or "*.mp4"
         executor.job_progress.emit(orig_idx, 0)
         executor.source_progress.emit(orig_idx, 0)
 
         if not src_dir.exists():
-            fallback = self._existing_targets(job)
+            fallback = self._existing_targets(executor, job) if ExecutorSupport.allow_reuse_existing(executor) else []
             if fallback:
                 executor.log_message.emit(
                     f"  ↩ Quellordner fehlt – nutze {len(fallback)} vorhandene Datei(en) aus dem Zielverzeichnis"
@@ -37,7 +38,7 @@ class FolderScanTransferStep:
 
         files = sorted(src_dir.glob(pattern))
         if not files:
-            fallback = self._existing_targets(job)
+            fallback = self._existing_targets(executor, job) if ExecutorSupport.allow_reuse_existing(executor) else []
             if fallback:
                 executor.log_message.emit(
                     f"  ↩ Keine Quelldateien gefunden – nutze {len(fallback)} vorhandene Datei(en) aus dem Zielverzeichnis"
@@ -80,10 +81,10 @@ class FolderScanTransferStep:
         return transfer_files(executor, orig_idx, job, files, dst_dir, on_file_ready=on_file_ready)
 
     @staticmethod
-    def _existing_targets(job: WorkflowJob) -> list[str]:
-        if not job.copy_destination:
+    def _existing_targets(executor: Any, job: WorkflowJob) -> list[str]:
+        dst_dir = ExecutorSupport.resolve_copy_destination(executor._settings, job)
+        if dst_dir is None:
             return []
-        dst_dir = Path(job.copy_destination)
         if not dst_dir.exists():
             return []
         pattern = job.file_pattern or "*.mp4"

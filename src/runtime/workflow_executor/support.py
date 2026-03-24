@@ -121,6 +121,18 @@ class WorkflowExecutorSupportMixin:
     def _resolve_youtube_title(job: WorkflowJob, file_path: str) -> str:
         return ExecutorSupport.resolve_youtube_title(job, file_path)
 
+    @staticmethod
+    def _resolve_youtube_playlist(job: WorkflowJob, file_path: str) -> str:
+        return ExecutorSupport.resolve_youtube_playlist(job, file_path)
+
+    @staticmethod
+    def _resolve_youtube_description(job: WorkflowJob, file_path: str) -> str:
+        return ExecutorSupport.resolve_youtube_description(job, file_path)
+
+    @staticmethod
+    def _resolve_youtube_tags(job: WorkflowJob, file_path: str) -> list[str]:
+        return ExecutorSupport.resolve_youtube_tags(job, file_path)
+
     def _build_job_settings(self, job: WorkflowJob) -> AppSettings:
         return self._support.build_job_settings(self, job)
 

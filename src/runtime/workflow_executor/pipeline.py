@@ -20,10 +20,12 @@ class WorkflowExecutorPipelineMixin:
         process_queue: Queue[tuple[str, Any] | None] = Queue()
         upload_queue: Queue[PreparedOutput | None] = Queue()
         event_queue: Queue[tuple[str, tuple[Any, ...]]] = Queue()
-        merge_groups: dict[str, list[ConvertItem]] = defaultdict(list)
+        merge_groups: dict[tuple[int, str], list[ConvertItem]] = defaultdict(list)
         total_steps = max(1, self._estimate_pipeline_total_steps(active))
         progress_done = 0
         worker_executor = _PipelineWorkerView(self, event_queue)
+        self._pipeline_event_queue = event_queue
+        self._pipeline_last_drain = 0.0
 
         def _bump_stat(key: str, amount: int = 1) -> None:
             with stats_lock:
@@ -159,6 +161,8 @@ class WorkflowExecutorPipelineMixin:
                     continue
                 self._dispatch_pipeline_item(orig_idx, job, file_path, process_queue, merge_groups, merge_lock)
 
+            self._enqueue_ready_merge_groups(process_queue, merge_groups, merge_lock, orig_idx=orig_idx)
+
             self._set_step_status(job, "transfer", "done")
             self._set_job_status(orig_idx, "Transfer OK")
             self._transfer_fail = stats["fail"]
@@ -169,10 +173,7 @@ class WorkflowExecutorPipelineMixin:
         self._wait_for_queue(process_queue, event_queue)
 
         if not self._cancel.is_set():
-            with merge_lock:
-                grouped_items = list(merge_groups.items())
-            for gid, group in grouped_items:
-                process_queue.put(("merge", (gid, group)))
+            self._enqueue_ready_merge_groups(process_queue, merge_groups, merge_lock)
             self._wait_for_queue(process_queue, event_queue)
 
         process_queue.put(None)
@@ -186,7 +187,44 @@ class WorkflowExecutorPipelineMixin:
             self._drain_pipeline_events(event_queue)
 
         self._transfer_fail = stats["fail"]
+        self._pipeline_event_queue = None
+        self._pipeline_last_drain = 0.0
         return stats["ok"], stats["skip"], stats["fail"]
+
+    def _pump_pipeline_events(self, *, force: bool = False) -> None:
+        event_queue = getattr(self, "_pipeline_event_queue", None)
+        if event_queue is None:
+            return
+        now = time.monotonic()
+        last_drain = float(getattr(self, "_pipeline_last_drain", 0.0) or 0.0)
+        if not force and (now - last_drain) < 0.05:
+            return
+        self._pipeline_last_drain = now
+        self._drain_pipeline_events(event_queue)
+
+    @staticmethod
+    def _merge_group_key(orig_idx: int, merge_group_id: str) -> tuple[int, str]:
+        return orig_idx, merge_group_id
+
+    def _enqueue_ready_merge_groups(
+        self,
+        process_queue: Queue[tuple[str, Any] | None],
+        merge_groups: dict[tuple[int, str], list[ConvertItem]],
+        merge_lock: threading.Lock,
+        *,
+        orig_idx: int | None = None,
+    ) -> None:
+        with merge_lock:
+            ready_groups = [
+                (key, group)
+                for key, group in merge_groups.items()
+                if orig_idx is None or key[0] == orig_idx
+            ]
+            for key, _group in ready_groups:
+                merge_groups.pop(key, None)
+
+        for (_group_orig_idx, merge_group_id), group in ready_groups:
+            process_queue.put(("merge", (merge_group_id, group)))
 
     def _dispatch_pipeline_item(
         self,
@@ -194,7 +232,7 @@ class WorkflowExecutorPipelineMixin:
         job: WorkflowJob,
         file_path: str,
         process_queue: Queue[tuple[str, Any] | None],
-        merge_groups: dict[str, list[ConvertItem]],
+        merge_groups: dict[tuple[int, str], list[ConvertItem]],
         merge_lock: threading.Lock,
     ) -> None:
         if self._cancel.is_set():
@@ -204,9 +242,9 @@ class WorkflowExecutorPipelineMixin:
         merge_before_convert = self._merge_precedes_convert(job)
         convert_enabled = self._support.source_reaches_type(job, file_path, "convert")
         youtube_upload_enabled = self._support.source_reaches_type(job, file_path, "youtube_upload")
-        entry = self._find_file_entry(job, file_path)
-        youtube_playlist = entry.youtube_playlist if entry and entry.youtube_playlist else job.default_youtube_playlist
-        youtube_description = entry.youtube_description if entry and entry.youtube_description else ""
+        youtube_playlist = self._resolve_youtube_playlist(job, file_path)
+        youtube_description = self._resolve_youtube_description(job, file_path)
+        youtube_tags = self._resolve_youtube_tags(job, file_path)
 
         if convert_enabled and not (merge_group_id and merge_before_convert):
             cv_job = self._build_convert_job(job, file_path)
@@ -217,14 +255,20 @@ class WorkflowExecutorPipelineMixin:
                 youtube_title=self._resolve_youtube_title(job, file_path),
                 youtube_description=youtube_description,
                 youtube_playlist=youtube_playlist,
+                youtube_tags=youtube_tags,
+            )
+            self._support.assign_derived_output_dir(
+                cv_job,
+                self._support.resolve_processed_destination(file_path),
             )
             cv_job.status = "Fertig"
             cv_job.output_path = Path(file_path)
 
         item = ConvertItem(orig_idx=orig_idx, job=job, cv_job=cv_job)
         if merge_group_id:
+            merge_key = self._merge_group_key(orig_idx, merge_group_id)
             with merge_lock:
-                merge_groups[merge_group_id].append(item)
+                merge_groups[merge_key].append(item)
             if convert_enabled and not merge_before_convert:
                 process_queue.put(("item", item))
             return

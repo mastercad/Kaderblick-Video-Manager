@@ -73,6 +73,26 @@ def _teams_str(match: MatchData) -> str:
     return match.home_team or match.away_team
 
 
+def _unique_nonempty(items: list[str]) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        value = str(item or "").strip()
+        if not value:
+            continue
+        key = value.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(value)
+    return cleaned
+
+
+def _hashtag_from_tag(tag: str) -> str:
+    compact = "".join(char for char in tag if char.isalnum() or char in "äöüÄÖÜß")
+    return f"#{compact}" if compact else ""
+
+
 def build_playlist_title(match: MatchData) -> str:
     """DD.MM.YYYY | Wettbewerb | Heimteam vs Auswärtsteam"""
     parts = []
@@ -150,16 +170,11 @@ def build_video_description(match: MatchData, seg: SegmentData) -> str:
     if seg.camera:
         lines.append(f"📷 {seg.camera}")
 
-    # Hashtags für bessere Auffindbarkeit
-    hashtags = ["#Fussball"]
-    for raw in [match.competition, match.home_team, match.away_team]:
-        if raw:
-            tag = "".join(c for c in raw if c.isalnum() or c in "äöüÄÖÜß")
-            if tag:
-                hashtags.append(f"#{tag}")
+    hashtags = _unique_nonempty([_hashtag_from_tag(tag) for tag in build_video_tags(match, seg)])
 
     lines.append("")
-    lines.append(" ".join(hashtags))
+    if hashtags:
+        lines.append(" ".join(hashtags))
 
     return "\n".join(lines)
 
@@ -167,17 +182,25 @@ def build_video_description(match: MatchData, seg: SegmentData) -> str:
 def build_video_tags(match: MatchData, seg: SegmentData) -> list[str]:
     """Generiert YouTube-Tags (separates Feld, nicht in der Beschreibung)."""
     tags = ["Fußball", "Fussball", "Sport"]
-    for raw in [match.competition, match.home_team, match.away_team]:
-        if raw:
-            # Vollständiger Name als Tag
-            tags.append(raw)
-            # Bereinigter Kurzname (ohne Leerzeichen/Sonderzeichen für Hashtag)
-            clean = "".join(c for c in raw if c.isalnum() or c in "äöüÄÖÜß")
-            if clean and clean not in tags:
-                tags.append(clean)
-    if seg.type_name:
-        tags.append(seg.type_name)
-    return list(dict.fromkeys(tags))  # Duplikate entfernen, Reihenfolge behalten
+    tags.extend([match.competition, match.home_team, match.away_team])
+
+    if seg.camera:
+        tags.append(seg.camera)
+    if seg.side:
+        tags.append(seg.side)
+
+    type_label = seg.type_name or f"{seg.half}. Halbzeit"
+    tags.append(type_label)
+    if seg.part:
+        tags.append(f"Teil {seg.part}")
+
+    compact_tags = []
+    for raw in list(tags):
+        compact = "".join(c for c in raw if c.isalnum() or c in "äöüÄÖÜß")
+        if compact and compact.casefold() != str(raw).strip().casefold():
+            compact_tags.append(compact)
+
+    return _unique_nonempty(tags + compact_tags)
 
 
 _FILENAME_INVALID_CHARS = re.compile(r'[<>:"/\\|?*\x00-\x1F]+')

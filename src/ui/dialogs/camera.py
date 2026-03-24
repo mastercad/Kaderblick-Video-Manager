@@ -104,27 +104,8 @@ class CameraSettingsDialog(QDialog):
         self._source_edit = QLineEdit(cam.source)
         self._source_edit.setPlaceholderText("/home/kaderblick/camera_api/recordings")
         path_form.addRow("Quellpfad (Pi):", self._source_edit)
-        dest_row = QHBoxLayout()
-        self._dest_edit = QLineEdit(cam.destination)
-        dest_row.addWidget(self._dest_edit)
-        dest_browse = QPushButton("…")
-        dest_browse.setFixedWidth(32)
-        dest_browse.clicked.connect(self._browse_dest)
-        dest_row.addWidget(dest_browse)
-        path_form.addRow("Zielordner (lokal):", dest_row)
         path_group.setLayout(path_form)
         layout.addWidget(path_group)
-
-        opt_group = QGroupBox("Optionen")
-        opt_layout = QVBoxLayout()
-        self._delete_chk = QCheckBox("Quelldateien nach erfolgreichem Download löschen")
-        self._delete_chk.setChecked(cam.delete_after_download)
-        opt_layout.addWidget(self._delete_chk)
-        self._convert_chk = QCheckBox("Nach Download automatisch konvertieren")
-        self._convert_chk.setChecked(cam.auto_convert)
-        opt_layout.addWidget(self._convert_chk)
-        opt_group.setLayout(opt_layout)
-        layout.addWidget(opt_group)
 
         dev_group = QGroupBox("Geräte (Raspberry Pi SSH)")
         dev_layout = QVBoxLayout()
@@ -178,11 +159,6 @@ class CameraSettingsDialog(QDialog):
             self._table.setItem(row, 4, QTableWidgetItem("***" if dev.password else "—"))
             self._table.setItem(row, 5, QTableWidgetItem(dev.ssh_key or "—"))
 
-    def _browse_dest(self):
-        folder = QFileDialog.getExistingDirectory(self, "Zielordner wählen", self._dest_edit.text() or str(Path.home()))
-        if folder:
-            self._dest_edit.setText(folder)
-
     def _add_device(self):
         dlg = _DeviceEditDialog(self)
         if dlg.exec():
@@ -210,7 +186,5 @@ class CameraSettingsDialog(QDialog):
     def _save(self):
         cam = self._settings.cameras
         cam.source = self._source_edit.text().strip()
-        cam.destination = self._dest_edit.text().strip()
-        cam.delete_after_download = self._delete_chk.isChecked()
-        cam.auto_convert = self._convert_chk.isChecked()
+        self._settings.save()
         self.accept()

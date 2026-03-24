@@ -15,7 +15,7 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-from src.media.converter import ConvertJob, build_embedded_metadata_args, run_concat, run_repair_output, run_youtube_convert
+from src.media.converter import ConvertJob, build_embedded_metadata_args, run_concat, run_convert, run_repair_output, run_youtube_convert
 from src.media.merge import merge_halves
 from src.settings import AppSettings
 
@@ -109,6 +109,7 @@ class TestEmbeddedMetadata:
             youtube_title="2026-03-22 | Heim vs Gast | 1. Halbzeit",
             youtube_description="Beschreibung zum Spiel",
             youtube_playlist="22.03.2026 | Liga | Heim vs Gast",
+            youtube_tags=["Fußball", "Liga", "Heim", "Gast"],
         )
 
         args = build_embedded_metadata_args(job)
@@ -118,7 +119,9 @@ class TestEmbeddedMetadata:
         assert "description=Beschreibung zum Spiel" in args
         assert any(value.startswith("comment=Beschreibung zum Spiel") for value in args)
         assert "software=Kaderblick Video Manager" in args
+        assert "author=Kaderblick Video Manager" in args
         assert "album=22.03.2026 | Liga | Heim vs Gast" in args
+        assert "keywords=Fußball, Liga, Heim, Gast" in args
 
 
 # ─── run_concat ───────────────────────────────────────────────────────────────
@@ -464,6 +467,111 @@ class TestRunYouTubeConvert:
         assert "-movflags" in calls[0]
         assert "-movflags" not in calls[1]
         assert any("ohne MP4-Faststart" in line for line in log_lines)
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p5"]))
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=12.0)
+    def test_supports_avi_youtube_variant_without_mp4_faststart(self, _dur, _info,
+                                                                _build_args, mock_ffmpeg, _validate_media):
+        with tempfile.TemporaryDirectory() as tmp:
+            mp4 = Path(tmp) / "video.mp4"
+            yt = Path(tmp) / "video_youtube.avi"
+            mp4.touch()
+            yt.touch()
+
+            settings = AppSettings()
+            settings.video.encoder = "auto"
+            settings.video.overwrite = True
+            job = ConvertJob(source_path=mp4, output_path=mp4)
+
+            ok = run_youtube_convert(job, settings, output_format="avi")
+
+        assert ok is True
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert str(yt) == cmd[-1]
+        assert "-movflags" not in cmd
+        assert "-avoid_negative_ts" not in cmd
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=("libx264", ["-c:v", "libx264", "-preset", "slow"]))
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0, "bit_rate": 6000000, "codec_name": "h264"})
+    @patch("src.media.converter.get_duration", return_value=12.0)
+    @patch("src.media.converter.has_audio_stream", return_value=False)
+    def test_convert_applies_selected_output_resolution(self, _has_audio, _dur, _info, _build_args, mock_ffmpeg, _validate_media):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "input.mp4"
+            out = Path(tmp) / "output.mp4"
+            src.touch()
+
+            settings = AppSettings()
+            settings.video.output_format = "mp4"
+            settings.video.output_resolution = "720p"
+            settings.video.overwrite = True
+            job = ConvertJob(source_path=src, output_path=out)
+
+            def fake_run_ffmpeg(_cmd, **_kwargs):
+                out.touch()
+                return 0
+
+            mock_ffmpeg.side_effect = fake_run_ffmpeg
+
+            ok = run_convert(job, settings)
+
+        assert ok is True
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-vf" in cmd
+        assert "scale=w=1280:h=720" in cmd[cmd.index("-vf") + 1]
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=("libx264", ["-c:v", "libx264", "-preset", "slow"]))
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=12.0)
+    def test_concat_applies_selected_output_resolution(self, _dur, _info, _build_args, mock_ffmpeg, _validate_media):
+        with tempfile.TemporaryDirectory() as tmp:
+            srcs = [Path(tmp) / "part1.mp4", Path(tmp) / "part2.mp4"]
+            for src in srcs:
+                src.touch()
+            out = Path(tmp) / "merged.mp4"
+            out.touch()
+
+            ok = run_concat(srcs, out, overwrite=True, target_resolution="1080p")
+
+        assert ok is True
+        cmd = mock_ffmpeg.call_args[0][0]
+        fc = cmd[cmd.index("-filter_complex") + 1]
+        assert "scale=w=1920:h=1080" in fc
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=("h264_nvenc", ["-c:v", "h264_nvenc", "-preset", "p5"]))
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=12.0)
+    def test_youtube_convert_applies_selected_output_resolution(self, _dur, _info, _build_args, mock_ffmpeg, _validate_media):
+        with tempfile.TemporaryDirectory() as tmp:
+            mp4 = Path(tmp) / "video.mp4"
+            yt = Path(tmp) / "video_youtube.mp4"
+            mp4.touch()
+            yt.touch()
+
+            settings = AppSettings()
+            settings.video.encoder = "auto"
+            settings.video.overwrite = True
+            job = ConvertJob(source_path=mp4, output_path=mp4)
+
+            ok = run_youtube_convert(job, settings, output_resolution="2160p")
+
+        assert ok is True
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-vf" in cmd
+        assert "scale=w=3840:h=2160" in cmd[cmd.index("-vf") + 1]
 
 
 class TestRunConvertCompatibility:

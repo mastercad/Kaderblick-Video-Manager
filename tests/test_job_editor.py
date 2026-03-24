@@ -11,6 +11,7 @@ PySide6-Widgets benötigen eine QApplication.  Die Tests prüfen:
 """
 
 import sys
+from datetime import date
 import pytest
 from unittest.mock import patch
 
@@ -21,6 +22,7 @@ from PySide6.QtCore import Qt
 _app = QApplication.instance() or QApplication(sys.argv)
 
 from src.settings import AppSettings
+from src.ui import AlwaysVisiblePlaceholderLineEdit
 from src.workflow import WorkflowJob, FileEntry
 from src.ui.job_editor import JobEditorDialog
 
@@ -82,6 +84,58 @@ class TestWizardInit:
         dlg = _new_dialog()
         assert dlg._encoding_widget.isEnabled()
 
+    def test_placeholders_use_output_root_with_workflow_date_and_device_name(self):
+        settings = _settings()
+        settings.workflow_output_root = "/srv/workflows"
+        settings.cameras.devices = [type("Dev", (), {"name": "Pi Nord", "ip": "10.0.0.8"})()]
+        dlg = JobEditorDialog(None, settings)
+
+        dlg._name_edit.setText("Spieltag 23")
+        dlg._device_combo.setCurrentIndex(dlg._device_combo.findData("Pi Nord"))
+
+        expected_raw = f"/srv/workflows/Spieltag 23 {date.today().isoformat()}/raw"
+        assert dlg._files_dst_edit.placeholderText() == expected_raw
+        assert dlg._folder_dst_edit.placeholderText() == expected_raw
+        assert dlg._pi_dest_edit.placeholderText() == "/srv/workflows/Pi Nord/raw"
+
+    def test_always_visible_placeholder_line_edit_shows_ghost_text_but_reports_empty_value(self):
+        edit = AlwaysVisiblePlaceholderLineEdit()
+        edit.setPlaceholderText("/srv/workflows/Spieltag 23 2026-03-23")
+        edit.show()
+        QApplication.processEvents()
+
+        assert edit.text() == ""
+        assert edit.showingPlaceholder() is True
+        assert edit.displayText() == "/srv/workflows/Spieltag 23 2026-03-23"
+
+        edit.setFocus()
+        QApplication.processEvents()
+        assert edit.text() == ""
+        assert edit.showingPlaceholder() is True
+
+        edit.setText("/tmp/override")
+        assert edit.text() == "/tmp/override"
+        assert edit.displayText() == "/tmp/override"
+
+    def test_always_visible_placeholder_line_edit_emits_logical_value_only(self):
+        edit = AlwaysVisiblePlaceholderLineEdit()
+        seen: list[str] = []
+        edit.effectiveTextChanged.connect(seen.append)
+
+        edit.setPlaceholderText("/srv/workflows/Spieltag 23 2026-03-23")
+        edit.show()
+        QApplication.processEvents()
+
+        assert seen == []
+
+        edit.setText("/tmp/ziel")
+        assert seen[-1] == "/tmp/ziel"
+
+        edit.clear()
+        assert seen[-1] == ""
+        assert edit.text() == ""
+        assert edit.displayText() == "/srv/workflows/Spieltag 23 2026-03-23"
+
 
 # ─── Edit-Modus: Daten laden ──────────────────────────────────────────────────
 
@@ -100,7 +154,9 @@ class TestWizardEditMode:
             crf=24,
             preset="slow",
             fps=30,
+            output_resolution="720p",
             output_format="avi",
+            no_bframes=False,
             merge_audio=True,
             amplify_audio=True,
             amplify_db=9.0,
@@ -152,7 +208,15 @@ class TestWizardEditMode:
 
     def test_format_populated(self):
         dlg = _edit_dialog(self._job())
-        assert dlg._format_combo.currentText() == "avi"
+        assert dlg._format_combo.currentData() == "avi"
+
+    def test_resolution_populated(self):
+        dlg = _edit_dialog(self._job())
+        assert dlg._resolution_combo.currentData() == "720p"
+
+    def test_no_bframes_populated(self):
+        dlg = _edit_dialog(self._job())
+        assert dlg._no_bframes_cb.isChecked() is False
 
     def test_amplify_checked_and_db_set(self):
         dlg = _edit_dialog(self._job())
@@ -200,10 +264,16 @@ class TestWriteJob:
         # Werte im Dialog ändern
         dlg._name_edit.setText("Geänderter Name")
         dlg._crf_spin.setValue(20)
+        dlg._resolution_combo.setCurrentIndex(max(dlg._resolution_combo.findData("1080p"), 0))
+        dlg._format_combo.setCurrentIndex(max(dlg._format_combo.findData("avi"), 0))
+        dlg._no_bframes_cb.setChecked(False)
         dlg._write_job()
 
         assert job.name == "Geänderter Name"
         assert job.source_mode == "folder_scan"
+        assert job.output_resolution == "1080p"
+        assert job.output_format == "avi"
+        assert job.no_bframes is False
         assert job.crf == 20
 
     def test_files_mode_source_mode_set(self):
@@ -220,6 +290,18 @@ class TestWriteJob:
         dlg._write_job()
         assert dlg._job.source_mode == "pi_download"
         assert dlg._job.download_destination == "/footage"
+
+    def test_pi_mode_keeps_blank_destination_when_global_output_root_is_used(self):
+        settings = _settings()
+        settings.workflow_output_root = "/srv/workflows"
+        dlg = JobEditorDialog(None, settings)
+
+        dlg._mode_group.button(2).setChecked(True)
+        dlg._name_edit.setText("Spieltag 23")
+        dlg._write_job()
+
+        assert dlg._job.source_mode == "pi_download"
+        assert dlg._job.download_destination == ""
 
     def test_amplify_db_written(self):
         dlg = _new_dialog()
@@ -242,6 +324,23 @@ class TestWriteJob:
         assert dlg._job.default_youtube_title == "Mein Titel"
         assert dlg._job.default_youtube_playlist == "Liga"
         assert dlg._job.default_youtube_competition == "Sparkassenpokal"
+
+    @patch("src.integrations.youtube_title_editor.load_memory")
+    def test_blank_match_fields_use_persisted_match_memory_when_loading(self, mock_load_memory):
+        mock_load_memory.return_value = {
+            "last_match": {
+                "date_iso": "2026-03-20",
+                "competition": "Pokal",
+                "home_team": "FC Heim",
+                "away_team": "FC Gast",
+            }
+        }
+        dlg = JobEditorDialog(None, _settings(), WorkflowJob())
+
+        assert dlg._yt_competition == "Pokal"
+        assert dlg._tc_home_edit.text() == "FC Heim"
+        assert dlg._tc_away_edit.text() == "FC Gast"
+        assert dlg._tc_date_edit.text()
 
     def test_kb_fields_written(self):
         dlg = _new_dialog()
@@ -271,6 +370,21 @@ class TestNavigation:
         dlg._current = 2
         dlg._go_back()
         assert dlg._current == 1
+
+
+class TestValidation:
+    def test_pi_mode_allows_blank_destination_with_global_output_root(self):
+        settings = _settings()
+        settings.workflow_output_root = "/srv/workflows"
+        dlg = JobEditorDialog(None, settings)
+
+        dlg._name_edit.setText("Spieltag 23")
+        dlg._mode_group.button(2).setChecked(True)
+        dlg._device_combo.addItem("Pi 1", "Pi 1")
+        dlg._device_combo.setCurrentIndex(dlg._device_combo.findData("Pi 1"))
+        dlg._pi_dest_edit.setText("")
+
+        assert dlg._validate_page(0) is True
 
     def test_back_button_visible_on_page_2(self):
         dlg = _new_dialog()

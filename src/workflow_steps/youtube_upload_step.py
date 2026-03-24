@@ -3,7 +3,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from ..integrations.youtube import get_registry_entry_for_output, get_video_id_for_output, upload_to_youtube
+from ..integrations.youtube import _youtube_variant_candidates, get_registry_entry_for_output, get_video_id_for_output, upload_to_youtube
+from .executor_support import ExecutorSupport
 from .models import PreparedOutput
 
 
@@ -17,9 +18,10 @@ class YoutubeUploadStep:
         if not (youtube_upload_enabled and yt_service):
             return 0
         existing_video_id = None
-        if prepared.cv_job.output_path:
-            existing_video_id = get_video_id_for_output(prepared.cv_job.output_path)
-        if existing_video_id:
+        upload_file = self._upload_artifact(prepared)
+        if upload_file is not None:
+            existing_video_id = get_video_id_for_output(upload_file)
+        if existing_video_id and ExecutorSupport.allow_reuse_existing(executor):
             executor.phase_changed.emit("YouTube-Upload …")
             executor._set_step_status(prepared.job, "youtube_upload", "reused-target")
             executor._set_step_detail(
@@ -48,7 +50,7 @@ class YoutubeUploadStep:
             executor._set_job_status(prepared.orig_idx, "Fehler: YouTube-Upload fehlgeschlagen")
             return 1
         executor._set_step_status(prepared.job, "youtube_upload", "done")
-        video_id = get_video_id_for_output(prepared.cv_job.output_path) if prepared.cv_job.output_path else None
+        video_id = get_video_id_for_output(upload_file) if upload_file is not None else None
         executor._set_step_detail(
             prepared.job,
             "youtube_upload",
@@ -70,8 +72,8 @@ class YoutubeUploadStep:
 
     @staticmethod
     def _build_error_summary(prepared: PreparedOutput) -> str:
+        upload_file = YoutubeUploadStep._upload_artifact(prepared)
         output = prepared.cv_job.output_path
-        upload_file = output.with_stem(output.stem + "_youtube") if output is not None else None
         if upload_file is not None and not upload_file.exists():
             upload_file = output
         file_name = upload_file.name if upload_file is not None else "unbekannt"
@@ -81,12 +83,12 @@ class YoutubeUploadStep:
 
     @staticmethod
     def _build_summary(prepared: PreparedOutput, video_id: str | None, upload_seconds: float, yt_service: Any, *, existing: bool) -> str:
+        upload_file = YoutubeUploadStep._upload_artifact(prepared)
         output = prepared.cv_job.output_path
-        upload_file = output.with_stem(output.stem + "_youtube") if output is not None else None
         if upload_file is not None and not upload_file.exists():
             upload_file = output
         file_name = upload_file.name if upload_file is not None else "unbekannt"
-        registry_entry = get_registry_entry_for_output(output) if output is not None else None
+        registry_entry = get_registry_entry_for_output(upload_file) if upload_file is not None else None
         title = prepared.cv_job.youtube_title or (registry_entry.get("title") if registry_entry else "") or (upload_file.stem if upload_file is not None else "")
         playlist = prepared.cv_job.youtube_playlist or "-"
         result = "vorhanden" if existing else "hochgeladen"
@@ -112,3 +114,14 @@ class YoutubeUploadStep:
         if video_id:
             parts.append(f"Link: https://www.youtube.com/watch?v={video_id}")
         return " | ".join(parts)
+
+    @staticmethod
+    def _upload_artifact(prepared: PreparedOutput):
+        output = prepared.cv_job.output_path
+        if output is None:
+            return None
+        derived_dir = str(getattr(prepared.cv_job, "derived_output_dir", "") or "")
+        for youtube_variant in _youtube_variant_candidates(output, derived_dir):
+            if youtube_variant.exists():
+                return youtube_variant
+        return output

@@ -63,7 +63,13 @@ class TransferPhase:
                     source_path=Path(file_path),
                     job_type="convert",
                     youtube_title=executor._resolve_youtube_title(job, file_path),
-                    youtube_playlist=job.default_youtube_playlist,
+                    youtube_description=executor._resolve_youtube_description(job, file_path),
+                    youtube_playlist=executor._resolve_youtube_playlist(job, file_path),
+                    youtube_tags=executor._resolve_youtube_tags(job, file_path),
+                )
+                executor._support.assign_derived_output_dir(
+                    convert_job,
+                    executor._support.resolve_processed_destination(file_path),
                 )
                 convert_job.status = "Fertig"
                 convert_job.output_path = Path(file_path)

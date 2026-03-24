@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...ui import AlwaysVisiblePlaceholderLineEdit
 from ...integrations.kaderblick import fetch_cameras, fetch_video_types
 from ...workflow import FileEntry
 from ..file_list_widget import FileListWidget
@@ -36,6 +37,7 @@ class JobEditorSourceMixin:
         self._name_edit.setPlaceholderText(
             "Kurzbezeichnung (wird automatisch generiert, wenn leer)"
         )
+        self._name_edit.textChanged.connect(self._update_output_placeholders)
         name_row.addRow("Workflow-Name:", self._name_edit)
         lay.addLayout(name_row)
 
@@ -110,6 +112,7 @@ class JobEditorSourceMixin:
         widget = QWidget()
         lay = QVBoxLayout(widget)
         lay.setContentsMargins(0, 4, 0, 0)
+        lay.setSpacing(4)
         self._file_list = FileListWidget(
             last_dir_getter=lambda: self._settings.last_directory,
             last_dir_setter=self._save_last_dir,
@@ -119,9 +122,9 @@ class JobEditorSourceMixin:
 
         form = QFormLayout()
         form.setContentsMargins(0, 4, 0, 0)
+        form.setSpacing(6)
 
-        self._files_dst_edit = QLineEdit()
-        self._files_dst_edit.setPlaceholderText("leer = Dateien am Quellort verarbeiten")
+        self._files_dst_edit = AlwaysVisiblePlaceholderLineEdit()
         dst_btn = self._browse_btn(lambda: self._browse_dir(self._files_dst_edit, "Zielordner wählen"))
         form.addRow("Zielordner:", self._hbox(self._files_dst_edit, dst_btn))
 
@@ -145,8 +148,7 @@ class JobEditorSourceMixin:
         self._file_pattern_edit.setPlaceholderText("*.mp4")
         form.addRow("Datei-Muster:", self._file_pattern_edit)
 
-        self._folder_dst_edit = QLineEdit()
-        self._folder_dst_edit.setPlaceholderText("leer = neben der Quelldatei")
+        self._folder_dst_edit = AlwaysVisiblePlaceholderLineEdit()
         dst_btn = self._browse_btn(lambda: self._browse_dir(self._folder_dst_edit, "Zielordner wählen"))
         form.addRow("Zielordner:", self._hbox(self._folder_dst_edit, dst_btn))
 
@@ -162,19 +164,20 @@ class JobEditorSourceMixin:
         widget = QWidget()
         lay = QVBoxLayout(widget)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(8)
+        lay.setSpacing(4)
 
         form = QFormLayout()
         form.setContentsMargins(0, 4, 0, 0)
+        form.setSpacing(6)
 
         self._device_combo = QComboBox()
         self._device_combo.addItem("(Gerät wählen)", "")
         for dev in self._settings.cameras.devices:
             self._device_combo.addItem(f"{dev.name}  ({dev.ip})", dev.name)
+        self._device_combo.currentIndexChanged.connect(lambda _index: self._update_output_placeholders())
         form.addRow("Gerät:", self._device_combo)
 
-        self._pi_dest_edit = QLineEdit()
-        self._pi_dest_edit.setPlaceholderText("Lokales Zielverzeichnis …")
+        self._pi_dest_edit = AlwaysVisiblePlaceholderLineEdit()
         pi_btn = self._browse_btn(lambda: self._browse_dir(self._pi_dest_edit, "Zielverzeichnis wählen"))
         form.addRow("Zielverzeichnis:", self._hbox(self._pi_dest_edit, pi_btn))
 
@@ -205,8 +208,26 @@ class JobEditorSourceMixin:
             last_dir_setter=lambda _directory: None,
         )
         self._pi_file_list.setVisible(False)
-        lay.addWidget(self._pi_file_list, stretch=1)
+        lay.addWidget(self._pi_file_list)
+        self._update_output_placeholders()
         return widget
+
+    def _update_output_placeholders(self, *_args) -> None:
+        workflow_name = self._name_edit.text().strip()
+        default_raw_dir = self._settings.workflow_raw_dir_for(workflow_name)
+        if default_raw_dir:
+            self._files_dst_edit.setPlaceholderText(default_raw_dir)
+            self._folder_dst_edit.setPlaceholderText(default_raw_dir)
+        else:
+            self._files_dst_edit.setPlaceholderText("Dateien am Quellort verarbeiten")
+            self._folder_dst_edit.setPlaceholderText("neben der Quelldatei")
+
+        device_name = self._device_combo.currentData() or ""
+        default_pi_dir = self._settings.workflow_raw_dir_for(workflow_name, device_name)
+        if default_pi_dir:
+            self._pi_dest_edit.setPlaceholderText(default_pi_dir)
+            return
+        self._pi_dest_edit.setPlaceholderText("Lokales Zielverzeichnis …")
 
     def _load_pi_camera_files(self) -> None:
         from . import QMessageBox
@@ -239,11 +260,13 @@ class JobEditorSourceMixin:
             self._pi_load_status.setStyleSheet("color:orange;")
             return
         dev_name = self._device_combo.currentData()
-        dest = self._pi_dest_edit.text().strip() or self._settings.cameras.destination
+        workflow_name = self._name_edit.text().strip()
+        default_dest = self._settings.workflow_raw_dir_for(workflow_name, dev_name)
+        dest = self._pi_dest_edit.text().strip() or default_dest
         entries = [
             FileEntry(
-                source_path=str(Path(dest) / dev_name / f"{file_info['base']}.mjpg"),
-                youtube_title=file_info["base"],
+                source_path=str(Path(dest) / f"{file_info['base']}.mjpg"),
+                source_size_bytes=int(file_info.get("total_size") or 0),
             )
             for file_info in files
         ]

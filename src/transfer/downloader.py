@@ -487,6 +487,7 @@ def download_device(
     progress_cb: Optional[Callable[[str, str, int, int], None]] = None,
     cancel_flag: Optional[threading.Event] = None,
     destination_override: str = "",
+    create_device_subdir: bool = True,
     delete_after_download: bool = False,
     selective_bases: Optional[set] = None,
 ) -> list:
@@ -498,10 +499,12 @@ def download_device(
 
     progress_cb(device_name, filename, transferred_bytes, total_bytes)
     """
-    dest_root = Path(destination_override or config.destination)
+    if not (destination_override or "").strip():
+        raise RuntimeError("Kein lokales Zielverzeichnis angegeben")
+    dest_root = Path(destination_override)
     dest_root.mkdir(parents=True, exist_ok=True)
 
-    local_dir = dest_root / device.name
+    local_dir = dest_root / device.name if create_device_subdir else dest_root
     local_dir.mkdir(parents=True, exist_ok=True)
 
     log_cb(f"Verbinde mit {device.name} ({device.ip}:{device.port}) ...")

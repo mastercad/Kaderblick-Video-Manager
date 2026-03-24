@@ -18,8 +18,9 @@ from src.integrations.youtube_title_editor import (
     YouTubeTitleEditorDialog,
     _teams_str,
     build_playlist_title,
-    build_video_title,
     build_video_description,
+    build_video_tags,
+    build_video_title,
 )
 
 _app = QApplication.instance() or QApplication(sys.argv)
@@ -209,6 +210,34 @@ class TestBuildVideoDescription:
         # Keine Exception bei leeren Pflichtfeldern erwartet
         desc = build_video_description(MatchData(), SegmentData())
         assert isinstance(desc, str)
+
+    def test_reuses_generated_tags_as_hashtags(self):
+        m = MatchData(competition="Pokal", home_team="FC Heim", away_team="SV Gast")
+        s = SegmentData(camera="Hauptkamera", side="Links", half=1, part=2, type_name="1. Halbzeit")
+
+        desc = build_video_description(m, s)
+
+        assert "#Fußball" in desc
+        assert "#Pokal" in desc
+        assert "#FCHeim" in desc
+        assert "#SVGast" in desc
+        assert "#Hauptkamera" in desc
+
+
+class TestBuildVideoTags:
+    def test_includes_segment_context(self):
+        m = MatchData(competition="Pokal", home_team="FC Heim", away_team="SV Gast")
+        s = SegmentData(camera="Hauptkamera", side="Links", half=1, part=2, type_name="1. Halbzeit")
+
+        tags = build_video_tags(m, s)
+
+        assert "Pokal" in tags
+        assert "FC Heim" in tags
+        assert "SV Gast" in tags
+        assert "Hauptkamera" in tags
+        assert "Links" in tags
+        assert "1. Halbzeit" in tags
+        assert "Teil 2" in tags
 
 
 class TestYouTubeTitleEditorDialog:

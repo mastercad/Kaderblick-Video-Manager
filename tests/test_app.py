@@ -47,10 +47,11 @@ class _DummyThread:
 
 
 class _DummyExecutor:
-    def __init__(self, workflow, settings, *, active_indices=None):
+    def __init__(self, workflow, settings, *, active_indices=None, allow_reuse_existing=True):
         self.workflow = workflow
         self.settings = settings
         self.active_indices = set(active_indices or set())
+        self.allow_reuse_existing = allow_reuse_existing
         self.log_message = _DummySignal()
         self.job_status = _DummySignal()
         self.job_progress = _DummySignal()
@@ -237,6 +238,11 @@ class TestResumeTooltip:
             "  Quellen: a.mp4, b.mp4 | Datei: merged.mp4 | Dauer: 12:34 | Größe: 1.20 GB"
         )
 
+    def test_format_resume_tooltip_includes_elapsed_runtime_when_present(self):
+        job = WorkflowJob(resume_status="Kaderblick …", run_elapsed_seconds=125)
+
+        assert _format_resume_tooltip(job) == "Kaderblick …\nLaufzeit: 2min 05s"
+
 
 class TestJobOverallProgress:
     def test_job_has_source_config_requires_real_source_definition(self):
@@ -293,6 +299,26 @@ class TestJobOverallProgress:
 
         assert _compute_job_overall_progress(job, "Fertig", 100) == 100
 
+    def test_compute_job_overall_progress_keeps_transfer_progress_when_graph_merge_starts(self):
+        job = WorkflowJob(
+            convert_enabled=False,
+            graph_nodes=[
+                {"id": "source-1", "type": "source_files"},
+                {"id": "merge-1", "type": "merge"},
+                {"id": "yt-1", "type": "youtube_upload"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "merge-1"},
+                {"source": "merge-1", "target": "yt-1"},
+            ],
+            upload_youtube=True,
+        )
+        job.step_statuses = {"transfer": "done", "merge": "running"}
+        job.current_step_key = "merge"
+
+        assert _planned_job_steps(job) == ["transfer", "merge", "youtube_upload"]
+        assert _compute_job_overall_progress(job, "Zusammenführen …", 0) == 33
+
 
 class TestSelectedWorkflowStart:
     def test_start_selected_workflows_passes_selected_indices_to_executor(self):
@@ -329,6 +355,29 @@ class TestSelectedWorkflowStart:
 
         assert window._wf_executor is not None
         assert window._wf_executor.active_indices == {0, 1}
+
+    def test_start_workflow_disables_reuse_when_restart_is_selected(self):
+        window = _new_app()
+        window._workflow.jobs = [
+            WorkflowJob(
+                name="A",
+                source_mode="files",
+                files=[FileEntry(source_path="/tmp/a.mp4")],
+                resume_status="Transfer OK",
+                step_statuses={"transfer": "done"},
+            )
+        ]
+        window._refresh_table()
+
+        with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor), patch.object(
+            window,
+            "_ask_resume_behavior",
+            return_value=QMessageBox.StandardButton.No,
+        ):
+            window._start_all_active_workflows()
+
+        assert window._wf_executor is not None
+        assert window._wf_executor.allow_reuse_existing is False
 
 
 class TestSessionRepair:
@@ -748,6 +797,45 @@ class TestConverterAppResumeState:
         finally:
             window.close()
 
+    def test_duplicate_job_inserts_copy_below_selection_and_selects_it(self):
+        window = _new_app()
+        try:
+            original = _rich_job(name="Spieltag")
+            second = WorkflowJob(name="Anderer Job", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")])
+            window._workflow = Workflow(jobs=[original, second])
+            window._refresh_table()
+            window.table.selectRow(0)
+
+            with patch.object(window, "_save_last_workflow") as save_last_workflow:
+                window._duplicate_job()
+
+            assert [job.name for job in window._workflow.jobs] == ["Spieltag", "Spieltag (2)", "Anderer Job"]
+            assert window._workflow.jobs[1].id != window._workflow.jobs[0].id
+            assert window._workflow.jobs[1].to_dict() == {
+                **window._workflow.jobs[0].to_dict(),
+                "id": window._workflow.jobs[1].id,
+                "name": "Spieltag (2)",
+            }
+            assert window.table.currentRow() == 1
+            assert window.table.item(1, 1).text() == "Spieltag (2)"
+            save_last_workflow.assert_called_once()
+        finally:
+            window.close()
+
+    def test_duplicate_action_in_menu_triggers_job_copy(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(jobs=[WorkflowJob(name="Spieltag", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")])])
+            window._refresh_table()
+            window.table.selectRow(0)
+
+            with patch.object(window, "_duplicate_job") as duplicate_job:
+                window.act_duplicate.trigger()
+
+            duplicate_job.assert_called_once_with()
+        finally:
+            window.close()
+
     def test_refresh_table_uses_restored_resume_status_and_tooltip(self):
         window = _new_app()
         try:
@@ -770,6 +858,55 @@ class TestConverterAppResumeState:
             )
         finally:
             window.close()
+
+    def test_refresh_table_shows_persisted_job_and_workflow_durations(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(
+                jobs=[
+                    WorkflowJob(
+                        name="Job 1",
+                        resume_status="Fertig",
+                        run_elapsed_seconds=125,
+                    )
+                ],
+                last_run_elapsed_seconds=3665,
+            )
+
+            window._refresh_table()
+
+            assert window.table.item(0, 6).text() == "2min 05s"
+            assert window.duration_label.text() == "Gesamtdauer: 1h 01min"
+        finally:
+            window.close()
+
+    def test_roundtrip_restores_duration_metadata(self, tmp_path):
+        workflow = Workflow(
+            jobs=[
+                WorkflowJob(
+                    name="Job 1",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/a.mp4")],
+                    run_started_at="2026-03-23T10:00:00",
+                    run_finished_at="2026-03-23T10:03:05",
+                    run_elapsed_seconds=185,
+                )
+            ],
+            last_run_started_at="2026-03-23T10:00:00",
+            last_run_finished_at="2026-03-23T10:04:10",
+            last_run_elapsed_seconds=250,
+        )
+
+        restored = _roundtrip_restored_workflow(tmp_path, workflow)
+        try:
+            job = restored._workflow.jobs[0]
+            assert job.run_started_at == "2026-03-23T10:00:00"
+            assert job.run_finished_at == "2026-03-23T10:03:05"
+            assert job.run_elapsed_seconds == 185
+            assert restored._workflow.last_run_elapsed_seconds == 250
+            assert restored.duration_label.text() == "Gesamtdauer: 4min 10s"
+        finally:
+            restored.close()
 
     def test_refresh_table_overwrites_stale_cells_after_workflow_replace(self):
         window = _new_app()

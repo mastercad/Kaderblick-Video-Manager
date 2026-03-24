@@ -17,9 +17,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ...ui import AlwaysVisiblePlaceholderLineEdit
 from ...ui.file_list_widget import FileListWidget
 from ...settings import AppSettings
-from ...workflow import WorkflowJob, graph_source_nodes
+from ...workflow import WorkflowJob, graph_source_nodes, workflow_output_device_name
 
 
 class WorkflowSourcePanel(QGroupBox):
@@ -85,7 +86,7 @@ class WorkflowSourcePanel(QGroupBox):
         wrapper = QWidget(self)
         layout = QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
+        layout.setSpacing(4)
 
         if self._settings is not None:
             self._file_list_widget = FileListWidget(
@@ -103,11 +104,10 @@ class WorkflowSourcePanel(QGroupBox):
 
         form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(8)
+        form.setSpacing(6)
 
-        self._files_dst_edit = QLineEdit()
-        self._files_dst_edit.setPlaceholderText("leer = Dateien am Quellort verarbeiten")
-        self._files_dst_edit.textChanged.connect(lambda text: self._update_text_field("copy_destination", text))
+        self._files_dst_edit = AlwaysVisiblePlaceholderLineEdit()
+        self._files_dst_edit.effectiveTextChanged.connect(lambda text: self._update_text_field("copy_destination", text))
         files_dst_btn = self._browse_btn(lambda: self.browse_dir(self._files_dst_edit, "Zielordner wählen"))
         form.addRow("Zielordner:", self._hbox(self._files_dst_edit, files_dst_btn))
 
@@ -134,9 +134,8 @@ class WorkflowSourcePanel(QGroupBox):
         self._file_pattern_edit.textChanged.connect(self._on_file_pattern_changed)
         form.addRow("Datei-Muster:", self._file_pattern_edit)
 
-        self._folder_dst_edit = QLineEdit()
-        self._folder_dst_edit.setPlaceholderText("leer = neben der Quelldatei")
-        self._folder_dst_edit.textChanged.connect(lambda text: self._update_text_field("copy_destination", text))
+        self._folder_dst_edit = AlwaysVisiblePlaceholderLineEdit()
+        self._folder_dst_edit.effectiveTextChanged.connect(lambda text: self._update_text_field("copy_destination", text))
         folder_dst_btn = self._browse_btn(lambda: self.browse_dir(self._folder_dst_edit, "Zielordner wählen"))
         form.addRow("Zielordner:", self._hbox(self._folder_dst_edit, folder_dst_btn))
 
@@ -152,9 +151,13 @@ class WorkflowSourcePanel(QGroupBox):
 
     def _build_pi_source_editor(self) -> QWidget:
         wrapper = QWidget(self)
-        form = QFormLayout(wrapper)
+        layout = QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        form = QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(8)
+        form.setSpacing(6)
 
         self._device_combo = QComboBox()
         self._device_combo.addItem("(Gerät wählen)", "")
@@ -164,9 +167,8 @@ class WorkflowSourcePanel(QGroupBox):
         self._device_combo.currentIndexChanged.connect(self._on_device_changed)
         form.addRow("Gerät:", self._device_combo)
 
-        self._pi_dest_edit = QLineEdit()
-        self._pi_dest_edit.setPlaceholderText("Lokales Zielverzeichnis")
-        self._pi_dest_edit.textChanged.connect(lambda text: self._update_text_field("download_destination", text))
+        self._pi_dest_edit = AlwaysVisiblePlaceholderLineEdit()
+        self._pi_dest_edit.effectiveTextChanged.connect(lambda text: self._update_text_field("download_destination", text))
         form.addRow("Zielverzeichnis:", self._pi_dest_edit)
 
         self._delete_after_dl_cb = QCheckBox("Aufnahmen nach Download löschen")
@@ -177,6 +179,7 @@ class WorkflowSourcePanel(QGroupBox):
         self._pi_prefix_edit.setPlaceholderText("optional")
         self._pi_prefix_edit.textChanged.connect(lambda text: self._update_text_field("output_prefix", text))
         form.addRow("Ausgabe-Präfix:", self._pi_prefix_edit)
+        layout.addLayout(form)
 
         load_row = QHBoxLayout()
         self._pi_load_btn = QPushButton("📋 Dateien von Kamera laden")
@@ -185,7 +188,7 @@ class WorkflowSourcePanel(QGroupBox):
         self._pi_load_status = QLabel("")
         self._pi_load_status.setStyleSheet("color: #64748B;")
         load_row.addWidget(self._pi_load_status, 1)
-        form.addRow("", load_row)
+        layout.addLayout(load_row)
 
         self._pi_file_list = FileListWidget(
             last_dir_getter=lambda settings=self._settings: settings.last_directory if settings is not None else "",
@@ -194,7 +197,11 @@ class WorkflowSourcePanel(QGroupBox):
         self._pi_file_list.match_data_changed.connect(self._on_match_data_changed)
         self._pi_file_list.files_changed.connect(self._on_pi_files_changed)
         self._pi_file_list.setVisible(False)
-        form.addRow("Auswahl:", self._pi_file_list)
+        self._pi_selection_label = QLabel("Auswahl:")
+        self._pi_selection_label.setStyleSheet("color: #475569; font-weight: 600;")
+        self._pi_selection_label.setVisible(False)
+        layout.addWidget(self._pi_selection_label)
+        layout.addWidget(self._pi_file_list)
         return wrapper
 
     @staticmethod
@@ -236,6 +243,7 @@ class WorkflowSourcePanel(QGroupBox):
             widget.setVisible(mode == source_mode)
 
     def load_from_job(self, job: WorkflowJob) -> None:
+        self._apply_destination_placeholders(job)
         self._files_dst_edit.setText(job.copy_destination)
         self._files_move_cb.setChecked(job.move_files)
         self._folder_src_edit.setText(job.source_folder)
@@ -245,8 +253,7 @@ class WorkflowSourcePanel(QGroupBox):
         self._folder_prefix_edit.setText(job.output_prefix)
         device_index = self._device_combo.findData(job.device_name)
         self._device_combo.setCurrentIndex(device_index if device_index >= 0 else 0)
-        default_dest = self._settings.cameras.destination if self._settings is not None else ""
-        self._pi_dest_edit.setText(job.download_destination or default_dest)
+        self._pi_dest_edit.setText(job.download_destination)
         self._delete_after_dl_cb.setChecked(job.delete_after_download)
         self._pi_prefix_edit.setText(job.output_prefix)
         if self._file_list_widget is not None:
@@ -254,10 +261,15 @@ class WorkflowSourcePanel(QGroupBox):
         if job.source_mode == "pi_download" and job.files:
             self._pi_file_list.load(job.files)
             self._pi_file_list.setVisible(True)
+            self._pi_selection_label.setVisible(True)
             self._pi_load_status.setText(f"✓ {len(job.files)} Aufnahme(n) vorgemerkt.")
             self._pi_load_status.setStyleSheet("color: green;")
+        else:
+            self._pi_file_list.setVisible(False)
+            self._pi_selection_label.setVisible(False)
 
     def refresh_from_job(self, job: WorkflowJob) -> None:
+        self._apply_destination_placeholders(job)
         source_labels = {
             "files": "Direkte Dateiauswahl",
             "folder_scan": "Ordner-Scan",
@@ -271,8 +283,32 @@ class WorkflowSourcePanel(QGroupBox):
             detail = f"Ordner: {job.source_folder or '–'} | Muster: {job.file_pattern or '*.mp4'}"
         else:
             file_count = len(job.files)
-            detail = f"Gerät: {job.device_name or '–'} | Ziel: {job.download_destination or '–'} | Auswahl: {file_count} Datei(en)"
+            default_dest = ""
+            if self._settings is not None:
+                default_dest = self._settings.workflow_raw_dir_for(job.name, job.device_name)
+            detail = f"Gerät: {job.device_name or '–'} | Ziel: {job.download_destination or default_dest or '–'} | Auswahl: {file_count} Datei(en)"
         if len(graph_source_nodes(job)) > 1:
             detail += " | Mehrere Quellen werden gemeinsam über das Canvas orchestriert."
         self._source_detail_label.setText(detail)
         self.set_mode(job.source_mode)
+        self._pi_selection_label.setVisible(job.source_mode == "pi_download" and bool(job.files))
+
+    def _apply_destination_placeholders(self, job: WorkflowJob) -> None:
+        if self._settings is None:
+            self._files_dst_edit.setPlaceholderText("Dateien am Quellort verarbeiten")
+            self._folder_dst_edit.setPlaceholderText("neben der Quelldatei")
+            self._pi_dest_edit.setPlaceholderText("Lokales Zielverzeichnis")
+            return
+
+        job_name = job.name
+        output_device_name = workflow_output_device_name(job)
+        default_raw_dir = self._settings.workflow_raw_dir_for(job_name, output_device_name)
+        if default_raw_dir:
+            self._files_dst_edit.setPlaceholderText(default_raw_dir)
+            self._folder_dst_edit.setPlaceholderText(default_raw_dir)
+        else:
+            self._files_dst_edit.setPlaceholderText("Dateien am Quellort verarbeiten")
+            self._folder_dst_edit.setPlaceholderText("neben der Quelldatei")
+
+        default_pi_dir = self._settings.workflow_raw_dir_for(job_name, job.device_name)
+        self._pi_dest_edit.setPlaceholderText(default_pi_dir or "Lokales Zielverzeichnis")

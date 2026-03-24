@@ -1,17 +1,20 @@
 import sys
+from datetime import date
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from PySide6.QtCore import QDate, QPointF
+from PySide6.QtCore import QDate, QPoint, QPointF, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication, QLabel
 
 from src.job_workflow.graph.edge_item import _GraphEdgeItem
 from src.job_workflow.graph.builder import build_default_graph
 from src.job_workflow.graph.geometry import auto_layout_graph, build_connection_path
+from src.job_workflow.graph.view import _WorkflowGraphView
 from src.settings import AppSettings
 from src.workflow import FileEntry, WorkflowJob
 from src.job_workflow.dialog import JobWorkflowDialog, _node_visual_state, _planned_job_steps
+from src.job_workflow.panels.status import WorkflowNotesPanel
 
 
 _app = QApplication.instance() or QApplication(sys.argv)
@@ -44,6 +47,23 @@ def _node_by_type(graph_view, node_type: str):
 
 
 class TestJobWorkflowDialog:
+    def test_workflow_notes_panel_replaces_dynamic_labels_without_leaving_old_widgets_visible(self):
+        panel = WorkflowNotesPanel()
+        job = _make_job(upload_youtube=True, upload_kaderblick=True)
+
+        panel.refresh_from_job(job)
+        panel.refresh_from_job(job)
+
+        layout_texts = []
+        for index in range(panel._layout.count()):
+            item = panel._layout.itemAt(index)
+            widget = item.widget() if item is not None else None
+            if isinstance(widget, QLabel):
+                layout_texts.append(widget.text())
+
+        assert layout_texts.count("Hinweise zur Ausführung") == 1
+        assert layout_texts.count("Step-Zusammenfassung") == 1
+
     def test_graph_edge_exposes_target_arrow_for_direction(self):
         edge = _GraphEdgeItem(SimpleNamespace(remove_edge=lambda *_args, **_kwargs: None), "source", "target")
         edge.setPath(build_connection_path(QPointF(220, 100), QPointF(520, 260)))
@@ -123,12 +143,87 @@ class TestJobWorkflowDialog:
 
         assert path.elementCount() == 4
 
-    def test_editor_sidebar_stays_compact_but_usable(self):
+    def test_editor_sidebar_is_resizable_and_starts_usable(self):
         dlg = JobWorkflowDialog(None, _make_job(convert_enabled=True), allow_edit=True, settings=_settings())
 
-        assert dlg._palette_box.maximumWidth() <= 260
-        assert dlg._inspector_box.minimumWidth() >= 320
-        assert dlg._inspector_box.maximumWidth() <= 460
+        assert dlg.minimumWidth() >= 1220
+        assert dlg.width() >= 1500
+        assert dlg._palette_box.minimumWidth() >= 260
+        assert dlg._inspector_box.minimumWidth() >= 480
+        assert dlg._palette_box.maximumWidth() >= 16_000_000
+        assert dlg._inspector_box.maximumWidth() >= 16_000_000
+
+    def test_graph_view_zoom_stays_within_limits(self):
+        dlg = JobWorkflowDialog(None, _make_job(convert_enabled=True), allow_edit=True, settings=_settings())
+        graph_view = dlg._graph_view
+
+        for _ in range(20):
+            graph_view._apply_zoom_factor(graph_view.ZOOM_STEP)
+
+        assert graph_view.transform().m11() <= graph_view.MAX_ZOOM + 1e-6
+
+        for _ in range(40):
+            graph_view._apply_zoom_factor(1 / graph_view.ZOOM_STEP)
+
+        assert graph_view.transform().m11() >= graph_view.MIN_ZOOM - 1e-6
+
+    def test_graph_view_middle_mouse_pan_updates_scrollbars(self):
+        graph_view = _WorkflowGraphView()
+        graph_view.resize(320, 240)
+        graph_view.setSceneRect(0, 0, 2400, 1800)
+        graph_view.show()
+        QApplication.processEvents()
+        graph_view.centerOn(1200, 900)
+        QApplication.processEvents()
+
+        start_h = graph_view.horizontalScrollBar().value()
+        start_v = graph_view.verticalScrollBar().value()
+
+        graph_view._start_panning(QPoint(160, 120))
+        assert graph_view._is_panning is True
+        assert graph_view.cursor().shape() == Qt.CursorShape.ClosedHandCursor
+
+        graph_view._pan_to(QPoint(110, 80))
+
+        assert graph_view.horizontalScrollBar().value() != start_h
+        assert graph_view.verticalScrollBar().value() != start_v
+
+        graph_view._stop_panning()
+
+        assert graph_view._is_panning is False
+        assert graph_view._last_pan_pos is None
+        assert graph_view.cursor().shape() != Qt.CursorShape.ClosedHandCursor
+
+    def test_graph_rebuild_fits_rightmost_delivery_nodes_into_view(self):
+        job = _make_job(
+            convert_enabled=False,
+            upload_youtube=True,
+            upload_kaderblick=True,
+        )
+        job.graph_nodes = [
+            {"id": "source-1", "type": "source_files", "x": 80.0, "y": 100.0},
+            {"id": "merge-1", "type": "merge", "x": 360.0, "y": 100.0},
+            {"id": "upload-1", "type": "youtube_upload", "x": 680.0, "y": 100.0},
+            {"id": "kb-1", "type": "kaderblick", "x": 680.0, "y": 232.0},
+        ]
+        job.graph_edges = [
+            {"source": "source-1", "target": "merge-1"},
+            {"source": "merge-1", "target": "upload-1"},
+            {"source": "upload-1", "target": "kb-1"},
+        ]
+
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+        dlg.show()
+        QApplication.processEvents()
+
+        kb_node = dlg._graph_view.node_item("kb-1")
+        assert kb_node is not None
+
+        top_left = dlg._graph_view.mapFromScene(kb_node.scenePos())
+        right_edge = top_left.x() + int(kb_node.rect().width())
+
+        assert top_left.x() >= 0
+        assert right_edge <= dlg._graph_view.viewport().width()
 
     def test_auto_layout_aligns_processing_nodes_with_connected_flow(self):
         dlg = JobWorkflowDialog(None, _make_job(convert_enabled=False), allow_edit=True, settings=_settings())
@@ -498,7 +593,7 @@ class TestJobWorkflowDialog:
         dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
 
         assert "merge" in _planned_job_steps(dlg._draft)
-        assert "Merge ist aktiv" in dlg._merge_label.text()
+        assert any(entry.merge_group_id for entry in dlg._draft.files)
         assert dlg._file_list_widget is not None
 
     def test_editor_hint_explains_merge_overrides_youtube_metadata(self):
@@ -700,6 +795,16 @@ class TestJobWorkflowDialog:
         assert done_visual["fill_color"] != QColor("#FFFFFF")
         assert float(done_visual["progress_fraction"]) == 1.0
 
+    def test_source_node_visual_state_restores_100_percent_from_done_transfer_status(self):
+        reopened_job = _make_job()
+        reopened_job.step_statuses = {"transfer": "done"}
+        reopened_job.transfer_progress_pct = 0
+
+        visual = _node_visual_state("source_files", reopened_job)
+
+        assert visual["state_text"].endswith("100%")
+        assert float(visual["progress_fraction"]) == 1.0
+
     def test_editor_applies_step_options_and_files(self):
         job = _make_job(title_card_enabled=True)
         dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
@@ -708,12 +813,13 @@ class TestJobWorkflowDialog:
         dlg._kb_camera_options = [{"id": 4, "name": "Hauptkamera"}]
         dlg._sync_kaderblick_selectors()
 
-        dlg._yt_title_edit.setText("Liga Spiel")
-        dlg._yt_playlist_edit.setText("Playlist 1")
-        dlg._yt_competition_edit.setText("Pokal")
+        dlg._youtube_metadata_panel._date_edit.setDate(QDate(2026, 3, 22))
+        dlg._youtube_metadata_panel._competition_combo.setCurrentText("Pokal")
+        dlg._youtube_metadata_panel._home_combo.setCurrentText("Heim")
+        dlg._youtube_metadata_panel._away_combo.setCurrentText("Gast")
+        dlg._youtube_metadata_panel._camera_combo.setCurrentIndex(max(dlg._youtube_metadata_panel._camera_combo.findData(4), 0))
+        dlg._youtube_metadata_panel._video_type_combo.setCurrentIndex(max(dlg._youtube_metadata_panel._video_type_combo.findData(3), 0))
         dlg._kb_game_id_edit.setText("77")
-        dlg._kb_type_combo.setCurrentIndex(dlg._kb_type_combo.findData(3))
-        dlg._kb_camera_combo.setCurrentIndex(dlg._kb_camera_combo.findData(4))
         dlg._tc_home_edit.setText("Heim")
         dlg._tc_away_edit.setText("Gast")
         dlg._tc_date_edit.setText("2026-03-22")
@@ -723,9 +829,19 @@ class TestJobWorkflowDialog:
         dlg._tc_duration_spin.setValue(4.5)
         dlg._encoder_combo.setCurrentIndex(max(dlg._encoder_combo.findData("libx264"), 0))
         dlg._preset_combo.setCurrentText("slow")
+        dlg._no_bframes_cb.setChecked(False)
         dlg._crf_spin.setValue(21)
         dlg._fps_spin.setValue(30)
-        dlg._format_combo.setCurrentText("avi")
+        dlg._resolution_combo.setCurrentIndex(max(dlg._resolution_combo.findData("1080p"), 0))
+        dlg._format_combo.setCurrentIndex(max(dlg._format_combo.findData("avi"), 0))
+        dlg._merge_encoding_panel._preset_combo.setCurrentText("slower")
+        dlg._merge_encoding_panel._no_bframes_cb.setChecked(False)
+        dlg._merge_encoding_panel._resolution_combo.setCurrentIndex(max(dlg._merge_encoding_panel._resolution_combo.findData("720p"), 0))
+        dlg._merge_encoding_panel._format_combo.setCurrentIndex(max(dlg._merge_encoding_panel._format_combo.findData("avi"), 0))
+        dlg._yt_version_panel._encoding_panel._preset_combo.setCurrentText("veryslow")
+        dlg._yt_version_panel._encoding_panel._no_bframes_cb.setChecked(True)
+        dlg._yt_version_panel._encoding_panel._resolution_combo.setCurrentIndex(max(dlg._yt_version_panel._encoding_panel._resolution_combo.findData("2160p"), 0))
+        dlg._yt_version_panel._encoding_panel._format_combo.setCurrentIndex(max(dlg._yt_version_panel._encoding_panel._format_combo.findData("mp4"), 0))
         dlg._overwrite_cb.setChecked(True)
         dlg._merge_audio_cb.setChecked(True)
         dlg._amplify_audio_cb.setChecked(True)
@@ -737,12 +853,17 @@ class TestJobWorkflowDialog:
 
         dlg._apply_and_accept()
 
-        assert job.default_youtube_title == "Liga Spiel"
-        assert job.default_youtube_playlist == "Playlist 1"
+        assert job.default_youtube_title == "2026-03-22 | Heim vs Gast | Hauptkamera | Halbzeit"
+        assert job.default_youtube_playlist == "22.03.2026 | Pokal | Heim vs Gast"
+        assert "Pokal" in job.default_youtube_description
         assert job.default_youtube_competition == "Pokal"
+        assert job.youtube_match_data["competition"] == "Pokal"
+        assert job.youtube_segment_data["camera"] == "Hauptkamera"
         assert job.default_kaderblick_game_id == "77"
         assert job.default_kaderblick_video_type_id == 3
         assert job.default_kaderblick_camera_id == 4
+        assert dlg._kb_type_combo.currentData() == 3
+        assert dlg._kb_camera_combo.currentData() == 4
         assert job.title_card_home_team == "Heim"
         assert job.title_card_away_team == "Gast"
         assert job.title_card_date
@@ -753,9 +874,19 @@ class TestJobWorkflowDialog:
         assert job.title_card_duration == 4.5
         assert job.encoder == "libx264"
         assert job.preset == "slow"
+        assert job.no_bframes is False
         assert job.crf == 21
         assert job.fps == 30
+        assert job.output_resolution == "1080p"
         assert job.output_format == "avi"
+        assert job.merge_preset == "slower"
+        assert job.merge_no_bframes is False
+        assert job.merge_output_resolution == "720p"
+        assert job.merge_output_format == "avi"
+        assert job.yt_version_preset == "veryslow"
+        assert job.yt_version_no_bframes is True
+        assert job.yt_version_output_resolution == "2160p"
+        assert job.yt_version_output_format == "mp4"
         assert job.overwrite is True
         assert job.merge_audio is True
         assert job.amplify_audio is True
@@ -833,7 +964,7 @@ class TestJobWorkflowDialog:
         dlg._sync_draft_from_graph(refresh_graph=False)
 
         assert "merge" in _planned_job_steps(dlg._draft)
-        assert "Merge ist aktiv" in dlg._merge_label.text()
+        assert all(entry.merge_group_id == "graph-merge" for entry in dlg._draft.files)
 
     def test_adding_files_does_not_rebuild_existing_graph(self):
         job = WorkflowJob(
@@ -921,6 +1052,86 @@ class TestJobWorkflowDialog:
         assert job.delete_after_download is True
         assert job.output_prefix == "kb_"
 
+    def test_pi_source_panel_uses_global_output_root_in_placeholder_and_detail(self):
+        settings = _settings()
+        settings.workflow_output_root = "/srv/workflows"
+        job = WorkflowJob(name="Spieltag 23", source_mode="pi_download", device_name="Pi 1")
+
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        assert dlg._pi_dest_edit.text() == ""
+        assert dlg._pi_dest_edit.placeholderText() == "/srv/workflows/Pi 1/raw"
+        assert "/srv/workflows/Pi 1/raw" in dlg._source_detail_label.text()
+
+    def test_file_and_folder_placeholders_use_workflow_name_plus_date(self):
+        settings = _settings()
+        settings.workflow_output_root = "/srv/workflows"
+        job = WorkflowJob(name="Spieltag 23", source_mode="files")
+
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        expected = f"/srv/workflows/Spieltag 23 {date.today().isoformat()}/raw"
+        assert dlg._files_dst_edit.placeholderText() == expected
+        assert dlg._folder_dst_edit.placeholderText() == expected
+
+    def test_file_placeholders_prefer_merge_camera_when_available(self):
+        settings = _settings()
+        settings.workflow_output_root = "/srv/workflows"
+        job = WorkflowJob(
+            name="Spieltag 23",
+            source_mode="files",
+            merge_segment_data={"camera": "DJI Osmo Action 5 Pro"},
+        )
+
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        expected = "/srv/workflows/DJI Osmo Action 5 Pro/raw"
+        assert dlg._files_dst_edit.placeholderText() == expected
+        assert dlg._folder_dst_edit.placeholderText() == expected
+
+    def test_file_placeholders_prefer_youtube_camera_when_no_merge_camera_exists(self):
+        settings = _settings()
+        settings.workflow_output_root = "/srv/workflows"
+        job = WorkflowJob(
+            name="Spieltag 23",
+            source_mode="files",
+            youtube_segment_data={"camera": "DJI Osmo Action 5 Pro"},
+        )
+
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        expected = "/srv/workflows/DJI Osmo Action 5 Pro/raw"
+        assert dlg._files_dst_edit.placeholderText() == expected
+        assert dlg._folder_dst_edit.placeholderText() == expected
+
+    def test_selecting_files_node_reapplies_target_placeholder_in_input(self):
+        settings = _settings()
+        settings.workflow_output_root = "/srv/workflows"
+        job = WorkflowJob(name="Spieltag 23", source_mode="files")
+
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+        dlg._files_dst_edit.setPlaceholderText("")
+
+        dlg._on_graph_selection_changed({"kind": "node", "id": "source-files-1", "type": "source_files"})
+
+        assert dlg._files_dst_edit.placeholderText() == f"/srv/workflows/Spieltag 23 {date.today().isoformat()}/raw"
+
+    @patch("src.job_workflow.controllers.editor.load_memory")
+    def test_youtube_metadata_panel_uses_persisted_match_memory_for_blank_job(self, mock_load_memory):
+        mock_load_memory.return_value = {
+            "last_match": {
+                "date_iso": "2026-03-20",
+                "competition": "Pokal",
+                "home_team": "FC Heim",
+                "away_team": "FC Gast",
+            }
+        }
+        dlg = JobWorkflowDialog(None, WorkflowJob(), allow_edit=True, settings=_settings())
+
+        assert dlg._youtube_metadata_panel._competition_combo.currentText() == "Pokal"
+        assert dlg._youtube_metadata_panel._home_combo.currentText() == "FC Heim"
+        assert dlg._youtube_metadata_panel._away_combo.currentText() == "FC Gast"
+
     def test_editor_disables_upload_detail_fields_when_upload_off(self):
         job = _make_job(upload_youtube=True, upload_kaderblick=True)
         dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
@@ -928,9 +1139,8 @@ class TestJobWorkflowDialog:
         dlg._graph_view.clear_graph()
         dlg._graph_view.add_node("source_files")
 
-        assert dlg._yt_title_edit.isEnabled() is False
-        assert dlg._yt_playlist_edit.isEnabled() is False
-        assert dlg._yt_competition_edit.isEnabled() is False
+        assert dlg._youtube_metadata_panel.isEnabled() is False
+        assert dlg._playlist_helper_btn.isEnabled() is False
         assert dlg._kb_game_id_edit.isEnabled() is False
         assert dlg._kb_type_combo.isEnabled() is False
         assert dlg._kb_camera_combo.isEnabled() is False
@@ -954,6 +1164,19 @@ class TestJobWorkflowDialog:
         dlg._on_graph_selection_changed({"kind": "node", "type": "stop"})
         assert dlg._property_stack.currentIndex() == dlg._property_pages["stop"]
 
+    def test_graph_rebuild_resets_stale_node_inspector_selection(self):
+        job = _make_job(upload_youtube=True, upload_kaderblick=True, convert_enabled=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+
+        dlg._on_graph_selection_changed({"kind": "node", "type": "kaderblick"})
+        assert dlg._property_stack.currentIndex() == dlg._property_pages["kaderblick"]
+
+        dlg._rebuild_graph_from_job()
+
+        assert dlg._property_stack.currentIndex() == dlg._property_pages["default"]
+        assert dlg._selection_label.text() == "Keine Auswahl"
+        assert dlg._remove_node_btn.isEnabled() is False
+
     def test_kaderblick_inspector_uses_distinct_heading_and_form_label(self):
         dlg = JobWorkflowDialog(None, _make_job(upload_youtube=True, upload_kaderblick=True), allow_edit=True, settings=_settings())
 
@@ -966,6 +1189,30 @@ class TestJobWorkflowDialog:
         assert "Spiel-ID:" in label_texts
         assert "Kaderblick-Video-Typ:" in label_texts
         assert "Kaderblick-Kamera:" in label_texts
+        assert any("folgen automatisch" in text for text in label_texts)
+
+    def test_output_metadata_preview_uses_api_assignment_label_instead_of_kaderblick(self):
+        dlg = JobWorkflowDialog(None, _make_job(upload_youtube=True, upload_kaderblick=True), allow_edit=True, settings=_settings())
+
+        label_texts = {label.text() for label in dlg._merge_panel.findChildren(QLabel)}
+
+        assert "API-Zuordnung:" in label_texts
+        assert "Kaderblick:" not in label_texts
+
+    def test_kaderblick_panel_mirrors_youtube_metadata_selection(self):
+        dlg = JobWorkflowDialog(None, _make_job(upload_youtube=True, upload_kaderblick=True), allow_edit=True, settings=_settings())
+
+        dlg._kb_video_type_options = [{"id": 3, "name": "Halbzeit"}]
+        dlg._kb_camera_options = [{"id": 4, "name": "Hauptkamera"}]
+        dlg._sync_kaderblick_selectors()
+
+        dlg._youtube_metadata_panel._camera_combo.setCurrentIndex(max(dlg._youtube_metadata_panel._camera_combo.findData(4), 0))
+        dlg._youtube_metadata_panel._video_type_combo.setCurrentIndex(max(dlg._youtube_metadata_panel._video_type_combo.findData(3), 0))
+
+        assert dlg._kb_type_combo.currentData() == 3
+        assert dlg._kb_camera_combo.currentData() == 4
+        assert dlg._kb_type_combo.isEnabled() is False
+        assert dlg._kb_camera_combo.isEnabled() is False
 
     def test_editor_hint_warns_when_irreparable_branch_is_unhandled(self):
         job = _make_job(convert_enabled=False)
@@ -1026,8 +1273,12 @@ class TestJobWorkflowDialog:
         assert dlg._merge_panel._camera_combo.currentData() == 1
         assert dlg._merge_panel._camera_combo.currentText() == "DJI Osmo Action 5 Pro"
         assert dlg._merge_panel._video_type_combo.currentData() == 2
+        assert dlg._kb_type_combo.currentData() == 2
+        assert dlg._kb_camera_combo.currentData() == 1
+        assert dlg._kb_type_combo.isEnabled() is False
+        assert dlg._kb_camera_combo.isEnabled() is False
 
-    def test_youtube_upload_panel_hides_standard_fields_when_merge_output_metadata_is_relevant(self):
+    def test_youtube_upload_panel_shows_shared_metadata_read_only_when_merge_output_metadata_is_relevant(self):
         job = WorkflowJob(
             name="Merge Upload",
             source_mode="files",
@@ -1049,7 +1300,8 @@ class TestJobWorkflowDialog:
         dlg._sync_editor_state(sync_graph=False)
 
         assert dlg._youtube_panel.is_merge_output_mode() is True
-        assert dlg._youtube_panel._standard_fields.isHidden() is True
+        assert dlg._youtube_metadata_panel.isEnabled() is False
+        assert dlg._playlist_helper_btn.isVisible() is False
 
     def test_merge_panel_stays_available_without_upload_for_local_output_metadata(self):
         job = WorkflowJob(
@@ -1077,7 +1329,7 @@ class TestJobWorkflowDialog:
         job = _make_job(upload_youtube=False, upload_kaderblick=False, convert_enabled=False)
         dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
 
-        assert dlg._yt_title_edit.isEnabled() is False
+        assert dlg._youtube_metadata_panel.isEnabled() is False
 
         dlg._graph_view.clear_graph()
         source_id = dlg._graph_view.add_node("source_files")
@@ -1085,9 +1337,8 @@ class TestJobWorkflowDialog:
         dlg._graph_view.connect_nodes(source_id, upload_id)
 
         assert dlg._draft.upload_youtube is True
-        assert dlg._yt_title_edit.isEnabled() is True
-        assert dlg._yt_playlist_edit.isEnabled() is True
-        assert dlg._yt_competition_edit.isEnabled() is True
+        assert dlg._youtube_metadata_panel.isEnabled() is True
+        assert dlg._playlist_helper_btn.isEnabled() is True
 
     def test_graph_change_enables_kaderblick_fields_when_post_node_becomes_reachable(self):
         job = _make_job(upload_youtube=False, upload_kaderblick=False, convert_enabled=False)
@@ -1105,8 +1356,8 @@ class TestJobWorkflowDialog:
         assert dlg._draft.upload_youtube is True
         assert dlg._draft.upload_kaderblick is True
         assert dlg._kb_game_id_edit.isEnabled() is True
-        assert dlg._kb_type_combo.isEnabled() is True
-        assert dlg._kb_camera_combo.isEnabled() is True
+        assert dlg._kb_type_combo.isEnabled() is False
+        assert dlg._kb_camera_combo.isEnabled() is False
 
     def test_editor_disables_titlecard_detail_fields_when_titlecard_off(self):
         job = _make_job(title_card_enabled=True, convert_enabled=True)
@@ -1144,8 +1395,8 @@ class TestJobWorkflowDialog:
         with patch("src.job_workflow.dialog.YouTubeTitleEditorDialog", _DummyPlaylistDialog), patch("src.job_workflow.dialog.MatchData", SimpleNamespace):
             dlg._open_match_editor_for_playlist()
 
-        assert dlg._yt_playlist_edit.text() == "Kreispokal | FC Heim - FC Gast"
-        assert dlg._yt_competition_edit.text() == "Kreispokal"
+        assert dlg._youtube_metadata_panel._playlist_preview.text() == "22.03.2026 | Kreispokal | FC Heim vs FC Gast"
+        assert dlg._youtube_metadata_panel._competition_combo.currentText() == "Kreispokal"
         assert dlg._tc_home_edit.text() == "FC Heim"
         assert dlg._tc_away_edit.text() == "FC Gast"
         assert dlg._tc_date_edit.text() == "2026-03-22"
@@ -1180,13 +1431,19 @@ class TestJobWorkflowDialog:
     def test_pi_loader_populates_selectable_file_list(self):
         settings = _settings()
         settings.cameras.devices = [SimpleNamespace(name="Pi 1", ip="10.0.0.5")]
-        settings.cameras.destination = "/dest"
         job = WorkflowJob(source_mode="pi_download", device_name="Pi 1", download_destination="/dest")
         dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
 
         dlg._device_combo.setCurrentIndex(1)
-        dlg._on_camera_files_loaded([{"base": "halbzeit1"}, {"base": "halbzeit2"}])
+        dlg._on_camera_files_loaded([
+            {"base": "halbzeit1", "total_size": 1_073_741_824},
+            {"base": "halbzeit2", "total_size": 536_870_912},
+        ])
 
         assert dlg._pi_file_list.isHidden() is False
+        assert dlg._source_panel._pi_selection_label.isHidden() is False
         assert len(dlg._draft.files) == 2
-        assert dlg._draft.files[0].source_path.endswith("/dest/Pi 1/halbzeit1.mjpg")
+        assert dlg._draft.files[0].source_path.endswith("/dest/halbzeit1.mjpg")
+        assert dlg._draft.files[0].source_size_bytes == 1_073_741_824
+        assert dlg._draft.files[0].youtube_title == ""
+        assert dlg._pi_file_list._table.item(0, dlg._pi_file_list._COL_SIZE).text() == "1.0 GB"

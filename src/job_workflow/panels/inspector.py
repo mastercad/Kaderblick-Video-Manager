@@ -17,6 +17,29 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .merge import YouTubeMetadataPanel
+from ...settings.profiles import (
+    PROFILES,
+    VIDEO_FORMAT_OPTIONS,
+    VIDEO_LABEL_CONTAINER,
+    VIDEO_LABEL_FPS,
+    VIDEO_LABEL_PRESET,
+    VIDEO_LABEL_PROFILE,
+    VIDEO_LABEL_RESOLUTION,
+    VIDEO_PRESET_OPTIONS,
+    VIDEO_RESOLUTION_OPTIONS,
+    VIDEO_TEXT_NO_BFRAMES,
+    VIDEO_TOOLTIP_AUDIO_SYNC,
+    VIDEO_TOOLTIP_CONTAINER,
+    VIDEO_TOOLTIP_NO_BFRAMES,
+    VIDEO_TOOLTIP_PRESET,
+    VIDEO_TOOLTIP_RESOLUTION,
+    matching_profile_name,
+)
+
+
+STEP_CONTAINER_OPTIONS = [("source", "Originalcontainer"), *VIDEO_FORMAT_OPTIONS]
+
 
 def _panel_style() -> str:
     return (
@@ -30,53 +53,38 @@ class YouTubeUploadPanel(QGroupBox):
         self,
         parent: QWidget | None = None,
         *,
-        on_title_changed: Callable[[str], None],
-        on_playlist_changed: Callable[[str], None],
-        on_competition_changed: Callable[[str], None],
+        on_metadata_changed: Callable[[], None],
         on_playlist_helper: Callable[[], None],
     ) -> None:
         super().__init__("YouTube-Upload", parent)
         self.setStyleSheet(_panel_style())
         self._merge_output_mode = False
+        self._upload_enabled = False
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 18, 14, 14)
         layout.setSpacing(10)
 
         self._mode_hint = QLabel(
-            "Standard-Titel und Playlist gelten für direkte Uploads ohne Merge."
+            "Für direkte Uploads bearbeitest du hier dieselben Metadaten wie beim Merge."
         )
         self._mode_hint.setWordWrap(True)
         self._mode_hint.setStyleSheet("color: #475569;")
         layout.addWidget(self._mode_hint)
 
-        self._standard_fields = QWidget(self)
-        form = QFormLayout(self._standard_fields)
-        form.setContentsMargins(14, 18, 14, 14)
-        form.setSpacing(8)
-
-        self._yt_title_edit = QLineEdit()
-        self._yt_title_edit.setPlaceholderText("leer = Dateiname")
-        self._yt_title_edit.textChanged.connect(on_title_changed)
-        form.addRow("Standard-YT-Titel:", self._yt_title_edit)
-
-        self._yt_playlist_edit = QLineEdit()
-        self._yt_playlist_edit.setPlaceholderText("leer = keine Playlist")
-        self._yt_playlist_edit.textChanged.connect(on_playlist_changed)
-        playlist_row = QHBoxLayout()
-        playlist_row.addWidget(self._yt_playlist_edit, 1)
-        self._playlist_helper_btn = QPushButton("🎬 Spieldaten …")
+        helper_row = QHBoxLayout()
+        helper_row.addWidget(QLabel("Spieldaten:", self))
+        self._playlist_helper_btn = QPushButton("🎬 Editor öffnen")
         self._playlist_helper_btn.clicked.connect(on_playlist_helper)
-        playlist_row.addWidget(self._playlist_helper_btn)
-        form.addRow("YouTube-Playlist:", playlist_row)
+        helper_row.addWidget(self._playlist_helper_btn)
+        helper_row.addStretch()
+        layout.addLayout(helper_row)
 
-        self._yt_competition_edit = QLineEdit()
-        self._yt_competition_edit.setPlaceholderText("z. B. Sparkassenpokal")
-        self._yt_competition_edit.textChanged.connect(on_competition_changed)
-        form.addRow("Wettbewerb:", self._yt_competition_edit)
-        layout.addWidget(self._standard_fields)
+        self._metadata_panel = YouTubeMetadataPanel(self)
+        self._metadata_panel.metadata_changed.connect(on_metadata_changed)
+        layout.addWidget(self._metadata_panel)
 
         self._merge_metadata_hint = QLabel(
-            "Wenn der Upload aus einem Merge kommt, übernimmt er Titel, Playlist, Beschreibung und lokalen Dateinamen aus den Ausgabe-Metadaten des Merge-Nodes."
+            "Wenn der Upload aus einem Merge kommt, zeigt dieser Bereich dieselben Merge-Metadaten nur zur Kontrolle an. Die Bearbeitung bleibt am Merge-Node zentralisiert."
         )
         self._merge_metadata_hint.setWordWrap(True)
         self._merge_metadata_hint.setStyleSheet("color: #475569;")
@@ -87,17 +95,24 @@ class YouTubeUploadPanel(QGroupBox):
         self._merge_output_mode = enabled
         if enabled:
             self._mode_hint.setText(
-                "Dieser Upload erhält sein finales Ergebnis aus einem Merge. Die Standardfelder unten sind dafür nicht maßgeblich; pflege stattdessen die Merge-Ausgabe-Metadaten direkt hier im Upload-Bereich."
+                "Dieser Upload erhält sein finales Ergebnis aus einem Merge. Deshalb siehst du hier dieselbe zentrale Metadaten-Maske, sie bleibt aber am Merge-Node bearbeitbar."
             )
         else:
             self._mode_hint.setText(
-                "Standard-Titel und Playlist gelten für direkte Uploads ohne Merge."
+                "Für direkte Uploads bearbeitest du hier dieselben Metadaten wie beim Merge."
             )
-        self._standard_fields.setVisible(not enabled)
+        self._metadata_panel.setEnabled(self._upload_enabled and not enabled)
+        self._playlist_helper_btn.setVisible(not enabled)
+        self._playlist_helper_btn.setEnabled(self._upload_enabled and not enabled)
         self._merge_metadata_hint.setVisible(enabled)
 
     def is_merge_output_mode(self) -> bool:
         return self._merge_output_mode
+
+    def sync_enabled_state(self, enabled: bool) -> None:
+        self._upload_enabled = enabled
+        self._metadata_panel.setEnabled(enabled and not self._merge_output_mode)
+        self._playlist_helper_btn.setEnabled(enabled and not self._merge_output_mode)
 
 
 class KaderblickPanel(QGroupBox):
@@ -116,16 +131,25 @@ class KaderblickPanel(QGroupBox):
         form.setContentsMargins(14, 18, 14, 14)
         form.setSpacing(8)
 
+        hint = QLabel(
+            "Video-Typ und Kamera folgen automatisch den aktiven Output-Metadaten aus YouTube-Upload oder Merge."
+        )
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #475569;")
+        form.addRow("", hint)
+
         self._kb_game_id_edit = QLineEdit()
         self._kb_game_id_edit.setPlaceholderText("z. B. 42")
         self._kb_game_id_edit.textChanged.connect(on_game_id_changed)
         form.addRow("Spiel-ID:", self._kb_game_id_edit)
 
         self._kb_type_combo = QComboBox()
+        self._kb_type_combo.setEnabled(False)
         self._kb_type_combo.currentIndexChanged.connect(on_type_changed)
         form.addRow("Kaderblick-Video-Typ:", self._kb_type_combo)
 
         self._kb_camera_combo = QComboBox()
+        self._kb_camera_combo.setEnabled(False)
         self._kb_camera_combo.currentIndexChanged.connect(on_camera_changed)
         form.addRow("Kaderblick-Kamera:", self._kb_camera_combo)
 
@@ -196,20 +220,152 @@ class TitlecardPanel(QGroupBox):
         form.addRow("Schrift:", self._tc_fg_edit)
 
 
+class StepEncodingPanel(QGroupBox):
+    def __init__(
+        self,
+        title: str,
+        parent: QWidget | None = None,
+        *,
+        on_preset_changed: Callable[[str], None],
+        on_no_bframes_changed: Callable[[bool], None],
+        on_format_changed: Callable[[str], None],
+        on_resolution_changed: Callable[[str], None],
+    ) -> None:
+        super().__init__(title, parent)
+        self.setStyleSheet(_panel_style())
+        self._on_preset_changed = on_preset_changed
+        self._on_no_bframes_changed = on_no_bframes_changed
+        self._on_format_changed = on_format_changed
+        self._on_resolution_changed = on_resolution_changed
+        self._updating_profile = False
+
+        form = QFormLayout(self)
+        form.setContentsMargins(14, 18, 14, 14)
+        form.setSpacing(8)
+
+        self._profile_combo = QComboBox()
+        self._profile_combo.addItems(list(PROFILES.keys()))
+        self._profile_combo.currentTextChanged.connect(self._apply_profile)
+        form.addRow(VIDEO_LABEL_PROFILE, self._profile_combo)
+
+        self._preset_combo = QComboBox()
+        self._preset_combo.addItems(VIDEO_PRESET_OPTIONS)
+        self._preset_combo.currentTextChanged.connect(self._handle_preset_changed)
+        self._preset_combo.setToolTip(VIDEO_TOOLTIP_PRESET)
+        form.addRow(VIDEO_LABEL_PRESET, self._preset_combo)
+
+        self._resolution_combo = QComboBox()
+        for value, label in VIDEO_RESOLUTION_OPTIONS:
+            self._resolution_combo.addItem(label, value)
+        self._resolution_combo.currentIndexChanged.connect(self._handle_resolution_changed)
+        self._resolution_combo.setToolTip(VIDEO_TOOLTIP_RESOLUTION)
+        form.addRow(VIDEO_LABEL_RESOLUTION, self._resolution_combo)
+
+        self._format_combo = QComboBox()
+        for value, label in STEP_CONTAINER_OPTIONS:
+            self._format_combo.addItem(label, value)
+        self._format_combo.currentIndexChanged.connect(self._handle_format_changed)
+        self._format_combo.setToolTip(VIDEO_TOOLTIP_CONTAINER)
+        form.addRow(VIDEO_LABEL_CONTAINER, self._format_combo)
+
+        self._no_bframes_cb = QCheckBox(VIDEO_TEXT_NO_BFRAMES)
+        self._no_bframes_cb.setToolTip(VIDEO_TOOLTIP_NO_BFRAMES)
+        self._no_bframes_cb.toggled.connect(self._handle_no_bframes_changed)
+        form.addRow("", self._no_bframes_cb)
+
+    def _set_profile_name(self, profile_name: str) -> None:
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.setCurrentText(profile_name)
+        self._profile_combo.blockSignals(False)
+
+    def _mark_custom_profile(self) -> None:
+        if self._updating_profile:
+            return
+        self._set_profile_name("Benutzerdefiniert")
+
+    def _apply_profile(self, profile_name: str) -> None:
+        values = PROFILES.get(profile_name, {})
+        if not values:
+            return
+        self._updating_profile = True
+        try:
+            if "preset" in values:
+                self._preset_combo.setCurrentText(str(values["preset"]))
+            if "no_bframes" in values:
+                self._no_bframes_cb.setChecked(bool(values["no_bframes"]))
+        finally:
+            self._updating_profile = False
+
+    def load_values(self, *, preset: str, no_bframes: bool, output_format: str, output_resolution: str) -> None:
+        self._updating_profile = True
+        try:
+            self._preset_combo.setCurrentText(preset)
+            self._no_bframes_cb.setChecked(no_bframes)
+            self._format_combo.setCurrentIndex(max(self._format_combo.findData(output_format), 0))
+            self._resolution_combo.setCurrentIndex(max(self._resolution_combo.findData(output_resolution), 0))
+            self._set_profile_name(
+                matching_profile_name(
+                    {"preset": preset, "no_bframes": no_bframes},
+                    ("preset", "no_bframes"),
+                )
+            )
+        finally:
+            self._updating_profile = False
+
+    def _handle_preset_changed(self, value: str) -> None:
+        self._mark_custom_profile()
+        self._on_preset_changed(value)
+
+    def _handle_no_bframes_changed(self, checked: bool) -> None:
+        self._mark_custom_profile()
+        self._on_no_bframes_changed(checked)
+
+    def _handle_resolution_changed(self, index: int) -> None:
+        self._on_resolution_changed(str(self._resolution_combo.itemData(index) or "source"))
+
+    def _handle_format_changed(self, index: int) -> None:
+        self._on_format_changed(str(self._format_combo.itemData(index) or "source"))
+
+
 class YTVersionPanel(QGroupBox):
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        on_preset_changed: Callable[[str], None],
+        on_no_bframes_changed: Callable[[bool], None],
+        on_format_changed: Callable[[str], None],
+        on_resolution_changed: Callable[[str], None],
+    ) -> None:
         super().__init__("YT-Version", parent)
         self.setStyleSheet(_panel_style())
         layout = QVBoxLayout(self)
         layout.setContentsMargins(14, 18, 14, 14)
         layout.setSpacing(8)
         info = QLabel(
-            "Die YouTube-Version erzeugt eine upload-optimierte Ausgabe auf Basis der aktuellen Verarbeitungskette. Eigene Zusatzparameter sind hier derzeit nicht nötig."
+            "Die YouTube-Version erzeugt eine upload-optimierte Ausgabe auf Basis der aktuellen Verarbeitungskette. Hier stellst du Preset, Auflösung, Container und B-Frames für die Upload-Datei ein."
         )
         info.setWordWrap(True)
         info.setStyleSheet("color: #475569;")
         layout.addWidget(info)
+        self._encoding_panel = StepEncodingPanel(
+            "Videoeinstellungen",
+            self,
+            on_preset_changed=on_preset_changed,
+            on_no_bframes_changed=on_no_bframes_changed,
+            on_format_changed=on_format_changed,
+            on_resolution_changed=on_resolution_changed,
+        )
+        layout.addWidget(self._encoding_panel)
         layout.addStretch()
+
+    def load_values(self, *, preset: str, no_bframes: bool, output_format: str, output_resolution: str) -> None:
+        self._encoding_panel.load_values(
+            preset=preset,
+            no_bframes=no_bframes,
+            output_format=output_format,
+            output_resolution=output_resolution,
+        )
 
 
 class RepairPanel(QGroupBox):
@@ -310,8 +466,10 @@ class ProcessingPanel(QGroupBox):
         on_crf_changed: Callable[[int], None],
         on_encoder_changed: Callable[[int], None],
         on_preset_changed: Callable[[str], None],
+        on_no_bframes_changed: Callable[[bool], None],
         on_fps_changed: Callable[[int], None],
         on_format_changed: Callable[[str], None],
+        on_resolution_changed: Callable[[str], None],
         on_merge_audio_changed: Callable[[bool], None],
         on_amplify_toggled: Callable[[bool], None],
         on_amplify_db_changed: Callable[[float], None],
@@ -319,38 +477,63 @@ class ProcessingPanel(QGroupBox):
     ) -> None:
         super().__init__("Verarbeitung und Audio", parent)
         self.setStyleSheet(_panel_style())
+        self._on_crf_changed = on_crf_changed
+        self._on_encoder_changed = on_encoder_changed
+        self._on_preset_changed = on_preset_changed
+        self._on_no_bframes_changed = on_no_bframes_changed
+        self._on_fps_changed = on_fps_changed
+        self._on_format_changed = on_format_changed
+        self._on_resolution_changed = on_resolution_changed
+        self._updating_profile = False
         form = QFormLayout(self)
         form.setContentsMargins(14, 18, 14, 14)
         form.setSpacing(8)
 
+        self._profile_combo = QComboBox()
+        self._profile_combo.addItems(list(PROFILES.keys()))
+        self._profile_combo.currentTextChanged.connect(self._apply_profile)
+        form.addRow(VIDEO_LABEL_PROFILE, self._profile_combo)
+
         self._crf_spin = QSpinBox()
         self._crf_spin.setRange(0, 51)
-        self._crf_spin.valueChanged.connect(on_crf_changed)
+        self._crf_spin.valueChanged.connect(self._handle_crf_changed)
         form.addRow("CRF:", self._crf_spin)
 
         self._encoder_combo = QComboBox()
         for enc_id, enc_name in encoder_choices:
             self._encoder_combo.addItem(enc_name, enc_id)
-        self._encoder_combo.currentIndexChanged.connect(on_encoder_changed)
+        self._encoder_combo.currentIndexChanged.connect(self._handle_encoder_changed)
         form.addRow("Encoder:", self._encoder_combo)
 
         self._preset_combo = QComboBox()
-        self._preset_combo.addItems([
-            "ultrafast", "superfast", "veryfast", "faster", "fast",
-            "medium", "slow", "slower", "veryslow",
-        ])
-        self._preset_combo.currentTextChanged.connect(on_preset_changed)
-        form.addRow("Preset:", self._preset_combo)
+        self._preset_combo.addItems(VIDEO_PRESET_OPTIONS)
+        self._preset_combo.currentTextChanged.connect(self._handle_preset_changed)
+        self._preset_combo.setToolTip(VIDEO_TOOLTIP_PRESET)
+        form.addRow(VIDEO_LABEL_PRESET, self._preset_combo)
+
+        self._resolution_combo = QComboBox()
+        for value, label in VIDEO_RESOLUTION_OPTIONS:
+            self._resolution_combo.addItem(label, value)
+        self._resolution_combo.currentIndexChanged.connect(self._handle_resolution_changed)
+        self._resolution_combo.setToolTip(VIDEO_TOOLTIP_RESOLUTION)
+        form.addRow(VIDEO_LABEL_RESOLUTION, self._resolution_combo)
+
+        self._no_bframes_cb = QCheckBox(VIDEO_TEXT_NO_BFRAMES)
+        self._no_bframes_cb.setToolTip(VIDEO_TOOLTIP_NO_BFRAMES)
+        self._no_bframes_cb.toggled.connect(self._handle_no_bframes_changed)
+        form.addRow("", self._no_bframes_cb)
 
         self._fps_spin = QSpinBox()
         self._fps_spin.setRange(1, 120)
-        self._fps_spin.valueChanged.connect(on_fps_changed)
-        form.addRow("Framerate:", self._fps_spin)
+        self._fps_spin.valueChanged.connect(self._handle_fps_changed)
+        form.addRow(VIDEO_LABEL_FPS, self._fps_spin)
 
         self._format_combo = QComboBox()
-        self._format_combo.addItems(["mp4", "avi"])
-        self._format_combo.currentTextChanged.connect(on_format_changed)
-        form.addRow("Format:", self._format_combo)
+        for value, label in VIDEO_FORMAT_OPTIONS:
+            self._format_combo.addItem(label, value)
+        self._format_combo.currentIndexChanged.connect(self._handle_format_changed)
+        self._format_combo.setToolTip(VIDEO_TOOLTIP_CONTAINER)
+        form.addRow(VIDEO_LABEL_CONTAINER, self._format_combo)
 
         self._merge_audio_cb = QCheckBox("Separate Audio-Spur zusammenführen")
         self._merge_audio_cb.toggled.connect(on_merge_audio_changed)
@@ -371,5 +554,81 @@ class ProcessingPanel(QGroupBox):
         form.addRow("Pegel:", amp_row)
 
         self._audio_sync_cb = QCheckBox("Audio-Sync / Frame-Drop-Korrektur")
+        self._audio_sync_cb.setToolTip(VIDEO_TOOLTIP_AUDIO_SYNC)
         self._audio_sync_cb.toggled.connect(on_audio_sync_changed)
         form.addRow("", self._audio_sync_cb)
+
+    def _set_profile_name(self, profile_name: str) -> None:
+        self._profile_combo.blockSignals(True)
+        self._profile_combo.setCurrentText(profile_name)
+        self._profile_combo.blockSignals(False)
+
+    def _mark_custom_profile(self) -> None:
+        if self._updating_profile:
+            return
+        self._set_profile_name("Benutzerdefiniert")
+
+    def _apply_profile(self, profile_name: str) -> None:
+        values = PROFILES.get(profile_name, {})
+        if not values:
+            return
+        self._updating_profile = True
+        try:
+            if "encoder" in values:
+                index = max(self._encoder_combo.findData(values["encoder"]), 0)
+                self._encoder_combo.setCurrentIndex(index)
+            if "crf" in values:
+                self._crf_spin.setValue(int(values["crf"]))
+            if "preset" in values:
+                self._preset_combo.setCurrentText(str(values["preset"]))
+            if "output_resolution" in values:
+                self._resolution_combo.setCurrentIndex(max(self._resolution_combo.findData(values["output_resolution"]), 0))
+            if "no_bframes" in values:
+                self._no_bframes_cb.setChecked(bool(values["no_bframes"]))
+            if "output_format" in values:
+                self._format_combo.setCurrentIndex(max(self._format_combo.findData(values["output_format"]), 0))
+        finally:
+            self._updating_profile = False
+
+    def sync_profile_from_values(self) -> None:
+        self._set_profile_name(
+            matching_profile_name(
+                {
+                    "encoder": self._encoder_combo.currentData(),
+                    "crf": self._crf_spin.value(),
+                    "preset": self._preset_combo.currentText(),
+                    "output_format": str(self._format_combo.currentData() or "mp4"),
+                    "output_resolution": str(self._resolution_combo.currentData() or "source"),
+                    "no_bframes": self._no_bframes_cb.isChecked(),
+                },
+                ("encoder", "crf", "preset", "output_format", "output_resolution", "no_bframes"),
+            )
+        )
+
+    def _handle_crf_changed(self, value: int) -> None:
+        self._mark_custom_profile()
+        self._on_crf_changed(value)
+
+    def _handle_encoder_changed(self, index: int) -> None:
+        self._mark_custom_profile()
+        self._on_encoder_changed(index)
+
+    def _handle_preset_changed(self, value: str) -> None:
+        self._mark_custom_profile()
+        self._on_preset_changed(value)
+
+    def _handle_no_bframes_changed(self, checked: bool) -> None:
+        self._mark_custom_profile()
+        self._on_no_bframes_changed(checked)
+
+    def _handle_fps_changed(self, value: int) -> None:
+        self._mark_custom_profile()
+        self._on_fps_changed(value)
+
+    def _handle_resolution_changed(self, index: int) -> None:
+        self._mark_custom_profile()
+        self._on_resolution_changed(str(self._resolution_combo.itemData(index) or "source"))
+
+    def _handle_format_changed(self, index: int) -> None:
+        self._mark_custom_profile()
+        self._on_format_changed(str(self._format_combo.itemData(index) or "mp4"))

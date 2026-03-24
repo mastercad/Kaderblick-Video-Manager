@@ -15,7 +15,6 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QRadioButton,
     QSpinBox,
     QVBoxLayout,
@@ -28,17 +27,19 @@ from ...integrations.youtube_title_editor import (
     _add_to_history,
     build_playlist_title,
     build_video_description,
+    build_video_tags,
     build_video_title,
     load_memory,
     save_memory,
 )
 
 
-class MergeMetadataPanel(QWidget):
+class OutputMetadataPanel(QWidget):
     metadata_changed = Signal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, info_text: str):
         super().__init__(parent)
+        self._info_text = info_text
         self._kb_video_types: list[dict] = []
         self._kb_cameras: list[dict] = []
         self._initial_kb_type_id = 0
@@ -52,9 +53,7 @@ class MergeMetadataPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        info = QLabel(
-            "Merge-Metadaten gehören an den Merge-Node. Hier definierst du den gemeinsamen Titel, die Playlist, die Beschreibung und optionale Kaderblick-Zuordnung für das zusammengeführte Ergebnis."
-        )
+        info = QLabel(self._info_text)
         info.setWordWrap(True)
         info.setStyleSheet("color: #475569;")
         layout.addWidget(info)
@@ -170,15 +169,16 @@ class MergeMetadataPanel(QWidget):
         title_row.addWidget(self._title_len)
         form.addRow("Titel:", title_row)
 
-        self._description_preview = QPlainTextEdit(self)
-        self._description_preview.setReadOnly(True)
+        self._description_preview = QLabel("", self)
+        self._description_preview.setWordWrap(True)
         self._description_preview.setFont(mono)
-        self._description_preview.setFixedHeight(110)
+        self._description_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._description_preview.setStyleSheet("padding: 6px 8px; border: 1px solid #D7E0EA; border-radius: 8px; background: #F8FAFC;")
         form.addRow("Beschreibung:", self._description_preview)
 
         self._kaderblick_preview = QLabel("–", self)
         self._kaderblick_preview.setWordWrap(True)
-        form.addRow("Kaderblick:", self._kaderblick_preview)
+        form.addRow("API-Zuordnung:", self._kaderblick_preview)
         return group
 
     def _load_memory_defaults(self) -> None:
@@ -309,7 +309,7 @@ class MergeMetadataPanel(QWidget):
         if not match_data and not segment_data:
             self._playlist_preview.setText(fallback_playlist or "–")
             self._title_preview.setText(fallback_title or "–")
-            self._description_preview.setPlainText(fallback_description or "")
+            self._description_preview.setText(fallback_description or "")
         self._update_previews()
 
     def current_match(self) -> MatchData:
@@ -348,6 +348,14 @@ class MergeMetadataPanel(QWidget):
         match = self.current_match()
         segment = self.current_segment()
         return {
+            "match_data": copy.deepcopy(match.__dict__),
+            "segment_data": copy.deepcopy(segment.__dict__),
+            "title": build_video_title(match, segment),
+            "playlist": build_playlist_title(match),
+            "description": build_video_description(match, segment),
+            "tags": build_video_tags(match, segment),
+            "kaderblick_video_type_id": int(self._video_type_combo.currentData() or 0) if self._kb_video_types else self._initial_kb_type_id,
+            "kaderblick_camera_id": int(self._camera_combo.currentData() or 0) if self._kb_cameras else self._initial_kb_camera_id,
             "merge_match_data": copy.deepcopy(match.__dict__),
             "merge_segment_data": copy.deepcopy(segment.__dict__),
             "merge_output_title": build_video_title(match, segment),
@@ -356,6 +364,16 @@ class MergeMetadataPanel(QWidget):
             "merge_output_kaderblick_video_type_id": int(self._video_type_combo.currentData() or 0) if self._kb_video_types else self._initial_kb_type_id,
             "merge_output_kaderblick_camera_id": int(self._camera_combo.currentData() or 0) if self._kb_cameras else self._initial_kb_camera_id,
         }
+
+    def apply_match_data(self, match: MatchData) -> None:
+        try:
+            parsed = date.fromisoformat(match.date_iso or date.today().isoformat())
+            self._date_edit.setDate(QDate(parsed.year, parsed.month, parsed.day))
+        except ValueError:
+            self._date_edit.setDate(QDate.currentDate())
+        self._competition_combo.setCurrentText(match.competition)
+        self._home_combo.setCurrentText(match.home_team)
+        self._away_combo.setCurrentText(match.away_team)
 
     def persist_memory(self) -> None:
         match = self.current_match()
@@ -370,8 +388,8 @@ class MergeMetadataPanel(QWidget):
         }
         memory["last_segment"] = {
             "camera": segment.camera,
-            "camera_id": state["merge_output_kaderblick_camera_id"],
-            "video_type_id": state["merge_output_kaderblick_video_type_id"],
+            "camera_id": state["kaderblick_camera_id"],
+            "video_type_id": state["kaderblick_video_type_id"],
             "side": segment.side,
             "half": segment.half,
             "part": segment.part,
@@ -395,7 +413,7 @@ class MergeMetadataPanel(QWidget):
         description = build_video_description(match, segment)
         self._playlist_preview.setText(playlist or "–")
         self._title_preview.setText(title or "–")
-        self._description_preview.setPlainText(description)
+        self._description_preview.setText(description)
         self._set_len_label(self._playlist_len, len(playlist))
         self._set_len_label(self._title_len, len(title))
 
@@ -417,3 +435,19 @@ class MergeMetadataPanel(QWidget):
             label.setStyleSheet("color: orange; font-weight: bold;")
         else:
             label.setStyleSheet("color: green;")
+
+
+class MergeMetadataPanel(OutputMetadataPanel):
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            info_text="Merge-Metadaten gehören an den Merge-Node. Hier definierst du den gemeinsamen Titel, die Playlist, die Beschreibung und optionale Kaderblick-Zuordnung für das zusammengeführte Ergebnis.",
+        )
+
+
+class YouTubeMetadataPanel(OutputMetadataPanel):
+    def __init__(self, parent=None):
+        super().__init__(
+            parent,
+            info_text="Für direkte YouTube-Uploads pflegst du hier dieselben Spieldaten, Abschnittsdaten und die Vorschau wie beim Merge. Titel, Playlist, Beschreibung und Tags werden daraus zentral abgeleitet.",
+        )

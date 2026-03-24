@@ -5,8 +5,17 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
+from .executor_support import ExecutorSupport
+
 
 _CHUNK_SIZE = 8 * 1024 * 1024
+
+
+def _same_directory(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except Exception:
+        return left == right
 
 
 def transfer_files(
@@ -33,7 +42,7 @@ def transfer_files(
         destination = dst_dir / source_path.name
         executor._set_job_status(orig_idx, f"Transfer {file_idx}/{total_files}: {source_path.name} …")
 
-        if source_path.parent == dst_dir:
+        if _same_directory(source_path.parent, dst_dir):
             transferred += _path_size(source_path)
             _emit_progress(executor, orig_idx, transferred, total_bytes, file_idx, total_files)
             result.append(str(source_path))
@@ -41,7 +50,7 @@ def transfer_files(
                 on_file_ready(str(source_path))
             continue
 
-        if destination.exists():
+        if destination.exists() and ExecutorSupport.allow_reuse_existing(executor):
             executor.log_message.emit(f"  ⚠ Übersprungen (existiert): {source_path.name}")
             transferred += max(_path_size(source_path), _path_size(destination))
             _emit_progress(executor, orig_idx, transferred, total_bytes, file_idx, total_files)
@@ -153,6 +162,8 @@ def _emit_progress(
         pct = 100
     executor.job_progress.emit(orig_idx, pct)
     executor.source_progress.emit(orig_idx, pct)
+    if hasattr(executor, "_pump_pipeline_events"):
+        executor._pump_pipeline_events()
 
 
 def _path_size(path: Path) -> int:

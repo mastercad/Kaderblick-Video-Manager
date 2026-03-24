@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from PySide6.QtCore import QTimer
+
 from ..graph import _NODE_DEFINITIONS, _SOURCE_NODE_TYPES, _STEP_LABELS, _planned_job_steps
 from ..graph.builder import build_default_graph
 from ..graph.geometry import auto_layout_graph
@@ -58,13 +60,8 @@ class WorkflowGraphController:
             draft.title_card_enabled = False
             draft.create_youtube_version = False
 
-        dialog._yt_title_edit.setEnabled(draft.upload_youtube)
-        dialog._yt_playlist_edit.setEnabled(draft.upload_youtube)
-        dialog._yt_competition_edit.setEnabled(draft.upload_youtube)
-        dialog._playlist_helper_btn.setEnabled(draft.upload_youtube)
+        dialog._youtube_panel.sync_enabled_state(draft.upload_youtube)
         dialog._kb_game_id_edit.setEnabled(draft.upload_youtube and draft.upload_kaderblick)
-        dialog._kb_type_combo.setEnabled(draft.upload_youtube and draft.upload_kaderblick)
-        dialog._kb_camera_combo.setEnabled(draft.upload_youtube and draft.upload_kaderblick)
         dialog._kb_reload_btn.setEnabled(draft.upload_youtube and draft.upload_kaderblick)
         dialog._kb_status_label.setEnabled(draft.upload_youtube and draft.upload_kaderblick)
         titlecard_enabled = draft.title_card_enabled and has_output_stack
@@ -81,11 +78,7 @@ class WorkflowGraphController:
         merge_count = len({file.merge_group_id for file in draft.files if file.merge_group_id})
         if hasattr(dialog, "_youtube_panel"):
             dialog._youtube_panel.set_merge_output_mode(bool((merge_sources or merge_count) and draft.upload_youtube))
-        if merge_sources or merge_count:
-            dialog._merge_label.setText("Merge ist aktiv: Eingänge werden aus dem Canvas zu einer gemeinsamen Gruppe zusammengeführt.")
-        else:
-            dialog._merge_label.setText("Kein Merge aktiv. Für kombinierte Videos verbindest du mehrere Quellen mit dem Merge-Node im Canvas.")
-
+            dialog._load_youtube_panel_from_draft()
         hints: list[str] = []
         if not has_output_stack:
             hints.append("Titelkarte und YT-Version sind erst sinnvoll, wenn Konvertierung, Upload oder Merge aktiv ist.")
@@ -152,6 +145,7 @@ class WorkflowGraphController:
             dialog._draft.source_mode = mode_map.get(node_type, dialog._draft.source_mode)
             if hasattr(dialog, "_source_panel"):
                 dialog._source_panel.set_mode(dialog._draft.source_mode)
+                dialog._source_panel.refresh_from_job(dialog._draft)
             dialog._property_stack.setCurrentIndex(dialog._property_pages["source"])
         elif node_type == "convert":
             dialog._property_stack.setCurrentIndex(dialog._property_pages["convert"])
@@ -189,6 +183,11 @@ class WorkflowGraphController:
         dialog._rebuilding_graph = False
         dialog._graph_view.refresh_from_job(draft)
         self.sync_draft_from_graph(refresh_graph=False)
+        if dialog._allow_edit:
+            dialog._on_graph_selection_changed(None)
+            dialog._selection_label.setText("Keine Auswahl")
+            dialog._remove_node_btn.setEnabled(False)
+        QTimer.singleShot(0, dialog._graph_view.fit_scene_contents)
 
     def sync_draft_from_graph(self, refresh_graph: bool = True) -> None:
         dialog = self._dialog

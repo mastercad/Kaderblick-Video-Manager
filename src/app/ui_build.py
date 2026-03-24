@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..ui.delegates import ProgressDelegate
-from .helpers import _format_resume_tooltip, _summarize_pipeline, _summarize_source
+from .helpers import _format_resume_tooltip, _summarize_pipeline, _summarize_source, format_elapsed_seconds
 
 
 _ROLE_STEP_PROGRESS = int(Qt.ItemDataRole.UserRole)
@@ -32,6 +32,10 @@ def _build_menu(self: QMainWindow):
     mb = self.menuBar()
 
     file_menu = mb.addMenu("&Datei")
+    self.act_duplicate = file_menu.addAction("Workflow duplizieren")
+    self.act_duplicate.setShortcut(QKeySequence("Ctrl+D"))
+    self.act_duplicate.triggered.connect(self._duplicate_job)
+    file_menu.addSeparator()
     action = file_menu.addAction("Workflow laden …")
     action.setShortcut(QKeySequence("Ctrl+I"))
     action.triggered.connect(self._load_workflow)
@@ -61,6 +65,7 @@ def _build_toolbar(self: QMainWindow):
     tb.addAction("＋ Neuer Workflow", self._new_workflow)
     tb.addSeparator()
     tb.addAction("Bearbeiten", self._edit_job)
+    tb.addAction("Kopieren", self._duplicate_job)
     tb.addAction("Workflow", self._open_job_workflow)
     tb.addAction("Entfernen", self._clear_workflow)
     tb.addSeparator()
@@ -82,8 +87,8 @@ def _build_toolbar(self: QMainWindow):
 def _build_central(self: QMainWindow):
     splitter = QSplitter(Qt.Vertical)
 
-    self.table = QTableWidget(0, 6)
-    self.table.setHorizontalHeaderLabels(["#", "Name", "Quelle", "Pipeline", "Status", "Job"])
+    self.table = QTableWidget(0, 7)
+    self.table.setHorizontalHeaderLabels(["#", "Name", "Quelle", "Pipeline", "Status", "Job", "Dauer"])
     header = self.table.horizontalHeader()
     header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
     header.setSectionResizeMode(1, QHeaderView.Stretch)
@@ -91,10 +96,12 @@ def _build_central(self: QMainWindow):
     header.setSectionResizeMode(3, QHeaderView.Interactive)
     header.setSectionResizeMode(4, QHeaderView.Interactive)
     header.setSectionResizeMode(5, QHeaderView.Interactive)
+    header.setSectionResizeMode(6, QHeaderView.ResizeToContents)
     header.resizeSection(2, 180)
     header.resizeSection(3, 160)
     header.resizeSection(4, 260)
     header.resizeSection(5, 120)
+    header.resizeSection(6, 90)
     self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
     self.table.setSelectionMode(QAbstractItemView.ExtendedSelection)
     self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -122,6 +129,9 @@ def _build_statusbar(self: QMainWindow):
     self.status_label = QLabel("Bereit")
     self.statusBar().addWidget(self.status_label, 2)
 
+    self.duration_label = QLabel("Gesamtdauer: –")
+    self.statusBar().addPermanentWidget(self.duration_label)
+
     self.progress = QProgressBar()
     self.progress.setTextVisible(True)
     self.progress.setMaximumHeight(18)
@@ -138,7 +148,7 @@ def _refresh_table(self):
         self.table.setItem(row, 1, QTableWidgetItem(job.name or "–"))
         self.table.setItem(row, 2, QTableWidgetItem(_summarize_source(job)))
         pipeline_item = QTableWidgetItem(_summarize_pipeline(job))
-        pipeline_item.setToolTip("Doppelklick für Workflow-Ansicht")
+        pipeline_item.setToolTip("Doppelklick für Workflow-Editor")
         self.table.setItem(row, 3, pipeline_item)
         status_item = QTableWidgetItem(job.resume_status or "Wartend")
         status_item.setData(_ROLE_STEP_PROGRESS, job.progress_pct)
@@ -147,8 +157,15 @@ def _refresh_table(self):
 
         job_item = QTableWidgetItem(f"{job.overall_progress_pct}%")
         job_item.setData(_ROLE_JOB_PROGRESS, job.overall_progress_pct)
-        job_item.setToolTip("Doppelklick für Workflow-Ansicht")
+        job_item.setToolTip("Doppelklick für Workflow-Editor")
         self.table.setItem(row, 5, job_item)
+        duration_item = QTableWidgetItem(_format_elapsed_cell(job.run_elapsed_seconds))
+        duration_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.setItem(row, 6, duration_item)
+
+    if hasattr(self, "duration_label"):
+        total_seconds = float(getattr(self._workflow, "last_run_elapsed_seconds", 0.0) or 0.0)
+        self.duration_label.setText(f"Gesamtdauer: {_format_elapsed_cell(total_seconds)}")
 
 
 def _set_row_status(self, row: int, status: str):
@@ -200,6 +217,21 @@ def _set_row_job_progress(self, row: int, pct: int):
     self.table.viewport().update()
 
 
+def _set_row_duration(self, row: int, seconds: float):
+    item = self.table.item(row, 6)
+    if item is None:
+        item = QTableWidgetItem()
+        item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.table.setItem(row, 6, item)
+    item.setText(_format_elapsed_cell(seconds))
+
+
+def _format_elapsed_cell(seconds: float) -> str:
+    if seconds and seconds > 0:
+        return format_elapsed_seconds(seconds)
+    return "–"
+
+
 def _reset_status_column(self):
     for row in range(self.table.rowCount()):
         status_item = self.table.item(row, 4)
@@ -216,6 +248,13 @@ def _reset_status_column(self):
             self.table.setItem(row, 5, job_item)
         job_item.setText("0%")
         job_item.setData(_ROLE_JOB_PROGRESS, 0)
+
+        duration_item = self.table.item(row, 6)
+        if duration_item is None:
+            duration_item = QTableWidgetItem()
+            duration_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setItem(row, 6, duration_item)
+        duration_item.setText("–")
     self.table.viewport().update()
 
 

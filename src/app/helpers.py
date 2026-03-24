@@ -32,7 +32,7 @@ def _summarize_pipeline(job: WorkflowJob) -> str:
         parts.append("Download")
     if job.convert_enabled:
         parts.append("Konvert.")
-    if any(file.merge_group_id for file in job.files):
+    if any(file.merge_group_id for file in job.files) or "merge" in graph_types:
         parts.append("Kombinieren")
     if job.title_card_enabled:
         parts.append("Titelkarte")
@@ -56,7 +56,13 @@ def _summarize_pipeline(job: WorkflowJob) -> str:
 
 
 def _format_resume_tooltip(job: WorkflowJob) -> str:
+    show_elapsed = int(getattr(job, "run_elapsed_seconds", 0) or 0) > 0
     if not job.step_statuses:
+        if show_elapsed:
+            summary = job.resume_status or ""
+            if summary:
+                return f"{summary}\nLaufzeit: {format_elapsed_seconds(job.run_elapsed_seconds)}"
+            return f"Laufzeit: {format_elapsed_seconds(job.run_elapsed_seconds)}"
         return job.resume_status or ""
     labels = {
         "transfer": "Transfer",
@@ -95,11 +101,32 @@ def _format_resume_tooltip(job: WorkflowJob) -> str:
                 lines.append(f"  {detail}")
     if job.resume_status:
         lines.insert(0, f"Letzter Status: {job.resume_status}")
+    if show_elapsed:
+        insert_at = 1 if lines and lines[0].startswith("Letzter Status:") else 0
+        lines.insert(insert_at, f"Laufzeit: {format_elapsed_seconds(job.run_elapsed_seconds)}")
     return "\n".join(lines)
 
 
+def format_elapsed_seconds(seconds: float) -> str:
+    total_seconds = max(0, int(seconds or 0))
+    if total_seconds >= 3600:
+        hours = total_seconds // 3600
+        minutes = (total_seconds % 3600) // 60
+        return f"{hours}h {minutes:02d}min"
+    if total_seconds >= 60:
+        minutes = total_seconds // 60
+        secs = total_seconds % 60
+        return f"{minutes}min {secs:02d}s"
+    return f"{total_seconds}s"
+
+
 def _planned_job_steps(job: WorkflowJob) -> list[str]:
-    has_merge = any(file.merge_group_id for file in job.files)
+    graph_types = {
+        str(node.get("type", ""))
+        for node in getattr(job, "graph_nodes", [])
+        if isinstance(node, dict)
+    }
+    has_merge = any(file.merge_group_id for file in job.files) or "merge" in graph_types
     reachable_types = graph_reachable_types(job) if getattr(job, "graph_nodes", None) else set()
     has_graph = bool(getattr(job, "graph_nodes", None))
     convert_enabled = "convert" in reachable_types if has_graph else job.convert_enabled
@@ -252,6 +279,9 @@ def _overlay_resume_state(target: WorkflowJob, source: WorkflowJob) -> WorkflowJ
     target.progress_pct = source.progress_pct
     target.overall_progress_pct = source.overall_progress_pct
     target.current_step_key = source.current_step_key
+    target.run_started_at = source.run_started_at
+    target.run_finished_at = source.run_finished_at
+    target.run_elapsed_seconds = source.run_elapsed_seconds
     return target
 
 
@@ -286,6 +316,9 @@ def _repair_restored_workflow(restored: Workflow, fallback: Workflow | None) -> 
             job.progress_pct = 0
             job.overall_progress_pct = 0
             job.current_step_key = ""
+            job.run_started_at = ""
+            job.run_finished_at = ""
+            job.run_elapsed_seconds = 0.0
             dropped_resume_state += 1
         repaired_jobs.append(job)
 
