@@ -78,7 +78,7 @@ def _media_compatibility_issues(payload: dict) -> list[str]:
         issues.append(f"Video-Codec ist {video_codec or 'unbekannt'} statt h264")
 
     pix_fmt = str(video.get("pix_fmt") or "").lower()
-    if pix_fmt and pix_fmt != "yuv420p":
+    if pix_fmt and pix_fmt not in {"yuv420p", "yuvj420p"}:
         issues.append(f"Pixel-Format ist {pix_fmt} statt yuv420p")
 
     field_order = str(video.get("field_order") or "").lower()

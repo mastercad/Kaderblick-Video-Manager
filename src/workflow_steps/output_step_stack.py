@@ -15,6 +15,17 @@ from .youtube_version_step import YoutubeVersionStep
 
 class OutputStepStack:
     name = "output-stack"
+    _STEP_ORDER = (
+        "titlecard",
+        "validate_surface",
+        "validate_deep",
+        "cleanup",
+        "repair",
+        "yt_version",
+        "stop",
+        "youtube_upload",
+        "kaderblick",
+    )
 
     def __init__(self):
         self._title_card_step = TitleCardStep()
@@ -37,6 +48,7 @@ class OutputStepStack:
         include_title_card: bool = True,
         include_repair: bool = True,
         include_youtube_version: bool = True,
+        start_at_step: str = "",
     ) -> int:
         failures = self.execute_processing_steps(
             executor,
@@ -44,10 +56,11 @@ class OutputStepStack:
             include_title_card=include_title_card,
             include_repair=include_repair,
             include_youtube_version=include_youtube_version,
+            start_at_step=start_at_step,
         )
         if failures or executor._cancel.is_set():
             return failures
-        return self.execute_delivery_steps(executor, prepared, yt_service, kb_sort_index)
+        return self.execute_delivery_steps(executor, prepared, yt_service, kb_sort_index, start_at_step=start_at_step)
 
     def execute_processing_steps(
         self,
@@ -57,6 +70,7 @@ class OutputStepStack:
         include_title_card: bool = True,
         include_repair: bool = True,
         include_youtube_version: bool = True,
+        start_at_step: str = "",
     ) -> int:
         failures = 0
         ordered_steps = [
@@ -74,6 +88,8 @@ class OutputStepStack:
                 break
             if not enabled:
                 continue
+            if self._skip_before_start(step.name, start_at_step):
+                continue
             if not executor._prepared_output_reaches_type(prepared, step.name):
                 continue
             failures += step.execute(executor, prepared)
@@ -88,11 +104,15 @@ class OutputStepStack:
         prepared: PreparedOutput,
         yt_service: Any,
         kb_sort_index: dict[tuple[str, str], int],
+        *,
+        start_at_step: str = "",
     ) -> int:
         failures = 0
         for step in (self._youtube_upload_step, self._kaderblick_post_step):
             if executor._cancel.is_set():
                 break
+            if self._skip_before_start(step.name, start_at_step):
+                continue
             if not executor._prepared_output_reaches_type(prepared, step.name):
                 continue
             if isinstance(step, YoutubeUploadStep):
@@ -105,3 +125,9 @@ class OutputStepStack:
         if prepared.mark_finished and not failures:
             executor._set_job_status(prepared.orig_idx, "Fertig")
         return failures
+
+    @classmethod
+    def _skip_before_start(cls, step_name: str, start_at_step: str) -> bool:
+        if not start_at_step or start_at_step not in cls._STEP_ORDER or step_name not in cls._STEP_ORDER:
+            return False
+        return cls._STEP_ORDER.index(step_name) < cls._STEP_ORDER.index(start_at_step)

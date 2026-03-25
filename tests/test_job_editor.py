@@ -454,6 +454,28 @@ class TestWorkflowPreview:
         assert opened.job.title_card_enabled is True
 
 
+class TestTitlecardWizardState:
+    def test_graph_based_titlecard_workflow_enables_legacy_titlecard_controls(self):
+        job = WorkflowJob(
+            title_card_enabled=False,
+            graph_nodes=[
+                {"id": "source-1", "type": "source_files"},
+                {"id": "title-1", "type": "titlecard"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "title-1"},
+            ],
+        )
+
+        dlg = _edit_dialog(job)
+
+        assert dlg._tc_enabled_cb.isChecked() is True
+        assert dlg._tc_details.isEnabled() is True
+        assert dlg._tc_logo_edit.isEnabled() is True
+        assert dlg._tc_bg_btn.isEnabled() is True
+        assert dlg._tc_fg_btn.isEnabled() is True
+
+
 # ─── Validation ───────────────────────────────────────────────────────────────
 
 class TestValidation:

@@ -117,9 +117,10 @@ class MergeGroupStep:
             overwrite=per_settings.video.overwrite,
             no_bframes=first_job.merge_no_bframes,
             keyframe_interval=per_settings.video.keyframe_interval,
-            encoder=per_settings.video.encoder,
+            encoder=(first_job.merge_encoder if first_job.merge_encoder not in {"", "inherit"} else per_settings.video.encoder),
             preset=first_job.merge_preset or per_settings.video.preset,
-            crf=per_settings.video.crf,
+            crf=first_job.merge_crf if first_job.merge_crf > 0 else per_settings.video.crf,
+            fps=first_job.merge_fps if first_job.merge_fps > 0 else None,
             target_resolution=first_job.merge_output_resolution,
             metadata_job=first_cv,
         )

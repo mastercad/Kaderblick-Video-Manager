@@ -2,13 +2,30 @@ from __future__ import annotations
 
 import copy
 from datetime import date
+from pathlib import Path
 
 from ...integrations.youtube_title_editor import MatchData, load_memory
+from .state import resolve_step_input_context
 
 
 class WorkflowEditorController:
     def __init__(self, dialog):
         self._dialog = dialog
+
+    def refresh_titlecard_preview_context(self) -> None:
+        dialog = self._dialog
+        if not hasattr(dialog, "_titlecard_panel"):
+            return
+        subtitle = ""
+        for entry in dialog._draft.files:
+            subtitle = str(getattr(entry, "title_card_subtitle", "") or "").strip()
+            if subtitle:
+                break
+            source_path = str(getattr(entry, "source_path", "") or "").strip()
+            if source_path:
+                subtitle = Path(source_path).stem
+                break
+        dialog._titlecard_panel.set_preview_subtitle(subtitle)
 
     def _resolved_kaderblick_target_ids(self) -> tuple[int, int]:
         dialog = self._dialog
@@ -88,6 +105,7 @@ class WorkflowEditorController:
         dialog._tc_logo_edit.setText(draft.title_card_logo_path)
         dialog._tc_bg_edit.setText(draft.title_card_bg_color or "#000000")
         dialog._tc_fg_edit.setText(draft.title_card_fg_color or "#FFFFFF")
+        self.refresh_titlecard_preview_context()
         dialog._crf_spin.setValue(draft.crf)
         dialog._preset_combo.setCurrentText(draft.preset)
         dialog._no_bframes_cb.setChecked(draft.no_bframes)
@@ -103,19 +121,63 @@ class WorkflowEditorController:
         dialog._processing_panel.sync_profile_from_values()
         dialog._source_panel.load_from_job(draft)
         if hasattr(dialog, "_merge_encoding_panel"):
+            merge_context = resolve_step_input_context(
+                draft,
+                "merge",
+                youtube_default_crf=(dialog._settings.youtube.youtube_crf if dialog._settings is not None else draft.crf),
+            )
+            dialog._merge_encoding_panel.configure_reference_labels(
+                encoder_label=merge_context.encoder_label,
+                crf_label=merge_context.crf_label,
+                fps_label=merge_context.fps_label,
+                format_label=merge_context.format_label,
+                resolution_label=merge_context.resolution_label,
+            )
             dialog._merge_encoding_panel.load_values(
+                encoder=draft.merge_encoder,
+                crf=draft.merge_crf,
                 preset=draft.merge_preset,
                 no_bframes=draft.merge_no_bframes,
+                fps=draft.merge_fps,
                 output_format=draft.merge_output_format,
                 output_resolution=draft.merge_output_resolution,
+                base_encoder=merge_context.base_encoder,
+                base_crf=merge_context.base_crf,
             )
+            if merge_context.summary is not None:
+                dialog._merge_encoding_panel._refresh_source_btn.setVisible(False)
+                dialog._merge_encoding_panel.update_source_summary(merge_context.summary)
+            else:
+                dialog._merge_encoding_panel.update_source_material([entry.source_path for entry in draft.files])
         if hasattr(dialog, "_yt_version_panel"):
+            yt_context = resolve_step_input_context(
+                draft,
+                "yt_version",
+                youtube_default_crf=(dialog._settings.youtube.youtube_crf if dialog._settings is not None else draft.crf),
+            )
+            dialog._yt_version_panel._encoding_panel.configure_reference_labels(
+                encoder_label=yt_context.encoder_label,
+                crf_label=yt_context.crf_label,
+                fps_label=yt_context.fps_label,
+                format_label=yt_context.format_label,
+                resolution_label=yt_context.resolution_label,
+            )
             dialog._yt_version_panel.load_values(
+                encoder=draft.yt_version_encoder,
+                crf=draft.yt_version_crf,
                 preset=draft.yt_version_preset,
                 no_bframes=draft.yt_version_no_bframes,
+                fps=draft.yt_version_fps,
                 output_format=draft.yt_version_output_format,
                 output_resolution=draft.yt_version_output_resolution,
+                base_encoder=yt_context.base_encoder,
+                base_crf=yt_context.base_crf,
             )
+            if yt_context.summary is not None:
+                dialog._yt_version_panel._encoding_panel._refresh_source_btn.setVisible(False)
+                dialog._yt_version_panel._encoding_panel.update_source_summary(yt_context.summary)
+            else:
+                dialog._yt_version_panel._encoding_panel.update_source_material([entry.source_path for entry in draft.files])
         self.sync_kaderblick_selectors()
         self.load_merge_panel_from_draft()
         self.load_youtube_panel_from_draft()
@@ -184,12 +246,18 @@ class WorkflowEditorController:
             "amplify_audio",
             "amplify_db",
             "audio_sync",
+            "merge_encoder",
+            "merge_crf",
             "merge_preset",
             "merge_no_bframes",
+            "merge_fps",
             "merge_output_format",
             "merge_output_resolution",
+            "yt_version_encoder",
+            "yt_version_crf",
             "yt_version_preset",
             "yt_version_no_bframes",
+            "yt_version_fps",
             "yt_version_output_format",
             "yt_version_output_resolution",
         ):
@@ -250,6 +318,16 @@ class WorkflowEditorController:
     def on_kaderblick_camera_changed(self, index: int) -> None:
         dialog = self._dialog
         dialog._draft.default_kaderblick_camera_id = int(dialog._kb_camera_combo.itemData(index) or 0)
+        dialog._refresh_dynamic_sections()
+
+    def on_merge_encoder_changed(self, index: int) -> None:
+        dialog = self._dialog
+        dialog._draft.merge_encoder = str(dialog._merge_encoding_panel._encoder_combo.itemData(index) or "inherit")
+        dialog._refresh_dynamic_sections()
+
+    def on_yt_version_encoder_changed(self, index: int) -> None:
+        dialog = self._dialog
+        dialog._draft.yt_version_encoder = str(dialog._yt_version_panel._encoding_panel._encoder_combo.itemData(index) or "inherit")
         dialog._refresh_dynamic_sections()
 
     def on_match_data_changed(self, home: str, away: str, date_iso: str) -> None:
@@ -411,6 +489,7 @@ class WorkflowEditorController:
         if dialog._file_list_widget is None:
             return
         dialog._draft.files = dialog._file_list_widget.collect()
+        self.refresh_titlecard_preview_context()
         dialog._sync_editor_state()
 
     def on_pi_files_changed(self) -> None:
@@ -418,6 +497,7 @@ class WorkflowEditorController:
         if not hasattr(dialog, "_pi_file_list"):
             return
         dialog._draft.files = dialog._pi_file_list.collect()
+        self.refresh_titlecard_preview_context()
         dialog._sync_editor_state()
 
     def on_file_pattern_changed(self, text: str) -> None:

@@ -15,10 +15,12 @@ from .helpers import (
     _repair_restored_workflow,
 )
 from .window import ConverterApp
+from .theme import apply_application_theme
 
 
 __all__ = [
     "ConverterApp",
+    "apply_application_theme",
     "AppSettings",
     "QThread",
     "QMessageBox",

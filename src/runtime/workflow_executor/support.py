@@ -9,6 +9,85 @@ from ...workflow_steps import ExecutorSupport, PreparedOutput
 
 class WorkflowExecutorSupportMixin:
     @staticmethod
+    def _is_finished_step_status(status: str) -> bool:
+        return status in {"done", "reused-target", "skipped"}
+
+    def _planned_job_steps(self, job: WorkflowJob) -> list[str]:
+        graph_types = {
+            str(node.get("type", ""))
+            for node in getattr(job, "graph_nodes", [])
+            if isinstance(node, dict)
+        }
+        has_merge = any(file.merge_group_id for file in job.files) or "merge" in graph_types
+        has_graph = bool(getattr(job, "graph_nodes", None))
+        reachable_types = set(graph_types) if has_graph else set()
+        convert_enabled = "convert" in reachable_types if has_graph else job.convert_enabled
+        titlecard_enabled = "titlecard" in reachable_types if has_graph else job.title_card_enabled
+        youtube_version_enabled = "yt_version" in reachable_types if has_graph else job.create_youtube_version
+        youtube_upload_enabled = "youtube_upload" in reachable_types if has_graph else job.upload_youtube
+        kaderblick_enabled = "kaderblick" in reachable_types if has_graph else (job.upload_youtube and job.upload_kaderblick)
+
+        steps = ["transfer"]
+        if has_merge and self._merge_precedes_convert(job):
+            steps.append("merge")
+            if convert_enabled:
+                steps.append("convert")
+        else:
+            if convert_enabled:
+                steps.append("convert")
+            if has_merge:
+                steps.append("merge")
+        if titlecard_enabled:
+            steps.append("titlecard")
+        for step in ("validate_surface", "validate_deep", "cleanup", "repair"):
+            if step in reachable_types:
+                steps.append(step)
+        if youtube_version_enabled:
+            steps.append("yt_version")
+        if "stop" in reachable_types:
+            steps.append("stop")
+        if youtube_upload_enabled:
+            steps.append("youtube_upload")
+        if kaderblick_enabled:
+            steps.append("kaderblick")
+
+        seen: set[str] = set()
+        result: list[str] = []
+        for step in steps:
+            if step in seen:
+                continue
+            seen.add(step)
+            result.append(step)
+        return result
+
+    def _first_pending_step(self, job: WorkflowJob) -> str | None:
+        for step in self._planned_job_steps(job):
+            status = str(job.step_statuses.get(step, "") or "")
+            if not self._is_finished_step_status(status):
+                return step
+        return None
+
+    def _step_precedes(self, job: WorkflowJob, step: str, target_step: str) -> bool:
+        planned_steps = self._planned_job_steps(job)
+        if step not in planned_steps or target_step not in planned_steps:
+            return False
+        return planned_steps.index(step) < planned_steps.index(target_step)
+
+    def _should_skip_step_for_resume(
+        self,
+        job: WorkflowJob,
+        step: str,
+        resume_step: str | None = None,
+    ) -> bool:
+        if not self._allow_reuse_existing:
+            return False
+        current_resume_step = resume_step or self._first_pending_step(job)
+        if not current_resume_step or current_resume_step == step:
+            return False
+        status = str(job.step_statuses.get(step, "") or "")
+        return self._is_finished_step_status(status) and self._step_precedes(job, step, current_resume_step)
+
+    @staticmethod
     def _needs_delivery(job: WorkflowJob) -> bool:
         return bool(job.upload_youtube or job.upload_kaderblick)
 
@@ -174,8 +253,18 @@ class WorkflowExecutorSupportMixin:
         return get_youtube_service(log_callback=self.log_message.emit)
 
     def _set_job_status(self, orig_idx: int, status: str) -> None:
-        self.job_status.emit(orig_idx, status)
-        if status.startswith("Transfer"):
+        is_transfer_status = status.startswith("Transfer")
+        active_job = None
+        if 0 <= orig_idx < len(getattr(self._workflow, "jobs", [])):
+            active_job = self._workflow.jobs[orig_idx]
+
+        if not (
+            is_transfer_status
+            and active_job is not None
+            and getattr(active_job, "current_step_key", "") not in {"", "transfer"}
+        ):
+            self.job_status.emit(orig_idx, status)
+        if is_transfer_status:
             self.source_status.emit(orig_idx, status)
 
     @staticmethod

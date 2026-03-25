@@ -67,6 +67,7 @@ class YoutubeUploadStep:
             yt_service,
             log_callback=executor.log_message.emit,
             cancel_flag=executor._cancel,
+            allow_reuse_existing=ExecutorSupport.allow_reuse_existing(executor),
             progress_callback=lambda pct: executor.job_progress.emit(orig_idx, pct),
         )
 

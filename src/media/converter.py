@@ -29,7 +29,7 @@ from ..integrations.youtube_title_editor import build_output_filename_from_title
 # Rohe MJPEG-Streams benötigen -framerate/-f mjpeg Input-Flags.
 # Alles andere ist ein regulärer Container.
 _MJPEG_EXTS = {".mjpg", ".mjpeg"}
-_EMBEDDED_METADATA_SOFTWARE = "Kaderblick — Video Manager "
+_EMBEDDED_METADATA_SOFTWARE = "Kaderblick — Video Manager"
 
 
 def _build_scale_pad_filter(width: int, height: int) -> str:
@@ -619,7 +619,10 @@ def run_youtube_convert(job: ConvertJob, settings: AppSettings,
                         cancel_flag: Optional[threading.Event] = None,
                         log_callback=None,
                         progress_callback=None,
+                        encoder: str | None = None,
+                        crf: int | None = None,
                         preset: str | None = None,
+                        fps: int | None = None,
                         no_bframes: bool | None = None,
                         output_format: str | None = None,
                         output_resolution: str | None = None) -> bool:
@@ -657,14 +660,14 @@ def run_youtube_convert(job: ConvertJob, settings: AppSettings,
     log(f"Erstelle YouTube-Version: {yt_path.name}")
 
     src_info = get_video_stream_info(mp4)
-    source_fps = src_info.get("fps") or vs.fps
+    source_fps = float(fps) if fps and fps > 0 else (src_info.get("fps") or vs.fps)
     target_dimensions = resolution_dimensions(output_resolution or vs.output_resolution)
     if target_dimensions is not None:
         log(f"YT-Ziel-Auflösung: {target_dimensions[0]}x{target_dimensions[1]}")
     encoder, encoder_args = build_video_encoder_args(
-        vs.encoder,
+        encoder or vs.encoder,
         preset=preset or vs.preset,
-        crf=yt.youtube_crf,
+        crf=crf if crf is not None and crf > 0 else yt.youtube_crf,
         lossless=False,
         fps=source_fps,
         no_bframes=vs.no_bframes if no_bframes is None else no_bframes,
@@ -757,6 +760,7 @@ def run_concat(
     encoder: str = "auto",
     no_bframes: bool = True,
     keyframe_interval: int = 1,
+    fps: int | None = None,
     target_resolution: str | None = None,
     metadata_job: ConvertJob | None = None,
 ) -> bool:
@@ -793,7 +797,7 @@ def run_concat(
     names = " + ".join(p.name for p in source_files)
     log(f"Zusammenführen (re-encode): {names} → {output.name}")
 
-    source_fps = get_video_stream_info(source_files[0]).get("fps") if source_files else None
+    source_fps = float(fps) if fps and fps > 0 else (get_video_stream_info(source_files[0]).get("fps") if source_files else None)
     if not source_fps:
         source_fps = 25.0
 

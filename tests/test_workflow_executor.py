@@ -129,6 +129,17 @@ class TestResolveYoutubeTitle:
         result = WorkflowExecutor._resolve_youtube_title(job, "/a/b.mp4")
         assert result == "Job-Standard"
 
+    def test_placeholder_source_stem_does_not_override_richer_job_title(self):
+        fe = FileEntry(source_path="/raw/aufnahme_2026-03-01_09-31-27.mjpg", youtube_title="aufnahme_2026-03-01_09-31-27")
+        job = WorkflowJob(
+            default_youtube_title="2026-03-23 | SV Pesterwitz vs Gast | Kaderblick Links | 1. Halbzeit",
+            files=[fe],
+        )
+
+        result = WorkflowExecutor._resolve_youtube_title(job, "/raw/aufnahme_2026-03-01_09-31-27.mjpg")
+
+        assert result == "2026-03-23 | SV Pesterwitz vs Gast | Kaderblick Links | 1. Halbzeit"
+
     def test_filename_stem_as_last_fallback(self):
         fe = FileEntry(source_path="/a/mein_video.mp4", youtube_title="")
         job = WorkflowJob(
@@ -264,6 +275,66 @@ class TestBuildJobSettings:
         assert "Gast" in cv_job.youtube_tags
 
 
+class TestLivePipelineProgress:
+    def test_convert_progress_is_emitted_before_pipeline_item_finishes(self, tmp_path):
+        from queue import Queue
+
+        from src.runtime.workflow_executor.helpers import _PipelineWorkerView
+
+        source = tmp_path / "clip.mp4"
+        source.write_text("video", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Live Progress",
+            source_mode="files",
+            convert_enabled=True,
+            files=[FileEntry(source_path=str(source))],
+        )
+        ex = WorkflowExecutor(Workflow(job=job), _make_settings())
+
+        def _fake_convert(cv_job, _settings, **kwargs):
+            progress_callback = kwargs["progress_callback"]
+            if cv_job.output_path is not None:
+                cv_job.output_path.parent.mkdir(parents=True, exist_ok=True)
+                cv_job.output_path.write_text("converted", encoding="utf-8")
+            progress_callback(10)
+            time.sleep(0.15)
+            progress_callback(65)
+            cv_job.status = "Fertig"
+            return True
+
+        ex._convert_func = _fake_convert
+        event_queue: Queue = Queue()
+        ex._pipeline_event_queue = event_queue
+        ex._pipeline_last_drain = 0.0
+        worker_executor = _PipelineWorkerView(ex, event_queue)
+        received_progress: list[int] = []
+
+        def _on_progress(_orig_idx: int, pct: int) -> None:
+            received_progress.append(pct)
+
+        ex.job_progress.connect(_on_progress)
+
+        result = ex._convert_step.execute(
+            worker_executor,
+            0,
+            job,
+            ex._build_convert_job(job, str(source)),
+            ex._build_job_settings(job),
+            0,
+            1,
+        )
+
+        ex._drain_pipeline_events(event_queue)
+        ex._pipeline_event_queue = None
+        ex._pipeline_last_drain = 0.0
+
+        assert result == "ok"
+        assert received_progress[0] == 0
+        assert 10 in received_progress
+        assert 65 in received_progress
+
+
 class TestYouTubeUploadRequest:
     def test_upload_to_youtube_sends_description_in_insert_body(self, tmp_path):
         output = tmp_path / "clip.mp4"
@@ -389,6 +460,47 @@ class TestYouTubeUploadRequest:
         sleep_mock.assert_called_once_with(2)
         assert any("Upload-Fehler (Versuch 1/5)" in line for line in logs)
 
+    def test_upload_to_youtube_restart_ignores_existing_registry_and_pending_resume(self, tmp_path):
+        output = tmp_path / "clip.mp4"
+        output.write_text("video", encoding="utf-8")
+        cv_job = ConvertJob(source_path=output, output_path=output, youtube_title="Titel")
+        settings = _make_settings()
+        settings.youtube.upload_to_youtube = True
+        captured: dict[str, object] = {}
+
+        class _FakeInsertRequest:
+            _resumable_uri = None
+
+            def next_chunk(self):
+                return None, {"id": "video-new"}
+
+        class _FakeVideos:
+            def insert(self, *, part, body, media_body):
+                captured["part"] = part
+                captured["body"] = body
+                captured["media_body"] = media_body
+                return _FakeInsertRequest()
+
+        fake_service = MagicMock()
+        fake_service.videos.return_value = _FakeVideos()
+
+        with patch("src.integrations.youtube._registry.already_uploaded", return_value="video-old") as existing_mock, \
+             patch("src.integrations.youtube._registry.get_pending", return_value="resume://old") as pending_mock, \
+             patch("src.integrations.youtube._registry.record_pending"), \
+             patch("src.integrations.youtube._registry.record_done"), \
+             patch("src.integrations.youtube.MediaFileUpload", return_value=MagicMock()):
+            ok = upload_to_youtube(
+                cv_job,
+                settings,
+                fake_service,
+                allow_reuse_existing=False,
+            )
+
+        assert ok is True
+        existing_mock.assert_not_called()
+        pending_mock.assert_not_called()
+        assert captured["part"] == "snippet,status"
+
 
 class TestRunDispatch:
     def test_run_processes_all_enabled_jobs(self):
@@ -437,7 +549,6 @@ class TestGraphDrivenExecution:
                 {"source": "merge-1", "target": "yt-1"},
             ],
         )
-
         ex = WorkflowExecutor(Workflow(job=job), _make_settings())
 
         def _fake_youtube_convert(job, settings, **_kwargs):
@@ -547,6 +658,46 @@ class TestGraphDrivenExecution:
         assert captured["preset"] == "veryslow"
         assert captured["no_bframes"] is False
         assert captured["output_resolution"] == "2160p"
+
+    def test_youtube_version_uses_step_specific_encoder_crf_and_fps(self, tmp_path):
+        source = tmp_path / "clip.mp4"
+        source.write_text("video", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="YT Fine Tune",
+            source_mode="files",
+            convert_enabled=False,
+            create_youtube_version=False,
+            upload_youtube=False,
+            yt_version_encoder="libx264",
+            yt_version_crf=17,
+            yt_version_preset="slow",
+            yt_version_no_bframes=True,
+            yt_version_fps=60,
+            files=[FileEntry(source_path=str(source), graph_source_id="source-files-1")],
+            graph_nodes=[
+                {"id": "source-files-1", "type": "source_files"},
+                {"id": "yt-1", "type": "yt_version"},
+            ],
+            graph_edges=[
+                {"source": "source-files-1", "target": "yt-1"},
+            ],
+        )
+
+        ex = WorkflowExecutor(Workflow(job=job), _make_settings())
+        captured: dict[str, object] = {}
+
+        def _fake_youtube_convert(cv_job, settings, **kwargs):
+            del cv_job, settings
+            captured.update(kwargs)
+            return True
+
+        with patch.object(ex, "_youtube_convert_func", side_effect=_fake_youtube_convert):
+            ex.run()
+
+        assert captured["encoder"] == "libx264"
+        assert captured["crf"] == 17
+        assert captured["fps"] == 60
 
     def test_does_not_mutate_original_settings(self):
         """_build_job_settings darf die globalen Settings nicht verändern."""
@@ -942,7 +1093,7 @@ class TestTransferResumeFallbacks:
         statuses = []
         progress = []
         ex.job_status.connect(lambda idx, status: statuses.append((idx, status)))
-        ex.job_progress.connect(lambda idx, pct: progress.append((idx, pct)))
+        ex.source_progress.connect(lambda idx, pct: progress.append((idx, pct)))
 
         paths = ex._handle_direct_files(job)
 
@@ -1014,7 +1165,7 @@ class TestTransferResumeFallbacks:
         statuses = []
         progress = []
         ex.job_status.connect(lambda idx, status: statuses.append((idx, status)))
-        ex.job_progress.connect(lambda idx, pct: progress.append((idx, pct)))
+        ex.source_progress.connect(lambda idx, pct: progress.append((idx, pct)))
 
         paths = ex._scan_folder(job)
 
@@ -1403,6 +1554,24 @@ class TestWorkflowStackScenarios:
         assert paths == [str(reused)]
         assert job.step_statuses["transfer"] == "reused-target"
 
+    def test_restart_mode_passes_no_reuse_flag_to_pi_download(self, tmp_path):
+        settings = _make_settings()
+        settings.cameras.devices = [SimpleNamespace(name="Cam1", ip="1.2.3.4")]
+
+        job = WorkflowJob(
+            name="Pi Restart",
+            source_mode="pi_download",
+            device_name="Cam1",
+            download_destination=str(tmp_path / "downloads"),
+            files=[FileEntry(source_path="take1.mp4")],
+        )
+        ex = WorkflowExecutor(Workflow(), settings, allow_reuse_existing=False)
+        ex._download_func = MagicMock(return_value=[])
+
+        ex._download_from_pi(0, job)
+
+        assert ex._download_func.call_args.kwargs["allow_reuse_existing"] is False
+
     @patch("src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube", return_value=True)
     def test_resume_reuses_existing_converted_output_and_continues_pipeline(self, mock_upload, tmp_path):
         source = tmp_path / "clip.mp4"
@@ -1459,6 +1628,116 @@ class TestWorkflowStackScenarios:
 
         mock_upload.assert_called_once()
         assert job.step_statuses["yt_version"] == "reused-target"
+
+    @patch("src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube", return_value=True)
+    def test_resume_from_convert_skips_pi_download_source_step(self, mock_upload, tmp_path):
+        download_root = tmp_path / "raw"
+        download_root.mkdir(parents=True, exist_ok=True)
+        transferred = download_root / "take1.mjpg"
+        transferred.write_text("raw", encoding="utf-8")
+        converted = tmp_path / "processed" / "take1.mp4"
+        converted.parent.mkdir(parents=True, exist_ok=True)
+
+        settings = _make_settings()
+        settings.cameras.devices = [SimpleNamespace(name="Cam1", ip="1.2.3.4")]
+
+        job = WorkflowJob(
+            name="Resume Pi Convert",
+            source_mode="pi_download",
+            device_name="Cam1",
+            download_destination=str(download_root),
+            convert_enabled=True,
+            upload_youtube=True,
+            files=[FileEntry(source_path="take1.mp4")],
+            step_statuses={"transfer": "done"},
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), settings)
+        ex._download_func = MagicMock(side_effect=AssertionError("pi download must stay skipped"))
+
+        def _convert(cv_job, _settings, **_kwargs):
+            converted.write_text("converted", encoding="utf-8")
+            cv_job.output_path = converted
+            cv_job.status = "Fertig"
+            return True
+
+        ex._convert_func = _convert
+
+        with patch("src.runtime.workflow_executor.get_youtube_service", return_value=MagicMock()):
+            ex.run()
+
+        ex._download_func.assert_not_called()
+        mock_upload.assert_called_once()
+        assert job.step_statuses["transfer"] == "done"
+        assert job.step_statuses["convert"] == "done"
+
+    def test_resume_from_convert_skips_folder_scan_source_step(self, tmp_path):
+        raw_dir = tmp_path / "raw"
+        raw_dir.mkdir(parents=True, exist_ok=True)
+        transferred = raw_dir / "clip1.mp4"
+        transferred.write_text("raw", encoding="utf-8")
+        converted = tmp_path / "processed" / "clip1.mp4"
+        converted.parent.mkdir(parents=True, exist_ok=True)
+
+        job = WorkflowJob(
+            name="Resume Folder Convert",
+            source_mode="folder_scan",
+            source_folder=str(tmp_path / "quelle-fehlt"),
+            copy_destination=str(raw_dir),
+            convert_enabled=True,
+            files=[FileEntry(source_path="clip1.mp4")],
+            step_statuses={"transfer": "done"},
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+        def _convert(cv_job, _settings, **_kwargs):
+            converted.write_text("converted", encoding="utf-8")
+            cv_job.output_path = converted
+            cv_job.status = "Fertig"
+            return True
+
+        ex._convert_func = _convert
+
+        with patch.object(ex._transfer_step, "execute", side_effect=AssertionError("folder scan must stay skipped")):
+            ex.run()
+
+        assert job.step_statuses["transfer"] == "done"
+        assert job.step_statuses["convert"] == "done"
+
+    @patch("src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube", return_value=True)
+    def test_resume_from_upload_treats_previous_steps_as_finished(self, mock_upload, tmp_path):
+        source = tmp_path / "clip.mp4"
+        source.write_text("source", encoding="utf-8")
+        yt_version = tmp_path / "processed" / "clip_youtube.mp4"
+        yt_version.parent.mkdir(parents=True, exist_ok=True)
+        yt_version.write_text("yt", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Resume Upload Only",
+            source_mode="files",
+            convert_enabled=True,
+            create_youtube_version=True,
+            upload_youtube=True,
+            files=[FileEntry(source_path=str(source))],
+            step_statuses={
+                "transfer": "done",
+                "convert": "done",
+                "yt_version": "done",
+            },
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+        ex._convert_func = MagicMock(side_effect=AssertionError("convert must stay skipped"))
+        ex._youtube_convert_func = MagicMock(side_effect=AssertionError("yt version must stay skipped"))
+
+        with patch("src.runtime.workflow_executor.get_youtube_service", return_value=MagicMock()), \
+             patch.object(ex._transfer_step, "execute", side_effect=AssertionError("transfer must stay skipped")):
+            ex.run()
+
+        mock_upload.assert_called_once()
+        ex._convert_func.assert_not_called()
+        ex._youtube_convert_func.assert_not_called()
+        assert job.step_statuses["transfer"] == "done"
+        assert job.step_statuses["convert"] == "done"
+        assert job.step_statuses["yt_version"] == "done"
 
     def test_pipeline_starts_first_conversion_while_same_job_still_transfers(self, tmp_path):
         source_a = tmp_path / "halbzeit1.mjpg"
@@ -1740,6 +2019,93 @@ class TestWorkflowStackScenarios:
 
         assert merge_status_seen_during_transfer.is_set()
 
+    def test_pipeline_cancel_skips_already_queued_followup_job(self, tmp_path):
+        first = tmp_path / "first.mp4"
+        second = tmp_path / "second.mp4"
+        first.write_text("a", encoding="utf-8")
+        second.write_text("b", encoding="utf-8")
+
+        job_a = WorkflowJob(
+            name="Job A",
+            source_mode="files",
+            convert_enabled=True,
+            files=[FileEntry(source_path=str(first))],
+        )
+        job_b = WorkflowJob(
+            name="Job B",
+            source_mode="files",
+            convert_enabled=True,
+            files=[FileEntry(source_path=str(second))],
+        )
+
+        ex = WorkflowExecutor(Workflow(jobs=[job_a, job_b]), _make_settings())
+        converted: list[str] = []
+
+        def _convert(_executor, orig_idx, _job, cv_job, _settings, _done_count, _total_count):
+            converted.append(cv_job.source_path.name)
+            if cv_job.source_path.name == "first.mp4":
+                ex.cancel()
+                cv_job.status = "Fertig"
+                return "ok"
+            raise AssertionError("second queued job should not start after cancel")
+
+        with patch.object(ex._convert_step, "execute", side_effect=_convert), patch.object(
+            ex._output_step_stack,
+            "execute_processing_steps",
+            return_value=0,
+        ), patch.object(
+            ex._output_step_stack,
+            "execute_delivery_steps",
+            return_value=0,
+        ):
+            ex.run()
+
+        assert converted == ["first.mp4"]
+
+    def test_pipeline_cancel_drains_multiple_already_queued_items_without_hanging(self, tmp_path):
+        first = tmp_path / "first.mp4"
+        second = tmp_path / "second.mp4"
+        third = tmp_path / "third.mp4"
+        for path, content in ((first, "a"), (second, "b"), (third, "c")):
+            path.write_text(content, encoding="utf-8")
+
+        ex = WorkflowExecutor(
+            Workflow(
+                jobs=[
+                    WorkflowJob(name="Job A", source_mode="files", convert_enabled=True, files=[FileEntry(source_path=str(first))]),
+                    WorkflowJob(name="Job B", source_mode="files", convert_enabled=True, files=[FileEntry(source_path=str(second))]),
+                    WorkflowJob(name="Job C", source_mode="files", convert_enabled=True, files=[FileEntry(source_path=str(third))]),
+                ]
+            ),
+            _make_settings(),
+        )
+        converted: list[str] = []
+
+        def _convert(_executor, _orig_idx, _job, cv_job, _settings, _done_count, _total_count):
+            converted.append(cv_job.source_path.name)
+            if cv_job.source_path.name == "first.mp4":
+                ex.cancel()
+                cv_job.status = "Fertig"
+                return "ok"
+            raise AssertionError("queued follow-up jobs must not execute after cancel")
+
+        runner = threading.Thread(target=ex.run, daemon=True)
+
+        with patch.object(ex._convert_step, "execute", side_effect=_convert), patch.object(
+            ex._output_step_stack,
+            "execute_processing_steps",
+            return_value=0,
+        ), patch.object(
+            ex._output_step_stack,
+            "execute_delivery_steps",
+            return_value=0,
+        ):
+            runner.start()
+            runner.join(timeout=2.0)
+
+        assert runner.is_alive() is False
+        assert converted == ["first.mp4"]
+
     def test_pipeline_can_merge_before_convert_when_graph_requests_it(self, tmp_path):
         source_a = tmp_path / "kamera1.mp4"
         source_b = tmp_path / "kamera2.mp4"
@@ -1873,6 +2239,8 @@ class TestWorkflowStackScenarios:
         upload_started = threading.Event()
         release_upload = threading.Event()
         second_convert_during_upload = threading.Event()
+        statuses: list[str] = []
+        ex.job_status.connect(lambda idx, status: statuses.append(status) if idx == 0 else None)
 
         def _transfer(_executor, _orig_idx, _job, on_file_ready=None):
             assert on_file_ready is not None
@@ -1891,7 +2259,7 @@ class TestWorkflowStackScenarios:
             cv_job.status = "Fertig"
             return "ok"
 
-        def _deliver(_executor, prepared, _yt_service, _kb_sort_index):
+        def _deliver(_executor, prepared, _yt_service, _kb_sort_index, **_kwargs):
             if prepared.cv_job.source_path == source_a:
                 upload_started.set()
                 release_upload.wait(timeout=2.0)
@@ -1910,6 +2278,8 @@ class TestWorkflowStackScenarios:
 
         assert upload_started.is_set()
         assert second_convert_during_upload.is_set()
+        assert "Fertig 1/2" in statuses
+        assert statuses[-1] == "Fertig"
 
 
 # ─── Merge-Concat: Standard-Dateien verwenden ────────────────────────────────

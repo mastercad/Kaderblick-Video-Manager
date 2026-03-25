@@ -4,10 +4,12 @@ import copy
 
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFileDialog,
     QLineEdit,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QVBoxLayout,
@@ -25,7 +27,7 @@ from .panels import WorkflowDialogLayoutBuilder, WorkflowNotesPanel, WorkflowSta
 from ..integrations.kaderblick import fetch_cameras, fetch_video_types
 from ..media.merge_analysis import job_merge_warning
 from ..settings import AppSettings
-from ..workflow import WorkflowJob
+from ..workflow import WorkflowJob, describe_reset_target, reset_job_for_rebuild
 from ..integrations.youtube_title_editor import MatchData, YouTubeTitleEditorDialog
 
 
@@ -326,12 +328,14 @@ class JobWorkflowDialog(QDialog):
         if not selection:
             self._selection_label.setText("Keine Auswahl")
             self._remove_node_btn.setEnabled(False)
+            self._reset_from_node_btn.setEnabled(False)
             return
         if selection.get("kind") == "edge":
             self._selection_label.setText("Verbindung ausgewählt")
         else:
             self._selection_label.setText(f"Node: {selection.get('type', 'unbekannt')}")
         self._remove_node_btn.setEnabled(True)
+        self._reset_from_node_btn.setEnabled(selection.get("kind") == "node")
 
     def _on_graph_changed(self) -> None:
         self._sync_draft_from_graph()
@@ -343,6 +347,54 @@ class JobWorkflowDialog(QDialog):
 
     def _auto_layout_graph(self) -> None:
         self._graph_controller.auto_layout_graph()
+
+    def _reset_entire_workflow(self) -> None:
+        self._run_reset_action(None)
+
+    def _reset_from_selected_graph_node(self) -> None:
+        current = self._graph_view.selected_node_id()
+        if current is None:
+            return
+        node_type = self._graph_view.node_type(current)
+        if not node_type:
+            return
+        self._run_reset_action(node_type)
+
+    def _run_reset_action(self, node_type: str | None) -> None:
+        label, note = describe_reset_target(self._job, node_type)
+        prompt = f"Soll {label} zurückgesetzt werden?"
+        if note:
+            prompt += f"\n\n{note}"
+        choice = QMessageBox.question(
+            self,
+            "Workflow zurücksetzen",
+            prompt,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return
+
+        result = reset_job_for_rebuild(self._job, self._settings or AppSettings(), node_type=node_type)
+        self._changed = True
+        self._sync_runtime_state_from_job()
+        self._refresh_dynamic_sections()
+        self._rebuild_graph_from_job()
+
+        parent = self.parent()
+        refresh_table = getattr(parent, "_refresh_table", None)
+        if callable(refresh_table):
+            refresh_table()
+        persist_workflow_state = getattr(parent, "_persist_workflow_state", None)
+        if callable(persist_workflow_state):
+            persist_workflow_state()
+
+        parts = [f"Zurückgesetzt ab {result.effective_node_type}"]
+        if result.deleted_paths:
+            parts.append(f"{len(result.deleted_paths)} Datei(en) entfernt")
+        if result.cleared_upload_ids:
+            parts.append(f"{len(result.cleared_upload_ids)} Upload-Verknüpfung(en) geleert")
+        QMessageBox.information(self, "Workflow zurückgesetzt", " | ".join(parts))
 
     def _rebuild_graph_from_job(self, *, use_stored_graph: bool = True) -> None:
         self._graph_controller.rebuild_graph_from_job(use_stored_graph=use_stored_graph)
@@ -365,6 +417,12 @@ class JobWorkflowDialog(QDialog):
 
     def _on_encoder_changed(self, index: int) -> None:
         self._editor_controller.on_encoder_changed(index)
+
+    def _on_merge_encoder_changed(self, index: int) -> None:
+        self._editor_controller.on_merge_encoder_changed(index)
+
+    def _on_yt_version_encoder_changed(self, index: int) -> None:
+        self._editor_controller.on_yt_version_encoder_changed(index)
 
     def _on_amplify_toggled(self, checked: bool) -> None:
         self._editor_controller.on_amplify_toggled(checked)

@@ -9,6 +9,7 @@ from PySide6.QtGui import QFont, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
+    QFrame,
     QHeaderView,
     QLabel,
     QMainWindow,
@@ -18,10 +19,13 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTextEdit,
     QToolBar,
+    QVBoxLayout,
+    QWidget,
 )
 
 from ..ui.delegates import ProgressDelegate
 from .helpers import _format_resume_tooltip, _summarize_pipeline, _summarize_source, format_elapsed_seconds
+from .theme import BrandWordmarkWidget
 
 
 _ROLE_STEP_PROGRESS = int(Qt.ItemDataRole.UserRole)
@@ -59,8 +63,13 @@ def _build_menu(self: QMainWindow):
 
 def _build_toolbar(self: QMainWindow):
     tb = QToolBar("Aktionen")
+    tb.setObjectName("mainToolbar")
     tb.setMovable(False)
     self.addToolBar(tb)
+
+    self._brand_wordmark = BrandWordmarkWidget(parent=self)
+    tb.addWidget(self._brand_wordmark)
+    tb.addSeparator()
 
     tb.addAction("＋ Neuer Workflow", self._new_workflow)
     tb.addSeparator()
@@ -85,7 +94,13 @@ def _build_toolbar(self: QMainWindow):
 
 
 def _build_central(self: QMainWindow):
+    container = QWidget()
+    outer_layout = QVBoxLayout(container)
+    outer_layout.setContentsMargins(20, 18, 20, 16)
+    outer_layout.setSpacing(16)
+
     splitter = QSplitter(Qt.Vertical)
+    splitter.setChildrenCollapsible(False)
 
     self.table = QTableWidget(0, 7)
     self.table.setHorizontalHeaderLabels(["#", "Name", "Quelle", "Pipeline", "Status", "Job", "Dauer"])
@@ -113,16 +128,29 @@ def _build_central(self: QMainWindow):
     self._job_progress_delegate = ProgressDelegate(self.table, progress_role=_ROLE_JOB_PROGRESS)
     self.table.setItemDelegateForColumn(4, self._step_progress_delegate)
     self.table.setItemDelegateForColumn(5, self._job_progress_delegate)
-    splitter.addWidget(self.table)
+
+    table_frame = QFrame()
+    table_frame.setObjectName("cardSurface")
+    table_layout = QVBoxLayout(table_frame)
+    table_layout.setContentsMargins(12, 12, 12, 12)
+    table_layout.addWidget(self.table)
+    splitter.addWidget(table_frame)
 
     self.log_text = QTextEdit()
     self.log_text.setReadOnly(True)
     self.log_text.setFont(QFont("Monospace", 9))
-    splitter.addWidget(self.log_text)
+
+    log_frame = QFrame()
+    log_frame.setObjectName("cardSurface")
+    log_layout = QVBoxLayout(log_frame)
+    log_layout.setContentsMargins(12, 12, 12, 12)
+    log_layout.addWidget(self.log_text)
+    splitter.addWidget(log_frame)
 
     splitter.setStretchFactor(0, 3)
     splitter.setStretchFactor(1, 1)
-    self.setCentralWidget(splitter)
+    outer_layout.addWidget(splitter)
+    self.setCentralWidget(container)
 
 
 def _build_statusbar(self: QMainWindow):
@@ -227,7 +255,7 @@ def _set_row_duration(self, row: int, seconds: float):
 
 
 def _format_elapsed_cell(seconds: float) -> str:
-    if seconds and seconds > 0:
+    if seconds and seconds >= 1.0:
         return format_elapsed_seconds(seconds)
     return "–"
 

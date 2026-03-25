@@ -17,7 +17,6 @@ class PiDownloadTransferStep:
         job: WorkflowJob,
         on_file_ready: Callable[[str], None] | None = None,
     ) -> list[str]:
-        executor.job_progress.emit(orig_idx, 0)
         executor.source_progress.emit(orig_idx, 0)
         device = next(
             (configured for configured in executor._settings.cameras.devices if configured.name == job.device_name),
@@ -47,7 +46,6 @@ class PiDownloadTransferStep:
                 state.update(last_b=transferred, last_t=now)
             if total > 0:
                 pct = int(transferred / total * 100)
-                executor.job_progress.emit(orig_idx, pct)
                 executor.source_progress.emit(orig_idx, pct)
             executor.file_progress.emit(
                 device_name,
@@ -69,6 +67,7 @@ class PiDownloadTransferStep:
                 log_cb=executor.log_message.emit,
                 progress_cb=_on_progress,
                 cancel_flag=executor._cancel,
+                allow_reuse_existing=ExecutorSupport.allow_reuse_existing(executor),
                 destination_override=str(destination_root) if destination_root is not None else "",
                 create_device_subdir=False,
                 delete_after_download=job.delete_after_download,

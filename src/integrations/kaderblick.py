@@ -84,6 +84,10 @@ class KaderblickRegistry:
         }
         self._save()
 
+    def clear(self, youtube_video_id: str) -> None:
+        self._data.pop(youtube_video_id, None)
+        self._save()
+
 
 # Modul-globale Registry-Instanz (wird beim ersten Aufruf angelegt)
 _registry: Optional[KaderblickRegistry] = None
@@ -100,6 +104,12 @@ def get_recorded_kaderblick_id(youtube_video_id: str) -> Optional[int]:
     if not youtube_video_id:
         return None
     return _get_registry().already_posted(youtube_video_id)
+
+
+def clear_recorded_kaderblick_id(youtube_video_id: str) -> None:
+    if not youtube_video_id:
+        return
+    _get_registry().clear(youtube_video_id)
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -1,11 +1,12 @@
 import sys
 from datetime import date
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
 from PySide6.QtCore import QDate, QPoint, QPointF, Qt
 from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QLabel
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
 
 from src.job_workflow.graph.edge_item import _GraphEdgeItem
 from src.job_workflow.graph.builder import build_default_graph
@@ -292,6 +293,37 @@ class TestJobWorkflowDialog:
         detected = dlg._graph_view._node_output_at_scene_pos(output_pos + QPointF(8, 0))
 
         assert detected == source_id
+
+    def test_reset_action_clears_selected_node_and_downstream_runtime_state(self, monkeypatch):
+        source_path = Path("/tmp/reset-dialog.mp4")
+        job = WorkflowJob(
+            name="Workflow Job",
+            source_mode="files",
+            files=[FileEntry(source_path=str(source_path))],
+            upload_youtube=True,
+            upload_kaderblick=True,
+            step_statuses={
+                "transfer": "done",
+                "convert": "done",
+                "youtube_upload": "done",
+                "kaderblick": "done",
+            },
+            resume_status="Kaderblick senden …",
+        )
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+
+        monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.Yes)
+        monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
+
+        dlg._run_reset_action("youtube_upload")
+
+        assert dlg.changed is True
+        assert dlg._job.step_statuses["transfer"] == "done"
+        assert dlg._job.step_statuses["convert"] == "done"
+        assert "youtube_upload" not in dlg._job.step_statuses
+        assert "kaderblick" not in dlg._job.step_statuses
+        assert "youtube_upload" not in dlg._draft.step_statuses
+        assert "kaderblick" not in dlg._draft.step_statuses
 
     def test_validation_output_branch_hotspot_returns_branch_key(self):
         job = _make_job(convert_enabled=False)
@@ -834,12 +866,18 @@ class TestJobWorkflowDialog:
         dlg._fps_spin.setValue(30)
         dlg._resolution_combo.setCurrentIndex(max(dlg._resolution_combo.findData("1080p"), 0))
         dlg._format_combo.setCurrentIndex(max(dlg._format_combo.findData("avi"), 0))
+        dlg._merge_encoding_panel._encoder_combo.setCurrentIndex(max(dlg._merge_encoding_panel._encoder_combo.findData("libx264"), 0))
+        dlg._merge_encoding_panel._crf_spin.setValue(19)
         dlg._merge_encoding_panel._preset_combo.setCurrentText("slower")
         dlg._merge_encoding_panel._no_bframes_cb.setChecked(False)
+        dlg._merge_encoding_panel._fps_spin.setValue(50)
         dlg._merge_encoding_panel._resolution_combo.setCurrentIndex(max(dlg._merge_encoding_panel._resolution_combo.findData("720p"), 0))
         dlg._merge_encoding_panel._format_combo.setCurrentIndex(max(dlg._merge_encoding_panel._format_combo.findData("avi"), 0))
+        dlg._yt_version_panel._encoding_panel._encoder_combo.setCurrentIndex(max(dlg._yt_version_panel._encoding_panel._encoder_combo.findData("libx264"), 0))
+        dlg._yt_version_panel._encoding_panel._crf_spin.setValue(17)
         dlg._yt_version_panel._encoding_panel._preset_combo.setCurrentText("veryslow")
         dlg._yt_version_panel._encoding_panel._no_bframes_cb.setChecked(True)
+        dlg._yt_version_panel._encoding_panel._fps_spin.setValue(60)
         dlg._yt_version_panel._encoding_panel._resolution_combo.setCurrentIndex(max(dlg._yt_version_panel._encoding_panel._resolution_combo.findData("2160p"), 0))
         dlg._yt_version_panel._encoding_panel._format_combo.setCurrentIndex(max(dlg._yt_version_panel._encoding_panel._format_combo.findData("mp4"), 0))
         dlg._overwrite_cb.setChecked(True)
@@ -879,12 +917,18 @@ class TestJobWorkflowDialog:
         assert job.fps == 30
         assert job.output_resolution == "1080p"
         assert job.output_format == "avi"
+        assert job.merge_encoder == "libx264"
+        assert job.merge_crf == 19
         assert job.merge_preset == "slower"
         assert job.merge_no_bframes is False
+        assert job.merge_fps == 50
         assert job.merge_output_resolution == "720p"
         assert job.merge_output_format == "avi"
+        assert job.yt_version_encoder == "libx264"
+        assert job.yt_version_crf == 17
         assert job.yt_version_preset == "veryslow"
         assert job.yt_version_no_bframes is True
+        assert job.yt_version_fps == 60
         assert job.yt_version_output_resolution == "2160p"
         assert job.yt_version_output_format == "mp4"
         assert job.overwrite is True
@@ -892,6 +936,123 @@ class TestJobWorkflowDialog:
         assert job.amplify_audio is True
         assert job.amplify_db == 8.0
         assert job.audio_sync is True
+
+    def test_step_encoding_panels_show_source_material_summary(self, tmp_path):
+        source = tmp_path / "source.mp4"
+        source.write_text("video", encoding="utf-8")
+        job = WorkflowJob(name="Quelle", source_mode="files", files=[FileEntry(source_path=str(source))])
+
+        with patch("src.job_workflow.panels.inspector.get_video_stream_info", return_value={"codec_name": "h264", "fps": 50.0, "bit_rate": 1000}), \
+             patch("src.job_workflow.panels.inspector.get_resolution", return_value=(1920, 1080)), \
+             patch("src.job_workflow.panels.inspector.has_audio_stream", return_value=True):
+            dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+
+        assert "1920x1080" in dlg._merge_encoding_panel._source_info_label.text()
+        assert "50.000 fps" in dlg._merge_encoding_panel._source_info_label.text()
+        assert "50.000 fps" in dlg._yt_version_panel._encoding_panel._effective_info_label.text()
+
+    def test_merge_panel_uses_convert_output_as_input_summary(self, tmp_path):
+        source = tmp_path / "source.mjpg"
+        source.write_text("raw", encoding="utf-8")
+        job = WorkflowJob(
+            name="Kaderblick",
+            source_mode="pi_download",
+            convert_enabled=True,
+            output_format="mp4",
+            output_resolution="1080p",
+            fps=25,
+            files=[FileEntry(source_path=str(source))],
+            graph_nodes=[
+                {"id": "source-1", "type": "source_pi_download"},
+                {"id": "convert-1", "type": "convert"},
+                {"id": "merge-1", "type": "merge"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "convert-1"},
+                {"source": "convert-1", "target": "merge-1"},
+            ],
+        )
+
+        with patch("src.job_workflow.panels.inspector.get_video_stream_info") as stream_info, \
+             patch("src.job_workflow.panels.inspector.get_resolution") as resolution, \
+             patch("src.job_workflow.panels.inspector.has_audio_stream") as audio:
+            dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+
+        assert "Input aus Konvertieren" in dlg._merge_encoding_panel._source_info_label.text()
+        assert "MP4" in dlg._merge_encoding_panel._source_info_label.text()
+        assert "Full HD" in dlg._merge_encoding_panel._source_info_label.text()
+        assert "25 fps" in dlg._merge_encoding_panel._source_info_label.text()
+        assert not dlg._merge_encoding_panel._refresh_source_btn.isVisible()
+        assert dlg._merge_encoding_panel._encoder_combo.itemText(0) == "Von Konvertieren übernehmen"
+        assert dlg._merge_encoding_panel._crf_spin.specialValueText() == "Von Konvertieren übernehmen"
+        assert dlg._merge_encoding_panel._fps_spin.specialValueText() == "Von Konvertieren übernehmen"
+        assert dlg._merge_encoding_panel._format_combo.itemText(0) == "Von Konvertieren übernehmen"
+        assert dlg._merge_encoding_panel._resolution_combo.itemText(0) == "Von Konvertieren übernehmen"
+
+    def test_yt_version_panel_uses_merge_output_as_input_summary(self, tmp_path):
+        source = tmp_path / "source.mjpg"
+        source.write_text("raw", encoding="utf-8")
+        job = WorkflowJob(
+            name="YT nach Merge",
+            source_mode="pi_download",
+            convert_enabled=True,
+            output_format="mp4",
+            output_resolution="1080p",
+            fps=25,
+            merge_output_format="avi",
+            merge_output_resolution="720p",
+            merge_fps=50,
+            files=[FileEntry(source_path=str(source))],
+            graph_nodes=[
+                {"id": "source-1", "type": "source_pi_download"},
+                {"id": "convert-1", "type": "convert"},
+                {"id": "merge-1", "type": "merge"},
+                {"id": "yt-1", "type": "yt_version"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "convert-1"},
+                {"source": "convert-1", "target": "merge-1"},
+                {"source": "merge-1", "target": "yt-1"},
+            ],
+        )
+
+        with patch("src.job_workflow.panels.inspector.get_video_stream_info") as stream_info, \
+             patch("src.job_workflow.panels.inspector.get_resolution") as resolution, \
+             patch("src.job_workflow.panels.inspector.has_audio_stream") as audio:
+            dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+
+        assert "Input aus Merge" in dlg._yt_version_panel._encoding_panel._source_info_label.text()
+        assert "AVI" in dlg._yt_version_panel._encoding_panel._source_info_label.text()
+        assert "HD" in dlg._yt_version_panel._encoding_panel._source_info_label.text()
+        assert "50 fps" in dlg._yt_version_panel._encoding_panel._source_info_label.text()
+        stream_info.assert_not_called()
+        resolution.assert_not_called()
+        audio.assert_not_called()
+        assert dlg._yt_version_panel._encoding_panel._encoder_combo.itemText(0) == "Von Merge übernehmen"
+        assert dlg._yt_version_panel._encoding_panel._crf_spin.specialValueText() == "Von Merge übernehmen"
+        assert dlg._yt_version_panel._encoding_panel._fps_spin.specialValueText() == "Von Merge übernehmen"
+        assert dlg._yt_version_panel._encoding_panel._format_combo.itemText(0) == "Von Merge übernehmen"
+        assert dlg._yt_version_panel._encoding_panel._resolution_combo.itemText(0) == "Von Merge übernehmen"
+
+    def test_step_encoding_panels_cache_source_material_until_manual_refresh(self, tmp_path):
+        source = tmp_path / "source.mp4"
+        source.write_text("video", encoding="utf-8")
+        job = WorkflowJob(name="Cache", source_mode="files", files=[FileEntry(source_path=str(source))])
+
+        with patch("src.job_workflow.panels.inspector.get_video_stream_info", return_value={"codec_name": "h264", "fps": 25.0, "bit_rate": 1000}) as stream_info, \
+             patch("src.job_workflow.panels.inspector.get_resolution", return_value=(1280, 720)), \
+             patch("src.job_workflow.panels.inspector.has_audio_stream", return_value=True):
+            dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+            initial_calls = stream_info.call_count
+
+            dlg._refresh_dynamic_sections()
+            dlg._refresh_dynamic_sections()
+
+            assert stream_info.call_count == initial_calls
+
+            dlg._merge_encoding_panel._refresh_source_btn.click()
+
+            assert stream_info.call_count > initial_calls
 
     def test_folder_source_editor_provides_directory_picker_for_source_and_target(self):
         job = WorkflowJob(name="Ordner", source_mode="folder_scan")
@@ -1371,8 +1532,90 @@ class TestJobWorkflowDialog:
 
         assert dlg._tc_home_edit.isEnabled() is False
         assert dlg._tc_logo_edit.isEnabled() is False
+        assert dlg._tc_logo_browse_btn.isEnabled() is False
         assert dlg._tc_bg_edit.isEnabled() is False
         assert dlg._tc_fg_edit.isEnabled() is False
+        assert dlg._tc_bg_pick_btn.isEnabled() is False
+        assert dlg._tc_fg_pick_btn.isEnabled() is False
+        assert dlg._tc_preview_frame.isEnabled() is False
+
+    def test_titlecard_color_picker_updates_hex_field(self):
+        job = _make_job(title_card_enabled=True, convert_enabled=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+
+        dlg._graph_view.clear_graph()
+        source_id = dlg._graph_view.add_node("source_files")
+        title_id = dlg._graph_view.add_node("titlecard")
+        dlg._graph_view.connect_nodes(source_id, title_id)
+
+        with patch("src.job_workflow.panels.inspector.QColorDialog.exec", return_value=True), patch(
+            "src.job_workflow.panels.inspector.QColorDialog.currentColor", return_value=QColor("#123456")
+        ):
+            dlg._tc_bg_pick_btn.click()
+
+        assert dlg._tc_bg_edit.text() == "#123456"
+
+    def test_titlecard_preview_updates_from_text_and_colors(self):
+        job = WorkflowJob(
+            name="Preview Job",
+            source_mode="files",
+            title_card_enabled=True,
+            convert_enabled=True,
+            files=[FileEntry(source_path="/tmp/halbzeit_1.mp4", title_card_subtitle="1. Halbzeit")],
+        )
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+
+        dlg._graph_view.clear_graph()
+        source_id = dlg._graph_view.add_node("source_files")
+        title_id = dlg._graph_view.add_node("titlecard")
+        dlg._graph_view.connect_nodes(source_id, title_id)
+
+        dlg._tc_home_edit.setText("FC Heim")
+        dlg._tc_away_edit.setText("FC Gast")
+        dlg._tc_date_edit.setText("2026-03-24")
+        dlg._tc_bg_edit.setText("#112233")
+        dlg._tc_fg_edit.setText("#F5F5F5")
+        dlg._tc_duration_spin.setValue(4.0)
+
+        assert dlg._titlecard_panel._tc_preview_frame._title_text == "FC Heim vs FC Gast"
+        assert dlg._titlecard_panel._tc_preview_frame._subtitle_text == "1. Halbzeit"
+        assert dlg._titlecard_panel._tc_preview_frame._bg_color == "#112233"
+        assert dlg._titlecard_panel._tc_preview_frame._fg_color == "#F5F5F5"
+
+    def test_titlecard_logo_picker_updates_path_field(self):
+        job = _make_job(title_card_enabled=True, convert_enabled=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+
+        dlg._graph_view.clear_graph()
+        source_id = dlg._graph_view.add_node("source_files")
+        title_id = dlg._graph_view.add_node("titlecard")
+        dlg._graph_view.connect_nodes(source_id, title_id)
+
+        with patch(
+            "src.job_workflow.panels.inspector.QFileDialog.getOpenFileName",
+            return_value=("/tmp/logo.png", "Bilder (*.png *.jpg *.jpeg *.svg *.webp)"),
+        ):
+            dlg._tc_logo_browse_btn.click()
+
+        assert dlg._tc_logo_edit.text() == "/tmp/logo.png"
+
+    def test_graph_change_enables_titlecard_fields_when_titlecard_node_becomes_reachable(self):
+        job = _make_job(title_card_enabled=False, convert_enabled=False)
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+
+        assert dlg._tc_bg_pick_btn.isEnabled() is False
+
+        dlg._graph_view.clear_graph()
+        source_id = dlg._graph_view.add_node("source_files")
+        title_id = dlg._graph_view.add_node("titlecard")
+        dlg._graph_view.connect_nodes(source_id, title_id)
+
+        assert dlg._tc_home_edit.isEnabled() is True
+        assert dlg._tc_logo_edit.isEnabled() is True
+        assert dlg._tc_logo_browse_btn.isEnabled() is True
+        assert dlg._tc_bg_pick_btn.isEnabled() is True
+        assert dlg._tc_fg_pick_btn.isEnabled() is True
+        assert dlg._tc_preview_frame.isEnabled() is True
 
     def test_playlist_helper_updates_playlist_and_match_fields(self):
         class _DummyMatchData:

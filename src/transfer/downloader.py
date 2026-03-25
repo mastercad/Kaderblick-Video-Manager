@@ -186,6 +186,7 @@ def _sftp_download_file(
     remote_path: str,
     local_path: str,
     total_size: Optional[int] = None,
+    allow_reuse_existing: bool = True,
     progress_cb: Optional[Callable[[int, int], None]] = None,
     cancel_flag: Optional[threading.Event] = None,
     log_cb: Callable[[str], None] = print,
@@ -208,6 +209,9 @@ def _sftp_download_file(
 
     local = Path(local_path)
     resume_offset = 0
+
+    if local.exists() and not allow_reuse_existing:
+        local.unlink(missing_ok=True)
 
     if local.exists():
         local_size = local.stat().st_size
@@ -305,6 +309,7 @@ def _rsync_download_file(
     remote_path: str,
     local_path: str,
     total_size: int,
+    allow_reuse_existing: bool = True,
     progress_cb: Optional[Callable[[int, int], None]] = None,
     cancel_flag: Optional[threading.Event] = None,
     log_cb: Callable[[str], None] = print,
@@ -321,6 +326,9 @@ def _rsync_download_file(
     Returns True wenn die Datei vollständig heruntergeladen wurde.
     """
     local = Path(local_path)
+
+    if local.exists() and not allow_reuse_existing:
+        local.unlink(missing_ok=True)
 
     # Bereits vollständig?
     if local.exists() and local.stat().st_size == total_size:
@@ -486,6 +494,7 @@ def download_device(
     log_cb: Callable[[str], None] = print,
     progress_cb: Optional[Callable[[str, str, int, int], None]] = None,
     cancel_flag: Optional[threading.Event] = None,
+    allow_reuse_existing: bool = True,
     destination_override: str = "",
     create_device_subdir: bool = True,
     delete_after_download: bool = False,
@@ -535,6 +544,7 @@ def download_device(
             return _rsync_download_file(
                 device, remote, local,
                 total_size=size or 0,
+                allow_reuse_existing=allow_reuse_existing,
                 progress_cb=prog_cb,
                 cancel_flag=cancel_flag,
                 log_cb=log_cb,
@@ -542,6 +552,7 @@ def download_device(
         return _sftp_download_file(
             sftp, remote, local,
             total_size=size,
+            allow_reuse_existing=allow_reuse_existing,
             progress_cb=prog_cb,
             cancel_flag=cancel_flag,
             log_cb=log_cb,
@@ -587,7 +598,7 @@ def download_device(
             )
 
             # Bereits vollständig vorhanden? -> Grössenvergleich
-            already_ok = (
+            already_ok = allow_reuse_existing and (
                 local_mjpg.exists() and local_wav.exists()
                 and r_mjpg_size is not None and r_wav_size is not None
                 and local_mjpg.stat().st_size == r_mjpg_size

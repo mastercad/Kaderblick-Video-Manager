@@ -137,9 +137,8 @@ def _start_workflow(self, *, active_indices: set[int] | None = None):
         job = self._workflow.jobs[index]
         base_seconds = float(job.run_elapsed_seconds or 0.0) if resume_existing else 0.0
         self._job_run_elapsed_base_seconds[job.id] = base_seconds
-        self._job_run_started_monotonic[job.id] = now_monotonic
-        if not resume_existing or not job.run_started_at:
-            job.run_started_at = now_iso
+        if not resume_existing:
+            job.run_started_at = ""
         job.run_finished_at = ""
         if not resume_existing:
             job.run_elapsed_seconds = 0.0
@@ -201,7 +200,16 @@ def _on_source_status(self, orig_idx: int, status: str):
 @Slot(int, int)
 def _on_source_progress(self, orig_idx: int, pct: int):
     if 0 <= orig_idx < len(self._workflow.jobs):
-        self._workflow.jobs[orig_idx].transfer_progress_pct = pct
+        job = self._workflow.jobs[orig_idx]
+        job.transfer_progress_pct = pct
+        current_step = job.current_step_key or "transfer"
+        if current_step in {"", "transfer"}:
+            job.progress_pct = pct
+            overall_pct = _compute_job_overall_progress(job, job.resume_status or job.status, pct)
+            job.overall_progress_pct = overall_pct
+            if 0 <= orig_idx < self.table.rowCount():
+                self._set_row_progress(orig_idx, pct)
+                self._set_row_job_progress(orig_idx, overall_pct)
 
 
 @Slot(str, str, float, float, float)
@@ -262,7 +270,7 @@ def _on_workflow_done(self, ok: int, skip: int, fail: int):
     self._append_log(f"\n{msg}")
     self.status_label.setText(msg)
     if hasattr(self, "duration_label"):
-        self.duration_label.setText(f"Gesamtdauer: {format_elapsed_seconds(elapsed)}")
+        self.duration_label.setText(f"Gesamtdauer: {('–' if elapsed < 1.0 else format_elapsed_seconds(elapsed))}")
     self._set_busy(False)
     self._save_last_workflow()
 
@@ -300,7 +308,7 @@ def _snapshot_runtime_durations(self, *, persist: bool = False):
     self._workflow.last_run_elapsed_seconds = _effective_workflow_elapsed_seconds(self)
     if hasattr(self, "duration_label"):
         self.duration_label.setText(
-            f"Gesamtdauer: {('–' if self._workflow.last_run_elapsed_seconds <= 0 else format_elapsed_seconds(self._workflow.last_run_elapsed_seconds))}"
+            f"Gesamtdauer: {('–' if self._workflow.last_run_elapsed_seconds < 1.0 else format_elapsed_seconds(self._workflow.last_run_elapsed_seconds))}"
         )
 
     if persist:
@@ -329,6 +337,8 @@ def _touch_job_duration(self, orig_idx: int):
     if not (0 <= orig_idx < len(self._workflow.jobs)):
         return
     job = self._workflow.jobs[orig_idx]
+    if getattr(job, "run_finished_at", ""):
+        return
     if job.id not in self._job_run_started_monotonic:
         self._job_run_elapsed_base_seconds[job.id] = float(job.run_elapsed_seconds or 0.0)
         self._job_run_started_monotonic[job.id] = time.monotonic()

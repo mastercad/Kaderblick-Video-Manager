@@ -21,7 +21,6 @@ class FolderScanTransferStep:
         src_dir = Path(job.source_folder)
         dst_dir = ExecutorSupport.resolve_copy_destination(executor._settings, job)
         pattern = job.file_pattern or "*.mp4"
-        executor.job_progress.emit(orig_idx, 0)
         executor.source_progress.emit(orig_idx, 0)
 
         if not src_dir.exists():
@@ -31,7 +30,6 @@ class FolderScanTransferStep:
                     f"  ↩ Quellordner fehlt – nutze {len(fallback)} vorhandene Datei(en) aus dem Zielverzeichnis"
                 )
                 executor._set_step_status(job, "transfer", "reused-target")
-                executor.job_progress.emit(orig_idx, 100)
                 executor.source_progress.emit(orig_idx, 100)
                 return fallback
             raise FileNotFoundError(f"Quellordner nicht gefunden: {src_dir}")
@@ -44,10 +42,8 @@ class FolderScanTransferStep:
                     f"  ↩ Keine Quelldateien gefunden – nutze {len(fallback)} vorhandene Datei(en) aus dem Zielverzeichnis"
                 )
                 executor._set_step_status(job, "transfer", "reused-target")
-                executor.job_progress.emit(orig_idx, 100)
                 return fallback
             executor.log_message.emit(f"  ⚠ Keine Dateien mit Muster '{pattern}' in {src_dir}")
-            executor.job_progress.emit(orig_idx, 100)
             executor.source_progress.emit(orig_idx, 100)
             return []
 
@@ -57,7 +53,6 @@ class FolderScanTransferStep:
                 executor._set_job_status(orig_idx, f"Transfer {file_idx}/{total_files}: {path.name} …")
                 emit_item_progress(executor, orig_idx, file_idx, total_files)
             executor.log_message.emit(f"\n📁 {job.name}: {len(files)} Datei(en) gefunden")
-            executor.job_progress.emit(orig_idx, 100)
             executor.source_progress.emit(orig_idx, 100)
             ready = [str(path) for path in files]
             if on_file_ready is not None:

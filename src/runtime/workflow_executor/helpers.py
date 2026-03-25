@@ -7,12 +7,20 @@ from ...workflow_steps import PreparedOutput
 
 
 class _QueuedSignalEmitter:
-    def __init__(self, event_queue: Queue[tuple[str, tuple[Any, ...]]], event_name: str):
+    def __init__(
+        self,
+        event_queue: Queue[tuple[str, tuple[Any, ...]]],
+        event_name: str,
+        flush_callback=None,
+    ):
         self._event_queue = event_queue
         self._event_name = event_name
+        self._flush_callback = flush_callback
 
     def emit(self, *args: Any) -> None:
         self._event_queue.put((self._event_name, args))
+        if self._flush_callback is not None:
+            self._flush_callback(force=True)
 
 
 class _PipelineWorkerView:
@@ -23,13 +31,14 @@ class _PipelineWorkerView:
         self._convert_func = owner._convert_func
         self._concat_func = owner._concat_func
         self._youtube_convert_func = owner._youtube_convert_func
-        self.log_message = _QueuedSignalEmitter(event_queue, "log_message")
-        self.job_progress = _QueuedSignalEmitter(event_queue, "job_progress")
-        self.phase_changed = _QueuedSignalEmitter(event_queue, "phase_changed")
-        self.file_progress = _QueuedSignalEmitter(event_queue, "file_progress")
-        self.convert_progress = _QueuedSignalEmitter(event_queue, "convert_progress")
-        self.source_status = _QueuedSignalEmitter(event_queue, "source_status")
-        self.source_progress = _QueuedSignalEmitter(event_queue, "source_progress")
+        flush_callback = owner._pump_pipeline_events
+        self.log_message = _QueuedSignalEmitter(event_queue, "log_message", flush_callback)
+        self.job_progress = _QueuedSignalEmitter(event_queue, "job_progress", flush_callback)
+        self.phase_changed = _QueuedSignalEmitter(event_queue, "phase_changed", flush_callback)
+        self.file_progress = _QueuedSignalEmitter(event_queue, "file_progress", flush_callback)
+        self.convert_progress = _QueuedSignalEmitter(event_queue, "convert_progress", flush_callback)
+        self.source_status = _QueuedSignalEmitter(event_queue, "source_status", flush_callback)
+        self.source_progress = _QueuedSignalEmitter(event_queue, "source_progress", flush_callback)
 
     def _set_job_status(self, orig_idx: int, status: str) -> None:
         self._event_queue.put(("job_status", (orig_idx, status)))

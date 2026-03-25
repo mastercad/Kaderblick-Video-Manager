@@ -21,7 +21,7 @@ class DirectFilesTransferStep:
         paths: list[Path] = []
         dst_dir = ExecutorSupport.resolve_copy_destination(executor._settings, job)
         total_entries = len(job.files)
-        executor.job_progress.emit(orig_idx, 0)
+        executor.source_progress.emit(orig_idx, 0)
         for entry_idx, entry in enumerate(job.files, start=1):
             source_path = Path(entry.source_path)
             executor._set_job_status(orig_idx, f"Transfer {entry_idx}/{total_entries}: {source_path.name} …")
@@ -57,7 +57,7 @@ class DirectFilesTransferStep:
         )
 
         if not dst_dir:
-            executor.job_progress.emit(orig_idx, 100)
+            executor.source_progress.emit(orig_idx, 100)
             ready = [str(path) for path in paths]
             if on_file_ready is not None:
                 for path in ready:

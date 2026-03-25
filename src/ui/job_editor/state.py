@@ -7,6 +7,13 @@ from ...workflow import WorkflowJob
 
 
 class JobEditorStateMixin:
+    @staticmethod
+    def _job_has_titlecard_step(job: WorkflowJob) -> bool:
+        for node in getattr(job, "graph_nodes", []) or []:
+            if isinstance(node, dict) and node.get("type") == "titlecard":
+                return True
+        return False
+
     def _refresh_nav(self) -> None:
         for index, lbl in enumerate(self._step_labels):
             if index < self._current:
@@ -146,8 +153,9 @@ class JobEditorStateMixin:
         self._kb_game_id_edit.setText(job.default_kaderblick_game_id)
         self._kb_details_widget.setVisible(job.upload_kaderblick)
 
-        self._tc_enabled_cb.setChecked(job.title_card_enabled)
-        self._tc_details.setEnabled(job.title_card_enabled)
+        effective_titlecard_enabled = bool(job.title_card_enabled or self._job_has_titlecard_step(job))
+        self._tc_enabled_cb.setChecked(effective_titlecard_enabled)
+        self._tc_details.setEnabled(effective_titlecard_enabled)
         self._tc_logo_edit.setText(job.title_card_logo_path)
         self._tc_home_edit.setText(job.title_card_home_team or str(last_match.get("home_team", "")))
         self._tc_away_edit.setText(job.title_card_away_team or str(last_match.get("away_team", "")))

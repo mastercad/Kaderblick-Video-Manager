@@ -41,6 +41,25 @@ class TestValidateMediaOutput:
 
 
 class TestInspectMediaCompatibility:
+    def test_surface_scan_accepts_yuvj420p_as_compatible_h264_output(self, tmp_path):
+        path = tmp_path / "full_range.mp4"
+        path.write_bytes(b"ok")
+        payload = (
+            '{"streams":[{"codec_type":"video","codec_name":"h264","pix_fmt":"yuvj420p",'
+            '"field_order":"progressive","avg_frame_rate":"25/1"},'
+            '{"codec_type":"audio","codec_name":"aac"}],'
+            '"format":{"format_name":"mp4","duration":"12.0","size":"1234","bit_rate":"1000"}}'
+        )
+
+        with patch(
+            "src.media.ffmpeg_runner.subprocess.run",
+            return_value=_ProcResult(returncode=0, stdout=payload, stderr=""),
+        ):
+            result = inspect_media_compatibility(path, deep_scan=False)
+
+        assert result.status == "ok"
+        assert result.compatible is True
+
     def test_surface_scan_reports_repairable_for_incompatible_codec(self, tmp_path):
         path = tmp_path / "hevc.mp4"
         path.write_bytes(b"ok")

@@ -23,6 +23,7 @@ from .inspector import (
     KaderblickPanel,
     ProcessingPanel,
     RepairPanel,
+    SourceMaterialAnalyzer,
     StepEncodingPanel,
     StopPanel,
     TitlecardPanel,
@@ -40,6 +41,7 @@ if TYPE_CHECKING:
 class WorkflowDialogLayoutBuilder:
     def __init__(self, dialog: JobWorkflowDialog):
         self._dialog = dialog
+        self._source_analyzer = SourceMaterialAnalyzer()
 
     def build_header(self) -> QWidget:
         box = QFrame(self._dialog)
@@ -114,6 +116,10 @@ class WorkflowDialogLayoutBuilder:
         self._dialog._remove_node_btn.clicked.connect(self._dialog._remove_selected_graph_node)
         self._dialog._remove_node_btn.setEnabled(False)
         btn_row.addWidget(self._dialog._remove_node_btn)
+        self._dialog._reset_from_node_btn = QPushButton("Ab Auswahl zurücksetzen", self._dialog)
+        self._dialog._reset_from_node_btn.clicked.connect(self._dialog._reset_from_selected_graph_node)
+        self._dialog._reset_from_node_btn.setEnabled(False)
+        btn_row.addWidget(self._dialog._reset_from_node_btn)
         auto_btn = QPushButton("Auto-Layout", self._dialog)
         auto_btn.clicked.connect(self._dialog._auto_layout_graph)
         btn_row.addWidget(auto_btn)
@@ -193,6 +199,10 @@ class WorkflowDialogLayoutBuilder:
         self._dialog._editor_hint.setWordWrap(True)
         self._dialog._editor_hint.setStyleSheet("color: #475569;")
         layout.addWidget(self._dialog._editor_hint)
+
+        self._dialog._reset_workflow_btn = QPushButton("Workflow zurücksetzen", self._dialog)
+        self._dialog._reset_workflow_btn.clicked.connect(self._dialog._reset_entire_workflow)
+        layout.addWidget(self._dialog._reset_workflow_btn)
         return box
 
     def build_empty_panel(self) -> QWidget:
@@ -339,8 +349,12 @@ class WorkflowDialogLayoutBuilder:
         self._dialog._tc_date_edit = self._dialog._titlecard_panel._tc_date_edit
         self._dialog._tc_duration_spin = self._dialog._titlecard_panel._tc_duration_spin
         self._dialog._tc_logo_edit = self._dialog._titlecard_panel._tc_logo_edit
+        self._dialog._tc_logo_browse_btn = self._dialog._titlecard_panel._tc_logo_browse_btn
         self._dialog._tc_bg_edit = self._dialog._titlecard_panel._tc_bg_edit
         self._dialog._tc_fg_edit = self._dialog._titlecard_panel._tc_fg_edit
+        self._dialog._tc_bg_pick_btn = self._dialog._titlecard_panel._tc_bg_pick_btn
+        self._dialog._tc_fg_pick_btn = self._dialog._titlecard_panel._tc_fg_pick_btn
+        self._dialog._tc_preview_frame = self._dialog._titlecard_panel._tc_preview_frame
         return self._dialog._titlecard_panel
 
     def build_repair_box(self) -> QWidget:
@@ -367,8 +381,13 @@ class WorkflowDialogLayoutBuilder:
         self._dialog._merge_encoding_panel = StepEncodingPanel(
             "Merge-Encoding",
             self._dialog,
+            source_analyzer=self._source_analyzer,
+            encoder_choices=_workflow_editor_encoder_choices(),
+            on_crf_changed=lambda value: self._dialog._update_int_field("merge_crf", value),
+            on_encoder_changed=self._dialog._on_merge_encoder_changed,
             on_preset_changed=lambda text: self._dialog._update_text_field("merge_preset", text),
             on_no_bframes_changed=lambda checked: self._dialog._update_bool_field("merge_no_bframes", checked),
+            on_fps_changed=lambda value: self._dialog._update_int_field("merge_fps", value),
             on_format_changed=lambda text: self._dialog._update_text_field("merge_output_format", text),
             on_resolution_changed=lambda text: self._dialog._update_text_field("merge_output_resolution", text),
         )
@@ -381,8 +400,13 @@ class WorkflowDialogLayoutBuilder:
     def build_yt_version_box(self) -> QWidget:
         self._dialog._yt_version_panel = YTVersionPanel(
             self._dialog,
+            source_analyzer=self._source_analyzer,
+            encoder_choices=_workflow_editor_encoder_choices(),
+            on_crf_changed=lambda value: self._dialog._update_int_field("yt_version_crf", value),
+            on_encoder_changed=self._dialog._on_yt_version_encoder_changed,
             on_preset_changed=lambda text: self._dialog._update_text_field("yt_version_preset", text),
             on_no_bframes_changed=lambda checked: self._dialog._update_bool_field("yt_version_no_bframes", checked),
+            on_fps_changed=lambda value: self._dialog._update_int_field("yt_version_fps", value),
             on_format_changed=lambda text: self._dialog._update_text_field("yt_version_output_format", text),
             on_resolution_changed=lambda text: self._dialog._update_text_field("yt_version_output_resolution", text),
         )

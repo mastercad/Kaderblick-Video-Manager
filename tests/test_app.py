@@ -1009,6 +1009,26 @@ class TestConverterAppResumeState:
         finally:
             window.close()
 
+    def test_source_progress_does_not_override_running_convert_progress(self):
+        window = _new_app()
+        try:
+            job = WorkflowJob(name="Job 1", convert_enabled=True, upload_youtube=True)
+            job.resume_status = "Konvertiere …"
+            job.step_statuses = {"transfer": "running", "convert": "running"}
+            job.current_step_key = "convert"
+            job.progress_pct = 44
+            job.transfer_progress_pct = 12
+            window._workflow = Workflow(jobs=[job])
+            window._refresh_table()
+
+            window._on_source_progress(0, 73)
+
+            assert job.progress_pct == 44
+            assert job.transfer_progress_pct == 73
+            assert window.table.item(0, 4).data(int(Qt.ItemDataRole.UserRole)) == 44
+        finally:
+            window.close()
+
     def test_start_workflow_clears_persisted_resume_state_before_run(self):
         window = _new_app()
         try:
@@ -1034,6 +1054,86 @@ class TestConverterAppResumeState:
             assert window.table.item(0, 4).text() == "Wartend"
             assert window.table.item(0, 5).text() == "0%"
             window._save_last_workflow.assert_called_once()
+        finally:
+            window.close()
+
+    def test_start_workflow_does_not_start_job_duration_for_waiting_jobs(self):
+        window = _new_app()
+        try:
+            first = WorkflowJob(name="Job 1", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")])
+            second = WorkflowJob(name="Job 2", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")])
+            window._workflow = Workflow(jobs=[first, second])
+            window._refresh_table()
+
+            with patch.object(window, "_ask_resume_behavior", return_value=QMessageBox.No), patch(
+                "src.app.QThread", _DummyThread
+            ), patch("src.app.WorkflowExecutor", _DummyExecutor), patch("src.app.execution.time.monotonic", return_value=10_000.0):
+                window._start_workflow()
+
+            with patch("src.app.execution.time.monotonic", return_value=10_600.0):
+                window._refresh_runtime_durations()
+
+            assert first.run_elapsed_seconds == 0.0
+            assert second.run_elapsed_seconds == 0.0
+            assert window.table.item(0, 6).text() == "–"
+            assert window.table.item(1, 6).text() == "–"
+        finally:
+            window.close()
+
+    def test_restart_mode_clears_stale_waiting_job_duration(self):
+        window = _new_app()
+        try:
+            job = WorkflowJob(
+                name="Job 1",
+                source_mode="files",
+                files=[FileEntry(source_path="/tmp/a.mp4")],
+                resume_status="Alt",
+                step_statuses={"transfer": "done"},
+                run_started_at="2026-03-23T10:00:00",
+                run_finished_at="2026-03-23T18:00:00",
+                run_elapsed_seconds=8 * 3600,
+            )
+            window._workflow = Workflow(jobs=[job], last_run_elapsed_seconds=8 * 3600)
+            window._refresh_table()
+            window._save_last_workflow = MagicMock()
+
+            with patch.object(window, "_ask_resume_behavior", return_value=QMessageBox.No), patch(
+                "src.app.QThread", _DummyThread
+            ), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow()
+
+            assert job.run_started_at == ""
+            assert job.run_finished_at == ""
+            assert job.run_elapsed_seconds == 0.0
+            assert window.table.item(0, 6).text() == "–"
+            assert window.duration_label.text() == "Gesamtdauer: –"
+        finally:
+            window.close()
+
+    def test_finished_job_duration_does_not_continue_after_late_events(self):
+        window = _new_app()
+        try:
+            job = WorkflowJob(
+                name="Job 1",
+                source_mode="files",
+                files=[FileEntry(source_path="/tmp/a.mp4")],
+                run_started_at="2026-03-23T10:00:00",
+                run_finished_at="2026-03-23T10:05:00",
+                run_elapsed_seconds=300,
+                resume_status="Fertig",
+                step_statuses={"transfer": "done", "convert": "done"},
+            )
+            window._workflow = Workflow(jobs=[job])
+            window._refresh_table()
+            window._job_run_elapsed_base_seconds = {job.id: 300.0}
+            window._job_run_started_monotonic = {}
+
+            window._on_job_progress(0, 100)
+            window._on_job_status(0, "Transfer 2/2: a.mp4 …")
+
+            assert job.run_elapsed_seconds == 300
+            assert job.run_finished_at == "2026-03-23T10:05:00"
+            assert window.table.item(0, 6).text() == "5min 00s"
         finally:
             window.close()
 

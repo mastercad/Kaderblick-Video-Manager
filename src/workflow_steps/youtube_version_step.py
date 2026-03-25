@@ -5,6 +5,7 @@ from typing import Any
 
 from ..media.ffmpeg_runner import validate_media_output
 from ..media.step_reporting import format_encoder_summary, format_source_target_summary
+from ..workflow import graph_path_exists_between_types
 from .executor_support import ExecutorSupport
 from .models import PreparedOutput
 
@@ -44,13 +45,31 @@ class YoutubeVersionStep:
         executor._set_step_status(prepared.job, "yt_version", "running")
         executor._set_job_status(prepared.orig_idx, "YT-Version erstellen …")
         executor.job_progress.emit(prepared.orig_idx, 0)
+        has_graph = bool(getattr(prepared.job, "graph_nodes", None))
+        merge_before_yt = graph_path_exists_between_types(prepared.job, {"merge"}, "yt_version") if has_graph else False
+        convert_before_yt = graph_path_exists_between_types(prepared.job, {"convert"}, "yt_version") if has_graph else bool(prepared.job.convert_enabled)
+        inherited_encoder = prepared.per_settings.video.encoder
+        inherited_crf: int | None = None
+        if merge_before_yt:
+            inherited_encoder = (
+                prepared.job.merge_encoder
+                if prepared.job.merge_encoder not in {"", "inherit"}
+                else prepared.per_settings.video.encoder
+            )
+            inherited_crf = prepared.job.merge_crf if prepared.job.merge_crf > 0 else prepared.per_settings.video.crf
+        elif convert_before_yt:
+            inherited_encoder = prepared.per_settings.video.encoder
+            inherited_crf = prepared.per_settings.video.crf
         ok = executor._youtube_convert_func(
             prepared.cv_job,
             prepared.per_settings,
             cancel_flag=executor._cancel,
             log_callback=executor.log_message.emit,
             progress_callback=lambda pct: executor.job_progress.emit(prepared.orig_idx, pct),
+            encoder=(prepared.job.yt_version_encoder if prepared.job.yt_version_encoder not in {"", "inherit"} else inherited_encoder),
+            crf=prepared.job.yt_version_crf if prepared.job.yt_version_crf > 0 else inherited_crf,
             preset=prepared.job.yt_version_preset or prepared.per_settings.video.preset,
+            fps=prepared.job.yt_version_fps if prepared.job.yt_version_fps > 0 else None,
             no_bframes=prepared.job.yt_version_no_bframes,
             output_format=prepared.job.yt_version_output_format,
             output_resolution=prepared.job.yt_version_output_resolution,

@@ -1,9 +1,12 @@
 """pytest-Konfiguration für das Kaderblick — Video Manager-Projekt."""
 
+import os
 import sys
 from pathlib import Path
 
 import pytest
+
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 # Projekt-Root zum Import-Pfad hinzufügen, damit `from src.xxx import …` funktioniert
 ROOT = Path(__file__).parent.parent

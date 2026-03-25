@@ -202,6 +202,43 @@ def test_merge_group_step_uses_merge_specific_preset_and_no_bframes(tmp_path):
     assert captured["target_resolution"] == "source"
 
 
+def test_merge_group_step_passes_step_specific_encoder_crf_and_fps(tmp_path):
+    source_a = tmp_path / "halbzeit1.mp4"
+    source_b = tmp_path / "halbzeit2.mp4"
+    source_a.write_text("video-a", encoding="utf-8")
+    source_b.write_text("video-b", encoding="utf-8")
+    job = WorkflowJob(
+        source_mode="files",
+        files=[
+            FileEntry(source_path=str(source_a), merge_group_id="g1"),
+            FileEntry(source_path=str(source_b), merge_group_id="g1"),
+        ],
+        merge_encoder="libx264",
+        merge_crf=16,
+        merge_fps=50,
+    )
+    item_a = ConvertItem(orig_idx=0, job=job, cv_job=ConvertJob(source_path=source_a, output_path=source_a))
+    item_b = ConvertItem(orig_idx=0, job=job, cv_job=ConvertJob(source_path=source_b, output_path=source_b))
+    executor = _FakeExecutor()
+    captured: dict[str, object] = {}
+
+    def _concat(_sources, output, **kwargs):
+        captured.update(kwargs)
+        output.write_text("merged", encoding="utf-8")
+        return True
+
+    executor._concat_func = _concat
+    step = MergeGroupStep()
+
+    prepared, failures = step.execute(executor, "g1", [item_a, item_b])
+
+    assert failures == 0
+    assert prepared is not None
+    assert captured["encoder"] == "libx264"
+    assert captured["crf"] == 16
+    assert captured["fps"] == 50
+
+
 def test_merge_group_step_preserves_source_container_when_configured(tmp_path):
     source_a = tmp_path / "halbzeit1.avi"
     source_b = tmp_path / "halbzeit2.avi"

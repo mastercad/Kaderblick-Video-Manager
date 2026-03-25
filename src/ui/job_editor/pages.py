@@ -267,14 +267,19 @@ class JobEditorPagesMixin:
 
     def _pick_color(self, which: str) -> None:
         current = self._tc_bg_color if which == "bg" else self._tc_fg_color
-        color = QColorDialog.getColor(QColor(current), self, "Farbe wählen")
-        if color.isValid():
-            hex_color = color.name()
-            if which == "bg":
-                self._tc_bg_color = hex_color
-            else:
-                self._tc_fg_color = hex_color
-            self._update_color_btn(which, hex_color)
+        dialog = QColorDialog(self)
+        dialog.setWindowTitle("Farbe wählen")
+        dialog.setCurrentColor(QColor(current))
+        dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
+        if dialog.exec():
+            color = dialog.currentColor()
+            if color.isValid():
+                hex_color = color.name()
+                if which == "bg":
+                    self._tc_bg_color = hex_color
+                else:
+                    self._tc_fg_color = hex_color
+                self._update_color_btn(which, hex_color)
 
     def _update_color_btn(self, which: str, hex_color: str) -> None:
         btn = self._tc_bg_btn if which == "bg" else self._tc_fg_btn

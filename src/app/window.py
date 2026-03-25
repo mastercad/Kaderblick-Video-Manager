@@ -50,6 +50,7 @@ from .ui_build import (
     _set_row_status,
     _update_count,
 )
+from .theme import apply_application_theme
 from .workflow_actions import (
     _add_all_cameras,
     _add_job,
@@ -104,6 +105,7 @@ class ConverterApp(QMainWindow):
         self._build_toolbar()
         self._build_central()
         self._build_statusbar()
+        apply_application_theme(self)
         self._duration_timer = QTimer(self)
         self._duration_timer.setInterval(1000)
         self._duration_timer.timeout.connect(self._refresh_runtime_durations)

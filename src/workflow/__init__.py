@@ -25,6 +25,7 @@ from .graph import (
 from .migration import _migrate_source_to_job
 from .model import FileEntry, Workflow, WorkflowJob, workflow_output_device_name
 from .naming import increment_workflow_name, normalize_workflow_name
+from .reset import ResetResult, describe_reset_target, reset_job_for_rebuild
 from .storage import LAST_WORKFLOW_FILE, WORKFLOW_DIR
 
 
@@ -33,10 +34,13 @@ __all__ = [
     "Workflow",
     "WorkflowJob",
     "workflow_output_device_name",
+    "ResetResult",
     "WORKFLOW_DIR",
     "LAST_WORKFLOW_FILE",
     "normalize_workflow_name",
     "increment_workflow_name",
+    "describe_reset_target",
+    "reset_job_for_rebuild",
     "_migrate_source_to_job",
     "graph_node_map",
     "graph_node_id_for_type",

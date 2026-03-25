@@ -13,6 +13,7 @@ class PreparedOutput:
     job: WorkflowJob
     cv_job: ConvertJob
     per_settings: AppSettings
+    resume_from_step: str = ""
     status_prefix: str = ""
     mark_finished: bool = True
     title_card_enabled_override: bool | None = None
@@ -31,6 +32,7 @@ class ConvertItem:
     orig_idx: int
     job: WorkflowJob
     cv_job: ConvertJob
+    resume_from_step: str = ""
 
 
 @dataclass

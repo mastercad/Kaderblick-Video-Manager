@@ -92,8 +92,11 @@ class WorkflowJob:
     merge_segment_data: dict = field(default_factory=dict)
     merge_output_kaderblick_video_type_id: int = 0
     merge_output_kaderblick_camera_id: int = 0
+    merge_encoder: str = "inherit"
+    merge_crf: int = 0
     merge_preset: str = "medium"
     merge_no_bframes: bool = True
+    merge_fps: int = 0
     merge_output_format: str = "source"
     merge_output_resolution: str = "source"
 
@@ -101,8 +104,11 @@ class WorkflowJob:
     default_kaderblick_game_id: str = ""
     default_kaderblick_video_type_id: int = 0
     default_kaderblick_camera_id: int = 0
+    yt_version_encoder: str = "inherit"
+    yt_version_crf: int = 0
     yt_version_preset: str = "medium"
     yt_version_no_bframes: bool = True
+    yt_version_fps: int = 0
     yt_version_output_format: str = "source"
     yt_version_output_resolution: str = "source"
 

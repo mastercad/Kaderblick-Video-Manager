@@ -5,6 +5,7 @@ import threading
 import time
 from typing import Any
 
+from ...integrations.youtube import _youtube_variant_candidates
 from ...media.converter import ConvertJob
 from ...workflow import WorkflowJob
 from ...workflow_steps import ConvertItem, PreparedOutput
@@ -17,10 +18,14 @@ class WorkflowExecutorPipelineMixin:
         stats_lock = threading.Lock()
         progress_lock = threading.Lock()
         merge_lock = threading.Lock()
+        job_completion_lock = threading.Lock()
         process_queue: Queue[tuple[str, Any] | None] = Queue()
         upload_queue: Queue[PreparedOutput | None] = Queue()
         event_queue: Queue[tuple[str, tuple[Any, ...]]] = Queue()
         merge_groups: dict[tuple[int, str], list[ConvertItem]] = defaultdict(list)
+        job_expected_outputs: dict[int, int] = defaultdict(int)
+        job_completed_outputs: dict[int, int] = defaultdict(int)
+        merge_output_keys: set[tuple[int, str]] = set()
         total_steps = max(1, self._estimate_pipeline_total_steps(active))
         progress_done = 0
         worker_executor = _PipelineWorkerView(self, event_queue)
@@ -36,6 +41,31 @@ class WorkflowExecutorPipelineMixin:
             with progress_lock:
                 progress_done += 1
                 self.overall_progress.emit(min(progress_done, total_steps), total_steps)
+
+        def _register_expected_output(orig_idx: int, merge_group_id: str = "") -> None:
+            with job_completion_lock:
+                if merge_group_id:
+                    merge_key = (orig_idx, merge_group_id)
+                    if merge_key in merge_output_keys:
+                        return
+                    merge_output_keys.add(merge_key)
+                job_expected_outputs[orig_idx] += 1
+
+        def _mark_output_completed(orig_idx: int) -> None:
+            with job_completion_lock:
+                total = int(job_expected_outputs.get(orig_idx, 0) or 0)
+                if total <= 0:
+                    return
+                job_completed_outputs[orig_idx] += 1
+                done = job_completed_outputs[orig_idx]
+            if done >= total:
+                event_queue.put(("job_progress", (orig_idx, 100)))
+                event_queue.put(("job_status", (orig_idx, "Fertig")))
+            else:
+                event_queue.put(("job_status", (orig_idx, f"Fertig {done}/{total}")))
+
+        self._pipeline_register_expected_output = _register_expected_output
+        self._pipeline_mark_output_completed = _mark_output_completed
 
         needs_delivery_worker = any(
             self._support.job_reaches_type(job, "youtube_upload") or self._support.job_reaches_type(job, "kaderblick")
@@ -56,6 +86,9 @@ class WorkflowExecutorPipelineMixin:
                 try:
                     if task is None:
                         return
+
+                    if self._cancel.is_set():
+                        continue
 
                     kind, payload = task
                     if kind == "item":
@@ -99,14 +132,19 @@ class WorkflowExecutorPipelineMixin:
                 try:
                     if prepared is None:
                         return
+                    if self._cancel.is_set():
+                        continue
                     failures = self._output_step_stack.execute_delivery_steps(
                         worker_executor,
                         prepared,
                         yt_service,
                         kb_sort_index,
+                        start_at_step=prepared.resume_from_step,
                     )
                     if failures:
                         _bump_stat("fail", failures)
+                    else:
+                        _mark_output_completed(prepared.orig_idx)
                     _advance_progress()
                 except Exception as exc:
                     _bump_stat("fail", 1)
@@ -133,24 +171,35 @@ class WorkflowExecutorPipelineMixin:
             if self._cancel.is_set():
                 break
 
+            resume_step = self._first_pending_step(job)
+            if resume_step is None:
+                self._set_job_status(orig_idx, "Fertig")
+                _bump_stat("skip", 1)
+                _advance_progress()
+                continue
+
             dispatched_paths: set[str] = set()
 
             def _on_file_ready(file_path: str) -> None:
                 dispatched_paths.add(file_path)
                 self._dispatch_pipeline_item(orig_idx, job, file_path, process_queue, merge_groups, merge_lock)
 
-            self._set_step_status(job, "transfer", "running")
-            self._set_job_status(orig_idx, "Transfer …")
-            try:
-                files = self._transfer_step.execute(self, orig_idx, job, on_file_ready=_on_file_ready)
-            except Exception as exc:
-                self._set_step_status(job, "transfer", f"error: {exc}")
-                self._set_job_status(orig_idx, f"Fehler: {exc}")
-                job.error_msg = str(exc)
-                self.log_message.emit(f"❌ {job.name}: {exc}")
-                _bump_stat("fail", 1)
-                _advance_progress()
-                continue
+            skip_transfer = self._should_skip_step_for_resume(job, "transfer", resume_step)
+            if skip_transfer:
+                files = self._transfer_step.resume_inputs(self, orig_idx, job, on_file_ready=_on_file_ready)
+            else:
+                self._set_step_status(job, "transfer", "running")
+                self._set_job_status(orig_idx, "Transfer …")
+                try:
+                    files = self._transfer_step.execute(self, orig_idx, job, on_file_ready=_on_file_ready)
+                except Exception as exc:
+                    self._set_step_status(job, "transfer", f"error: {exc}")
+                    self._set_job_status(orig_idx, f"Fehler: {exc}")
+                    job.error_msg = str(exc)
+                    self.log_message.emit(f"❌ {job.name}: {exc}")
+                    _bump_stat("fail", 1)
+                    _advance_progress()
+                    continue
 
             if self._cancel.is_set():
                 break
@@ -162,8 +211,14 @@ class WorkflowExecutorPipelineMixin:
 
             self._enqueue_ready_merge_groups(process_queue, merge_groups, merge_lock, orig_idx=orig_idx)
 
-            self._set_step_status(job, "transfer", "done")
-            self._set_job_status(orig_idx, "Transfer OK")
+            if int(job_expected_outputs.get(orig_idx, 0) or 0) == 0:
+                self.job_progress.emit(orig_idx, 100)
+                self._set_job_status(orig_idx, "Fertig")
+
+            if not skip_transfer:
+                self._set_step_status(job, "transfer", "done")
+                if int(job_expected_outputs.get(orig_idx, 0) or 0) > 0:
+                    self._set_job_status(orig_idx, "Transfer OK")
             self._transfer_fail = stats["fail"]
             self.overall_progress.emit(active_pos + 1, max(len(active), total_steps))
             _advance_progress()
@@ -188,6 +243,8 @@ class WorkflowExecutorPipelineMixin:
         self._transfer_fail = stats["fail"]
         self._pipeline_event_queue = None
         self._pipeline_last_drain = 0.0
+        self._pipeline_register_expected_output = None
+        self._pipeline_mark_output_completed = None
         return stats["ok"], stats["skip"], stats["fail"]
 
     def _pump_pipeline_events(self, *, force: bool = False) -> None:
@@ -237,6 +294,7 @@ class WorkflowExecutorPipelineMixin:
         if self._cancel.is_set():
             return
 
+        resume_step = self._first_pending_step(job)
         merge_group_id = self._get_merge_group_id(job, file_path)
         merge_before_convert = self._merge_precedes_convert(job)
         convert_enabled = self._support.source_reaches_type(job, file_path, "convert")
@@ -263,15 +321,20 @@ class WorkflowExecutorPipelineMixin:
             cv_job.status = "Fertig"
             cv_job.output_path = Path(file_path)
 
-        item = ConvertItem(orig_idx=orig_idx, job=job, cv_job=cv_job)
+        item = ConvertItem(orig_idx=orig_idx, job=job, cv_job=cv_job, resume_from_step=resume_step or "")
+        register_expected_output = getattr(self, "_pipeline_register_expected_output", None)
         if merge_group_id:
             merge_key = self._merge_group_key(orig_idx, merge_group_id)
             with merge_lock:
                 merge_groups[merge_key].append(item)
-            if convert_enabled and not merge_before_convert:
+            if register_expected_output is not None:
+                register_expected_output(orig_idx, merge_group_id)
+            if convert_enabled and not merge_before_convert and not self._should_skip_step_for_resume(job, "convert", resume_step):
                 process_queue.put(("item", item))
             return
 
+        if register_expected_output is not None:
+            register_expected_output(orig_idx)
         process_queue.put(("item", item))
 
     def _process_pipeline_item(
@@ -282,7 +345,11 @@ class WorkflowExecutorPipelineMixin:
         yt_service,
         kb_sort_index: dict[tuple[str, str], int],
     ) -> tuple[int, int, int]:
+        if self._cancel.is_set():
+            return 0, 0, 0
+        mark_output_completed = getattr(self, "_pipeline_mark_output_completed", None)
         merge_group_id = self._get_merge_group_id(item.job, str(item.cv_job.source_path))
+        resume_step = item.resume_from_step or self._first_pending_step(item.job) or ""
         per_settings = self._build_job_settings(item.job)
         source_path = str(item.cv_job.source_path)
         include_title_card = self._support.source_reaches_type(item.job, source_path, "titlecard")
@@ -294,7 +361,15 @@ class WorkflowExecutorPipelineMixin:
         per_settings.youtube.upload_to_youtube = youtube_upload_enabled
 
         if self._support.source_reaches_type(item.job, source_path, "convert"):
-            result = self._convert_step.execute(executor_view, item.orig_idx, item.job, item.cv_job, per_settings, 0, 1)
+            can_skip_convert = self._should_skip_step_for_resume(item.job, "convert", resume_step) and (
+                (item.cv_job.output_path is not None and item.cv_job.output_path.exists())
+                or (resume_step in {"youtube_upload", "kaderblick"} and self._has_existing_youtube_artifact(item.cv_job))
+            )
+            if can_skip_convert:
+                item.cv_job.status = "Fertig"
+                result = "ready"
+            else:
+                result = self._convert_step.execute(executor_view, item.orig_idx, item.job, item.cv_job, per_settings, 0, 1)
         else:
             result = "ready"
 
@@ -315,6 +390,7 @@ class WorkflowExecutorPipelineMixin:
                     job=item.job,
                     cv_job=item.cv_job,
                     per_settings=per_settings,
+                    resume_from_step=resume_step,
                     graph_origin_node_id=self._support.source_node_id_for_file(item.job, str(item.cv_job.source_path)),
                     mark_finished=False,
                     title_card_enabled_override=True,
@@ -329,6 +405,7 @@ class WorkflowExecutorPipelineMixin:
                     include_title_card=True,
                     include_repair=False,
                     include_youtube_version=False,
+                    start_at_step=resume_step,
                 )
                 if failures:
                     return 0, 0, failures
@@ -339,8 +416,9 @@ class WorkflowExecutorPipelineMixin:
             job=item.job,
             cv_job=item.cv_job,
             per_settings=per_settings,
+            resume_from_step=resume_step,
             graph_origin_node_id=self._support.source_node_id_for_file(item.job, str(item.cv_job.source_path)),
-            mark_finished=not (youtube_upload_enabled or kaderblick_enabled),
+            mark_finished=False,
             title_card_enabled_override=include_title_card,
             repair_enabled_override=include_repair,
             youtube_version_enabled_override=include_youtube_version,
@@ -353,19 +431,42 @@ class WorkflowExecutorPipelineMixin:
             include_title_card=include_title_card,
             include_repair=include_repair,
             include_youtube_version=include_youtube_version,
+            start_at_step=resume_step,
         )
         if failures:
             return 0, 0, failures
 
+        if self._cancel.is_set():
+            return 0, 0, 0
+
         if youtube_upload_enabled or kaderblick_enabled:
             if upload_queue is not None:
-                upload_queue.put(prepared)
+                if not self._cancel.is_set():
+                    upload_queue.put(prepared)
             else:
-                failures = self._output_step_stack.execute_delivery_steps(executor_view, prepared, yt_service, kb_sort_index)
+                failures = self._output_step_stack.execute_delivery_steps(
+                    executor_view,
+                    prepared,
+                    yt_service,
+                    kb_sort_index,
+                    start_at_step=resume_step,
+                )
                 if failures:
                     return 0, 0, failures
+                if mark_output_completed is not None:
+                    mark_output_completed(item.orig_idx)
         else:
-            self._output_step_stack.execute_delivery_steps(executor_view, prepared, yt_service, kb_sort_index)
+            failures = self._output_step_stack.execute_delivery_steps(
+                executor_view,
+                prepared,
+                yt_service,
+                kb_sort_index,
+                start_at_step=resume_step,
+            )
+            if failures:
+                return 0, 0, failures
+            if mark_output_completed is not None:
+                mark_output_completed(item.orig_idx)
         return 1, 0, 0
 
     def _process_pipeline_merge_group(
@@ -377,11 +478,20 @@ class WorkflowExecutorPipelineMixin:
         yt_service,
         kb_sort_index: dict[tuple[str, str], int],
     ) -> tuple[int, int, int]:
-        prepared, merge_fail = self._merge_step.execute(executor_view, merge_group_id, group)
+        if self._cancel.is_set():
+            return 0, 0, 0
+        mark_output_completed = getattr(self, "_pipeline_mark_output_completed", None)
+        resume_step = group[0].resume_from_step or self._first_pending_step(group[0].job) or ""
+        if self._should_skip_step_for_resume(group[0].job, "merge", resume_step):
+            prepared = self._resume_existing_merge_group(group, resume_step)
+            merge_fail = 0
+        else:
+            prepared, merge_fail = self._merge_step.execute(executor_view, merge_group_id, group)
         if merge_fail:
             return 0, 0, merge_fail
         if prepared is None:
             return 0, 0, 0
+        prepared.resume_from_step = resume_step
 
         if self._support.merge_reaches_type(prepared.job, "convert") and self._merge_precedes_convert(prepared.job):
             merged_source = prepared.cv_job.output_path or prepared.cv_job.source_path
@@ -393,9 +503,17 @@ class WorkflowExecutorPipelineMixin:
                 youtube_playlist=prepared.cv_job.youtube_playlist,
                 youtube_tags=list(prepared.cv_job.youtube_tags),
             )
-            result = self._convert_step.execute(executor_view, prepared.orig_idx, prepared.job, merged_cv, prepared.per_settings, 0, 1)
-            if result not in {"ok", "ready"}:
-                return 0, 0, 1
+            existing_output = self._convert_step._find_existing_output(merged_cv, prepared.job, prepared.per_settings)
+            if self._should_skip_step_for_resume(prepared.job, "convert", resume_step) and (
+                (existing_output is not None and existing_output.exists())
+                or (resume_step in {"youtube_upload", "kaderblick"} and self._has_existing_youtube_artifact(merged_cv))
+            ):
+                merged_cv.output_path = existing_output or Path(merged_source)
+                merged_cv.status = "Fertig"
+            else:
+                result = self._convert_step.execute(executor_view, prepared.orig_idx, prepared.job, merged_cv, prepared.per_settings, 0, 1)
+                if result not in {"ok", "ready"}:
+                    return 0, 0, 1
             prepared.cv_job = merged_cv
 
         include_title_card = self._support.merge_reaches_type(prepared.job, "titlecard")
@@ -405,7 +523,7 @@ class WorkflowExecutorPipelineMixin:
         kaderblick_enabled = youtube_upload_enabled and self._support.merge_reaches_type(prepared.job, "kaderblick")
         prepared.per_settings.youtube.create_youtube = include_youtube_version
         prepared.per_settings.youtube.upload_to_youtube = youtube_upload_enabled
-        prepared.mark_finished = not (youtube_upload_enabled or kaderblick_enabled)
+        prepared.mark_finished = False
         prepared.title_card_enabled_override = include_title_card
         prepared.repair_enabled_override = include_repair
         prepared.youtube_version_enabled_override = include_youtube_version
@@ -417,20 +535,76 @@ class WorkflowExecutorPipelineMixin:
             include_title_card=include_title_card,
             include_repair=include_repair,
             include_youtube_version=include_youtube_version,
+            start_at_step=resume_step,
         )
         if failures:
             return 0, 0, failures
 
+        if self._cancel.is_set():
+            return 0, 0, 0
+
         if youtube_upload_enabled or kaderblick_enabled:
             if upload_queue is not None:
-                upload_queue.put(prepared)
+                if not self._cancel.is_set():
+                    upload_queue.put(prepared)
             else:
-                failures = self._output_step_stack.execute_delivery_steps(executor_view, prepared, yt_service, kb_sort_index)
+                failures = self._output_step_stack.execute_delivery_steps(
+                    executor_view,
+                    prepared,
+                    yt_service,
+                    kb_sort_index,
+                    start_at_step=resume_step,
+                )
                 if failures:
                     return 0, 0, failures
+                if mark_output_completed is not None:
+                    mark_output_completed(prepared.orig_idx)
         else:
-            self._output_step_stack.execute_delivery_steps(executor_view, prepared, yt_service, kb_sort_index)
+            failures = self._output_step_stack.execute_delivery_steps(
+                executor_view,
+                prepared,
+                yt_service,
+                kb_sort_index,
+                start_at_step=resume_step,
+            )
+            if failures:
+                return 0, 0, failures
+            if mark_output_completed is not None:
+                mark_output_completed(prepared.orig_idx)
         return 1, 0, 0
+
+    def _resume_existing_merge_group(
+        self,
+        group: list[ConvertItem],
+        resume_step: str,
+    ) -> PreparedOutput | None:
+        if not group:
+            return None
+        first_item = group[0]
+        first_job = first_item.job
+        first_cv = first_item.cv_job
+        per_settings = self._build_job_settings(first_job)
+        self._merge_step._apply_merge_output_metadata(first_job, first_cv)
+        merged_path = self._merge_step._expected_merged_path(first_job, first_cv)
+        if not merged_path.exists():
+            return None
+        first_cv.output_path = merged_path
+        return PreparedOutput(
+            first_item.orig_idx,
+            first_job,
+            first_cv,
+            per_settings,
+            resume_from_step=resume_step,
+            graph_origin_kind="merge",
+        )
+
+    @staticmethod
+    def _has_existing_youtube_artifact(cv_job: ConvertJob) -> bool:
+        output_path = cv_job.output_path
+        if output_path is None:
+            return False
+        derived_dir = str(getattr(cv_job, "derived_output_dir", "") or "")
+        return any(candidate.exists() for candidate in _youtube_variant_candidates(output_path, derived_dir))
 
     def _drain_pipeline_events(self, event_queue: Queue[tuple[str, tuple[Any, ...]]]) -> None:
         while not event_queue.empty():

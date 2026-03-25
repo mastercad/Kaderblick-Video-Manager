@@ -60,18 +60,24 @@ class WorkflowGraphController:
             draft.title_card_enabled = False
             draft.create_youtube_version = False
 
+        has_titlecard_node = "titlecard" in reachable_types if getattr(draft, "graph_nodes", None) else draft.title_card_enabled
+
         dialog._youtube_panel.sync_enabled_state(draft.upload_youtube)
         dialog._kb_game_id_edit.setEnabled(draft.upload_youtube and draft.upload_kaderblick)
         dialog._kb_reload_btn.setEnabled(draft.upload_youtube and draft.upload_kaderblick)
         dialog._kb_status_label.setEnabled(draft.upload_youtube and draft.upload_kaderblick)
-        titlecard_enabled = draft.title_card_enabled and has_output_stack
+        titlecard_enabled = has_titlecard_node and has_output_stack
         dialog._tc_home_edit.setEnabled(titlecard_enabled)
         dialog._tc_away_edit.setEnabled(titlecard_enabled)
         dialog._tc_date_edit.setEnabled(titlecard_enabled)
         dialog._tc_duration_spin.setEnabled(titlecard_enabled)
         dialog._tc_logo_edit.setEnabled(titlecard_enabled)
+        dialog._tc_logo_browse_btn.setEnabled(titlecard_enabled)
         dialog._tc_bg_edit.setEnabled(titlecard_enabled)
         dialog._tc_fg_edit.setEnabled(titlecard_enabled)
+        dialog._tc_bg_pick_btn.setEnabled(titlecard_enabled)
+        dialog._tc_fg_pick_btn.setEnabled(titlecard_enabled)
+        dialog._tc_preview_frame.setEnabled(titlecard_enabled)
         dialog._amplify_db_spin.setEnabled(draft.amplify_audio)
 
         merge_sources = {node_id for node_id, _node_type in graph_source_nodes(draft) if graph_source_reaches_merge(draft, node_id)}

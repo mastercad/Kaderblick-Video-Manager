@@ -267,8 +267,12 @@ class ExecutorSupport:
         fallback_stem = Path(file_path).stem
         title, playlist, description, tags = cls._default_youtube_metadata(job, fallback_stem)
 
-        if entry and entry.youtube_title:
-            title = entry.youtube_title
+        entry_title = str(entry.youtube_title or "").strip() if entry else ""
+        if entry_title:
+            placeholder_title = entry_title == fallback_stem
+            default_title_is_richer = bool(title and title != fallback_stem)
+            if not (placeholder_title and default_title_is_richer):
+                title = entry_title
         if entry and entry.youtube_playlist:
             playlist = entry.youtube_playlist
         if entry and entry.youtube_description:

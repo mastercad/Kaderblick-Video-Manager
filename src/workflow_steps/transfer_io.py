@@ -32,7 +32,6 @@ def transfer_files(
     transferred = 0
     result: list[str] = []
 
-    executor.job_progress.emit(orig_idx, 0)
     executor.source_progress.emit(orig_idx, 0)
 
     for file_idx, source_path in enumerate(paths, start=1):
@@ -74,18 +73,15 @@ def transfer_files(
             executor.log_message.emit(f"  ❌ {source_path.name}: {exc}")
 
     if not executor._cancel.is_set():
-        executor.job_progress.emit(orig_idx, 100)
         executor.source_progress.emit(orig_idx, 100)
     return result
 
 
 def emit_item_progress(executor: Any, orig_idx: int, done: int, total: int) -> None:
     if total <= 0:
-        executor.job_progress.emit(orig_idx, 100)
         executor.source_progress.emit(orig_idx, 100)
         return
     pct = int(done / total * 100)
-    executor.job_progress.emit(orig_idx, pct)
     executor.source_progress.emit(orig_idx, pct)
 
 
@@ -160,7 +156,6 @@ def _emit_progress(
         pct = min(100, int(file_idx / total_files * 100))
     else:
         pct = 100
-    executor.job_progress.emit(orig_idx, pct)
     executor.source_progress.emit(orig_idx, pct)
     if hasattr(executor, "_pump_pipeline_events"):
         executor._pump_pipeline_events()

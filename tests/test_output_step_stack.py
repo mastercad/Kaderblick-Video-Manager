@@ -22,6 +22,7 @@ class _DummyEmitter:
 class _FakeExecutor:
     def __init__(self):
         self._cancel = threading.Event()
+        self._allow_reuse_existing = True
         self._concat_func = lambda *args, **kwargs: True
         self._youtube_convert_func = lambda *args, **kwargs: True
         self.log_message = _DummyEmitter()
@@ -348,6 +349,30 @@ def test_output_step_stack_reuses_existing_titlecard_output(tmp_path):
     assert prepared.job.step_statuses["titlecard"] == "reused-target"
 
 
+def test_output_step_stack_restart_regenerates_titlecard_output(tmp_path):
+    stack = OutputStepStack()
+    executor = _FakeExecutor()
+    prepared = _prepared_output(tmp_path, title=True, yt_version=False, yt_upload=False, kaderblick=False)
+    prepared.per_settings.video.overwrite = True
+    titlecard = prepared.cv_job.output_path.with_stem(prepared.cv_job.output_path.stem + "_titlecard")
+    titlecard.write_text("with-titlecard", encoding="utf-8")
+
+    with patch(
+        "src.workflow_steps.title_card_step.TitleCardStep._prepend_title_card",
+        return_value=(prepared.cv_job.output_path, True),
+    ) as prepend_mock:
+        failures = stack.execute(
+            executor,
+            prepared,
+            yt_service=object(),
+            kb_sort_index={},
+        )
+
+    assert failures == 0
+    prepend_mock.assert_called_once()
+    assert prepared.job.step_statuses["titlecard"] == "done"
+
+
 def test_output_step_stack_reuses_existing_titlecard_when_base_output_is_missing(tmp_path):
     stack = OutputStepStack()
     executor = _FakeExecutor()
@@ -390,6 +415,28 @@ def test_output_step_stack_reuses_existing_youtube_version(tmp_path):
     assert prepared.job.step_statuses["yt_version"] == "reused-target"
 
 
+def test_output_step_stack_restart_regenerates_existing_youtube_version(tmp_path):
+    stack = OutputStepStack()
+    executor = _FakeExecutor()
+    prepared = _prepared_output(tmp_path, title=False, yt_version=True, yt_upload=False, kaderblick=False)
+    prepared.per_settings.video.overwrite = True
+    yt_version = prepared.cv_job.output_path.with_stem(prepared.cv_job.output_path.stem + "_youtube")
+    yt_version.write_text("yt", encoding="utf-8")
+    called = []
+    executor._youtube_convert_func = lambda *_args, **_kwargs: called.append("yt") or True
+
+    failures = stack.execute(
+        executor,
+        prepared,
+        yt_service=object(),
+        kb_sort_index={},
+    )
+
+    assert failures == 0
+    assert called == ["yt"]
+    assert prepared.job.step_statuses["yt_version"] == "done"
+
+
 def test_output_step_stack_reuses_existing_youtube_upload(tmp_path):
     stack = OutputStepStack()
     executor = _FakeExecutor()
@@ -411,6 +458,31 @@ def test_output_step_stack_reuses_existing_youtube_upload(tmp_path):
 
     assert failures == 0
     assert prepared.job.step_statuses["youtube_upload"] == "reused-target"
+
+
+def test_output_step_stack_restart_does_not_reuse_existing_youtube_upload(tmp_path):
+    stack = OutputStepStack()
+    executor = _FakeExecutor()
+    executor._allow_reuse_existing = False
+    prepared = _prepared_output(tmp_path, title=False, yt_version=False, yt_upload=True, kaderblick=False)
+
+    with patch(
+        "src.workflow_steps.youtube_upload_step.get_video_id_for_output",
+        return_value="existing-123",
+    ), patch(
+        "src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube",
+        return_value=True,
+    ) as upload_mock:
+        failures = stack.execute(
+            executor,
+            prepared,
+            yt_service=object(),
+            kb_sort_index={},
+        )
+
+    assert failures == 0
+    upload_mock.assert_called_once()
+    assert prepared.job.step_statuses["youtube_upload"] == "done"
 
 
 def test_output_step_stack_reuses_existing_youtube_upload_when_base_file_is_missing(tmp_path):
@@ -465,3 +537,39 @@ def test_output_step_stack_reuses_existing_kaderblick_entry(tmp_path):
     assert failures == 0
     assert prepared.job.step_statuses["youtube_upload"] == "reused-target"
     assert prepared.job.step_statuses["kaderblick"] == "reused-target"
+
+
+def test_output_step_stack_restart_does_not_reuse_existing_kaderblick_entry(tmp_path):
+    stack = OutputStepStack()
+    executor = _FakeExecutor()
+    executor._allow_reuse_existing = False
+    prepared = _prepared_output(tmp_path, title=False, yt_version=False, yt_upload=True, kaderblick=True)
+
+    with patch(
+        "src.workflow_steps.youtube_upload_step.get_video_id_for_output",
+        return_value="video-123",
+    ), patch(
+        "src.workflow_steps.kaderblick_post_step.get_video_id_for_output",
+        return_value="video-123",
+    ), patch(
+        "src.workflow_steps.kaderblick_post_step.get_recorded_kaderblick_id",
+        return_value=99,
+    ), patch(
+        "src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube",
+        return_value=True,
+    ) as upload_mock, patch(
+        "src.workflow_steps.kaderblick_post_step.KaderblickPostStep._post_to_kaderblick",
+        return_value=True,
+    ) as kb_mock:
+        failures = stack.execute(
+            executor,
+            prepared,
+            yt_service=object(),
+            kb_sort_index={},
+        )
+
+    assert failures == 0
+    upload_mock.assert_called_once()
+    kb_mock.assert_called_once()
+    assert prepared.job.step_statuses["youtube_upload"] == "done"
+    assert prepared.job.step_statuses["kaderblick"] == "done"

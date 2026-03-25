@@ -357,7 +357,7 @@ class TestRunConcat:
         cmd = mock_ffmpeg.call_args[0][0]
         assert "title=Merge Titel" in cmd
         assert "description=Merge Beschreibung" in cmd
-        assert "software=Kaderblick" in cmd
+        assert "software=Kaderblick — Video Manager" in cmd
 
 
 class TestRunYouTubeConvert:
@@ -428,7 +428,7 @@ class TestRunYouTubeConvert:
         assert "title=Merge Titel" in cmd
         assert "description=Ausführliche Beschreibung" in cmd
         assert "album=Merge Playlist" in cmd
-        assert "software=Kaderblick" in cmd
+        assert "software=Kaderblick — Video Manager" in cmd
 
     @patch("src.media.converter.validate_media_output", return_value=True)
     @patch("src.media.converter.build_video_encoder_args",

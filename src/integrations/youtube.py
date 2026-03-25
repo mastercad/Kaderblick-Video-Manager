@@ -317,6 +317,7 @@ def _query_resume_offset(resume_uri: str, http) -> Optional[int]:
 def upload_to_youtube(job, settings: AppSettings,
                       yt_service=None, log_callback=None,
                       cancel_flag=None,
+                      allow_reuse_existing: bool = True,
                       progress_callback=None) -> bool:
     """Lädt die YouTube-Version (oder das Hauptvideo) auf YouTube hoch.
 
@@ -357,7 +358,7 @@ def upload_to_youtube(job, settings: AppSettings,
         return False
 
     # ── 1. Bereits vollständig hochgeladen? ───────────────────
-    existing_id = _registry.already_uploaded(upload_file)
+    existing_id = _registry.already_uploaded(upload_file) if allow_reuse_existing else None
     if existing_id:
         log(f"⏭ Bereits hochgeladen (https://youtu.be/{existing_id}) – übersprungen.")
         return True
@@ -386,7 +387,7 @@ def upload_to_youtube(job, settings: AppSettings,
     upload_request = None
     pending_saved = False
 
-    resume_uri = _registry.get_pending(upload_file)
+    resume_uri = _registry.get_pending(upload_file) if allow_reuse_existing else None
     if resume_uri:
         log("↩ Unterbrochener Upload gefunden – prüfe Session …")
         offset = _query_resume_offset(resume_uri, yt_service._http)
@@ -511,3 +512,9 @@ def get_registry_entry_for_output(output_path: Path) -> dict | None:
         if entry:
             return dict(entry)
     return None
+
+
+def clear_registry_entry_for_output(output_path: Path) -> None:
+    for yt_version in _youtube_variant_candidates(output_path):
+        _registry.clear(yt_version)
+    _registry.clear(output_path)
