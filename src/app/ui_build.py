@@ -80,7 +80,6 @@ def _build_toolbar(self: QMainWindow):
     tb.addSeparator()
 
     self.act_start = tb.addAction("▶  Starten", self._start_selected_workflows)
-    self.act_start_all = tb.addAction("▶▶  Alle aktiven", self._start_all_active_workflows)
     self.act_cancel = tb.addAction("■  Abbrechen", self._cancel_workflow)
     self.act_cancel.setEnabled(False)
     tb.addSeparator()

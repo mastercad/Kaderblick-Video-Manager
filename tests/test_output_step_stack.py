@@ -58,6 +58,10 @@ class _FakeExecutor:
         return ExecutorSupport.prepared_output_reaches_type(prepared, target_type)
 
     @staticmethod
+    def _advance_prepared_output_cursor(prepared, step_name):
+        ExecutorSupport.advance_prepared_output_cursor(prepared, step_name)
+
+    @staticmethod
     def _graph_node_id_for_type(job, node_type):
         return ExecutorSupport.graph_node_id_for_type(job, node_type)
 
@@ -201,6 +205,136 @@ def test_output_step_stack_skips_upload_and_kaderblick_without_yt_service(tmp_pa
     assert calls == []
     upload_mock.assert_not_called()
     kb_post_mock.assert_not_called()
+
+
+def test_output_step_stack_terminal_titlecard_does_not_continue_to_parallel_upload_branch(tmp_path):
+    stack = OutputStepStack()
+    executor = _FakeExecutor()
+    source = tmp_path / "graph-source.mp4"
+    output = tmp_path / "graph-output.mp4"
+    source.write_text("src", encoding="utf-8")
+    output.write_text("out", encoding="utf-8")
+
+    job = WorkflowJob(
+        title_card_enabled=True,
+        upload_youtube=True,
+        files=[FileEntry(source_path=str(source), graph_source_id="source-1")],
+        graph_nodes=[
+            {"id": "source-1", "type": "source_files"},
+            {"id": "title-1", "type": "titlecard"},
+            {"id": "upload-1", "type": "youtube_upload"},
+        ],
+        graph_edges=[
+            {"source": "source-1", "target": "title-1"},
+            {"source": "source-1", "target": "upload-1"},
+        ],
+    )
+    prepared = PreparedOutput(
+        orig_idx=0,
+        job=job,
+        cv_job=ConvertJob(
+            source_path=source,
+            output_path=output,
+            job_type="convert",
+            youtube_title="Titel",
+        ),
+        per_settings=AppSettings(),
+        graph_origin_node_id="source-1",
+        mark_finished=True,
+    )
+    calls: list[str] = []
+
+    def _title_side_effect(_executor, _orig_idx, cv_job, _job, _settings):
+        calls.append("titlecard")
+        return cv_job.output_path, True
+
+    with patch(
+        "src.workflow_steps.title_card_step.TitleCardStep._prepend_title_card",
+        side_effect=_title_side_effect,
+    ), patch(
+        "src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube",
+        side_effect=lambda *_args, **_kwargs: calls.append("youtube_upload") or True,
+    ):
+        failures = stack.execute(
+            executor,
+            prepared,
+            yt_service=object(),
+            kb_sort_index={},
+        )
+
+    assert failures == 0
+    assert calls == ["titlecard"]
+
+
+@pytest.mark.parametrize(
+    ("node_type", "step_attr"),
+    [
+        ("titlecard", "_title_card_step"),
+        ("validate_surface", "_surface_validation_step"),
+        ("validate_deep", "_deep_validation_step"),
+        ("cleanup", "_cleanup_output_step"),
+        ("repair", "_repair_output_step"),
+        ("yt_version", "_youtube_version_step"),
+        ("stop", "_stop_output_step"),
+    ],
+)
+def test_dead_end_processing_nodes_do_not_continue_into_parallel_upload_branch(tmp_path, node_type, step_attr):
+    stack = OutputStepStack()
+    executor = _FakeExecutor()
+    source = tmp_path / f"{node_type}-source.mp4"
+    output = tmp_path / f"{node_type}-output.mp4"
+    source.write_text("src", encoding="utf-8")
+    output.write_text("out", encoding="utf-8")
+
+    job = WorkflowJob(
+        title_card_enabled=(node_type == "titlecard"),
+        create_youtube_version=(node_type == "yt_version"),
+        upload_youtube=True,
+        files=[FileEntry(source_path=str(source), graph_source_id="source-1")],
+        graph_nodes=[
+            {"id": "source-1", "type": "source_files"},
+            {"id": "dead-1", "type": node_type},
+            {"id": "upload-1", "type": "youtube_upload"},
+        ],
+        graph_edges=[
+            {"source": "source-1", "target": "dead-1"},
+            {"source": "source-1", "target": "upload-1"},
+        ],
+    )
+    prepared = PreparedOutput(
+        orig_idx=0,
+        job=job,
+        cv_job=ConvertJob(
+            source_path=source,
+            output_path=output,
+            job_type="convert",
+            youtube_title="Titel",
+        ),
+        per_settings=AppSettings(),
+        graph_origin_node_id="source-1",
+        mark_finished=True,
+    )
+    calls: list[str] = []
+    step = getattr(stack, step_attr)
+
+    with patch.object(
+        step,
+        "execute",
+        side_effect=lambda *_args, **_kwargs: calls.append(node_type) or 0,
+    ), patch.object(
+        stack._youtube_upload_step,
+        "execute",
+        side_effect=lambda *_args, **_kwargs: calls.append("youtube_upload") or 0,
+    ):
+        failures = stack.execute(
+            executor,
+            prepared,
+            yt_service=object(),
+            kb_sort_index={},
+        )
+
+    assert failures == 0
+    assert calls == [node_type]
 
 
 def test_output_step_stack_stops_after_upload_failure(tmp_path):

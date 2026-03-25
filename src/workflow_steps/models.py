@@ -22,6 +22,7 @@ class PreparedOutput:
     youtube_upload_enabled_override: bool | None = None
     kaderblick_enabled_override: bool | None = None
     graph_origin_node_id: str = ""
+    graph_cursor_node_id: str = ""
     graph_origin_kind: str = "source"
     validation_results: dict[str, str] = field(default_factory=dict)
     terminal_status_text: str = ""

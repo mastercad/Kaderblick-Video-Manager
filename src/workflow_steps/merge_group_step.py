@@ -107,11 +107,12 @@ class MergeGroupStep:
         executor._set_step_status(first_job, "merge", "running")
         executor._set_job_status(first_orig_idx, "Zusammenführen …")
         executor.job_progress.emit(first_orig_idx, 0)
+        cancel_flag = executor._cancel_flag_for_job(first_orig_idx)
         merged_path.parent.mkdir(parents=True, exist_ok=True)
         concat_ok = executor._concat_func(
             source_paths,
             merged_path,
-            cancel_flag=executor._cancel,
+            cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
             progress_callback=lambda pct: executor.job_progress.emit(first_orig_idx, pct),
             overwrite=per_settings.video.overwrite,
@@ -124,6 +125,16 @@ class MergeGroupStep:
             target_resolution=first_job.merge_output_resolution,
             metadata_job=first_cv,
         )
+        if executor._is_job_cancelled(first_orig_idx):
+            executor._set_step_status(first_job, "merge", "cancelled")
+            executor._set_step_detail(
+                first_job,
+                "merge",
+                f"{format_list_summary('Quellen', [path.name for path in source_paths])} | Durch Benutzer abgebrochen",
+            )
+            executor._set_job_status(first_orig_idx, "Zusammenführen abgebrochen")
+            executor.job_progress.emit(first_orig_idx, 0)
+            return None, 0
         if not concat_ok:
             executor._set_step_status(first_job, "merge", "error")
             executor._set_step_detail(

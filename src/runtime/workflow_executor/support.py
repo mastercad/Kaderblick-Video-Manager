@@ -3,7 +3,7 @@ from pathlib import Path
 
 from ...media.converter import ConvertJob
 from ...settings import AppSettings
-from ...workflow import FileEntry, WorkflowJob, graph_has_multiple_sources, graph_source_nodes
+from ...workflow import FileEntry, WorkflowJob, graph_has_multiple_sources, graph_reachable_types, graph_source_nodes
 from ...workflow_steps import ExecutorSupport, PreparedOutput
 
 
@@ -20,7 +20,7 @@ class WorkflowExecutorSupportMixin:
         }
         has_merge = any(file.merge_group_id for file in job.files) or "merge" in graph_types
         has_graph = bool(getattr(job, "graph_nodes", None))
-        reachable_types = set(graph_types) if has_graph else set()
+        reachable_types = graph_reachable_types(job) if has_graph else set()
         convert_enabled = "convert" in reachable_types if has_graph else job.convert_enabled
         titlecard_enabled = "titlecard" in reachable_types if has_graph else job.title_card_enabled
         youtube_version_enabled = "yt_version" in reachable_types if has_graph else job.create_youtube_version
@@ -240,6 +240,9 @@ class WorkflowExecutorSupportMixin:
 
     def _prepared_output_reaches_type(self, prepared: PreparedOutput, target_type: str) -> bool:
         return self._support.prepared_output_reaches_type(prepared, target_type)
+
+    def _advance_prepared_output_cursor(self, prepared: PreparedOutput, step_name: str) -> None:
+        self._support.advance_prepared_output_cursor(prepared, step_name)
 
     def _graph_node_id_for_type(self, job: WorkflowJob, node_type: str) -> str:
         return self._support.graph_node_id_for_type(job, node_type)

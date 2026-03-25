@@ -95,6 +95,7 @@ class OutputStepStack:
             failures += step.execute(executor, prepared)
             if failures:
                 break
+            executor._advance_prepared_output_cursor(prepared, step.name)
 
         return failures
 
@@ -121,6 +122,7 @@ class OutputStepStack:
                 failures += step.execute(executor, prepared, kb_sort_index)
             if failures:
                 break
+            executor._advance_prepared_output_cursor(prepared, step.name)
 
         if prepared.mark_finished and not failures:
             executor._set_job_status(prepared.orig_idx, "Fertig")

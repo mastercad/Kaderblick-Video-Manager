@@ -61,6 +61,11 @@ class KaderblickPostStep:
         executor._set_step_status(prepared.job, "kaderblick", "running")
         executor._set_job_status(prepared.orig_idx, "Kaderblick senden …")
         executor.job_progress.emit(prepared.orig_idx, 0)
+        if executor._is_job_cancelled(prepared.orig_idx):
+            executor._set_step_status(prepared.job, "kaderblick", "cancelled")
+            executor._set_step_detail(prepared.job, "kaderblick", self._build_cancelled_summary(executor, prepared, kb_sort_index))
+            executor._set_job_status(prepared.orig_idx, "Kaderblick abgebrochen")
+            return 0
         sort_idx = self._resolve_sort_index(executor, prepared, kb_sort_index)
         ok = self._post_to_kaderblick(
             executor,
@@ -69,6 +74,11 @@ class KaderblickPostStep:
             sort_idx,
             prepared.per_settings,
         )
+        if executor._is_job_cancelled(prepared.orig_idx):
+            executor._set_step_status(prepared.job, "kaderblick", "cancelled")
+            executor._set_step_detail(prepared.job, "kaderblick", self._build_cancelled_summary(executor, prepared, kb_sort_index))
+            executor._set_job_status(prepared.orig_idx, "Kaderblick abgebrochen")
+            return 0
         if not ok:
             executor._set_step_status(prepared.job, "kaderblick", "error")
             executor._set_step_detail(prepared.job, "kaderblick", self._build_error_summary(executor, prepared, kb_sort_index))
@@ -141,6 +151,12 @@ class KaderblickPostStep:
         entry = executor._find_file_entry(prepared.job, str(prepared.cv_job.source_path))
         game_id = (entry.kaderblick_game_id if entry and entry.kaderblick_game_id else "") or prepared.job.default_kaderblick_game_id
         return f"Video: {prepared.cv_job.youtube_title or prepared.cv_job.source_path.stem} | Spiel: {game_id or '-'} | Ergebnis: Kaderblick fehlgeschlagen"
+
+    @staticmethod
+    def _build_cancelled_summary(executor: Any, prepared: PreparedOutput, kb_sort_index: dict[tuple[str, str], int]) -> str:
+        entry = executor._find_file_entry(prepared.job, str(prepared.cv_job.source_path))
+        game_id = (entry.kaderblick_game_id if entry and entry.kaderblick_game_id else "") or prepared.job.default_kaderblick_game_id
+        return f"Video: {prepared.cv_job.youtube_title or prepared.cv_job.source_path.stem} | Spiel: {game_id or '-'} | Ergebnis: Durch Benutzer abgebrochen"
 
     @staticmethod
     def _build_summary(executor: Any, prepared: PreparedOutput, youtube_video_id: str | None, kaderblick_id: int | None, kb_sort_index: dict[tuple[str, str], int]) -> str:

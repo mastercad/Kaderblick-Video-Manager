@@ -91,6 +91,9 @@ class WorkflowExecutorPipelineMixin:
                         continue
 
                     kind, payload = task
+                    task_orig_idx = payload.orig_idx if kind == "item" else payload[1][0].orig_idx
+                    if self._is_job_cancelled(task_orig_idx):
+                        continue
                     if kind == "item":
                         ok_inc, skip_inc, fail_inc = self._process_pipeline_item(
                             worker_executor,
@@ -134,6 +137,8 @@ class WorkflowExecutorPipelineMixin:
                         return
                     if self._cancel.is_set():
                         continue
+                    if self._is_job_cancelled(prepared.orig_idx):
+                        continue
                     failures = self._output_step_stack.execute_delivery_steps(
                         worker_executor,
                         prepared,
@@ -170,6 +175,8 @@ class WorkflowExecutorPipelineMixin:
         for active_pos, (orig_idx, job) in enumerate(active):
             if self._cancel.is_set():
                 break
+            if self._is_job_cancelled(orig_idx):
+                continue
 
             resume_step = self._first_pending_step(job)
             if resume_step is None:
@@ -181,6 +188,8 @@ class WorkflowExecutorPipelineMixin:
             dispatched_paths: set[str] = set()
 
             def _on_file_ready(file_path: str) -> None:
+                if self._is_job_cancelled(orig_idx):
+                    return
                 dispatched_paths.add(file_path)
                 self._dispatch_pipeline_item(orig_idx, job, file_path, process_queue, merge_groups, merge_lock)
 
@@ -203,6 +212,8 @@ class WorkflowExecutorPipelineMixin:
 
             if self._cancel.is_set():
                 break
+            if self._is_job_cancelled(orig_idx):
+                continue
 
             for file_path in files:
                 if file_path in dispatched_paths:
@@ -352,6 +363,9 @@ class WorkflowExecutorPipelineMixin:
         resume_step = item.resume_from_step or self._first_pending_step(item.job) or ""
         per_settings = self._build_job_settings(item.job)
         source_path = str(item.cv_job.source_path)
+        convert_before_merge = bool(
+            merge_group_id and self._support.source_reaches_type_before_merge(item.job, source_path, "convert")
+        )
         include_title_card = self._support.source_reaches_type(item.job, source_path, "titlecard")
         include_repair = self._support.source_reaches_type(item.job, source_path, "repair")
         include_youtube_version = self._support.source_reaches_type(item.job, source_path, "yt_version")
@@ -383,6 +397,8 @@ class WorkflowExecutorPipelineMixin:
             return 0, 0, 1
 
         if merge_group_id:
+            if not convert_before_merge:
+                item.cv_job.output_path = item.cv_job.source_path
             entry = self._find_file_entry(item.job, str(item.cv_job.source_path))
             if entry is not None and entry.title_card_before_merge:
                 prepared = PreparedOutput(
@@ -611,8 +627,12 @@ class WorkflowExecutorPipelineMixin:
             event_name, args = event_queue.get()
             try:
                 if event_name == "job_status":
+                    if self._should_ignore_cancelled_event(event_name, args):
+                        continue
                     self._set_job_status(*args)
                 elif event_name == "job_progress":
+                    if self._should_ignore_cancelled_event(event_name, args):
+                        continue
                     self.job_progress.emit(*args)
                 elif event_name == "phase_changed":
                     self.phase_changed.emit(*args)
@@ -623,8 +643,12 @@ class WorkflowExecutorPipelineMixin:
                 elif event_name == "convert_progress":
                     self.convert_progress.emit(*args)
                 elif event_name == "source_status":
+                    if self._should_ignore_cancelled_event(event_name, args):
+                        continue
                     self.source_status.emit(*args)
                 elif event_name == "source_progress":
+                    if self._should_ignore_cancelled_event(event_name, args):
+                        continue
                     self.source_progress.emit(*args)
             finally:
                 event_queue.task_done()
@@ -634,3 +658,14 @@ class WorkflowExecutorPipelineMixin:
             self._drain_pipeline_events(event_queue)
             time.sleep(0.01)
         self._drain_pipeline_events(event_queue)
+
+    def _should_ignore_cancelled_event(self, event_name: str, args: tuple[Any, ...]) -> bool:
+        if not args:
+            return False
+        orig_idx = args[0]
+        if not isinstance(orig_idx, int) or not self._is_job_cancelled(orig_idx):
+            return False
+        if event_name == "job_status":
+            status = str(args[1]) if len(args) > 1 else ""
+            return "abgebrochen" not in status.lower()
+        return True

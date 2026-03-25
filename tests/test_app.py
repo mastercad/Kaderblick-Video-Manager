@@ -59,6 +59,9 @@ class _DummyExecutor:
         self.overall_progress = _DummySignal()
         self.phase_changed = _DummySignal()
         self.finished = _DummySignal()
+        self.source_status = _DummySignal()
+        self.source_progress = _DummySignal()
+        self.cancel_calls = []
 
     def moveToThread(self, thread):
         self.thread = thread
@@ -66,7 +69,8 @@ class _DummyExecutor:
     def run(self):
         return None
 
-    def cancel(self):
+    def cancel(self, active_indices=None):
+        self.cancel_calls.append(None if active_indices is None else set(active_indices))
         return None
 
 
@@ -339,7 +343,22 @@ class TestSelectedWorkflowStart:
         assert window._wf_executor is not None
         assert window._wf_executor.active_indices == {0, 2}
 
-    def test_start_selected_workflows_prompts_to_start_all_when_nothing_selected(self):
+    def test_start_selected_workflows_starts_all_enabled_when_nothing_selected(self):
+        window = _new_app()
+        window._workflow.jobs = [
+            WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+            WorkflowJob(name="B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+        ]
+        window._refresh_table()
+        window.table.clearSelection()
+
+        with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+            window._start_selected_workflows()
+
+        assert window._wf_executor is not None
+        assert window._wf_executor.active_indices == {0, 1}
+
+    def test_start_selected_workflows_does_not_prompt_when_nothing_selected(self):
         window = _new_app()
         window._workflow.jobs = [
             WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
@@ -349,12 +368,19 @@ class TestSelectedWorkflowStart:
         window.table.clearSelection()
 
         with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor), patch(
-            "src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes
-        ):
+            "src.app.QMessageBox.question"
+        ) as question_mock:
             window._start_selected_workflows()
 
+        question_mock.assert_not_called()
         assert window._wf_executor is not None
         assert window._wf_executor.active_indices == {0, 1}
+
+    def test_main_window_has_no_separate_start_all_action(self):
+        window = _new_app()
+
+        assert hasattr(window, "act_start")
+        assert not hasattr(window, "act_start_all")
 
     def test_start_workflow_disables_reuse_when_restart_is_selected(self):
         window = _new_app()
@@ -374,10 +400,82 @@ class TestSelectedWorkflowStart:
             "_ask_resume_behavior",
             return_value=QMessageBox.StandardButton.No,
         ):
-            window._start_all_active_workflows()
+            window._start_selected_workflows()
 
         assert window._wf_executor is not None
         assert window._wf_executor.allow_reuse_existing is False
+
+
+class TestSelectedWorkflowCancel:
+    def test_cancel_workflow_aborts_only_selected_jobs_after_confirmation(self):
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+                WorkflowJob(name="B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+                WorkflowJob(name="C", source_mode="files", files=[FileEntry(source_path="/tmp/c.mp4")]),
+            ]
+            window._refresh_table()
+            selection_model = window.table.selectionModel()
+            selection_model.select(window.table.model().index(1, 0), QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows)
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 1, 2})
+
+            assert window._wf_executor is not None
+
+            with patch("src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes) as question_mock:
+                window._cancel_workflow()
+
+            assert window._wf_executor.cancel_calls == [{1}]
+            question_mock.assert_called_once()
+            assert "ausgewählte" in question_mock.call_args.args[2]
+        finally:
+            window.close()
+
+    def test_cancel_workflow_aborts_all_jobs_when_nothing_is_selected(self):
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+                WorkflowJob(name="B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+            ]
+            window._refresh_table()
+            window.table.clearSelection()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 1})
+
+            assert window._wf_executor is not None
+
+            with patch("src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes) as question_mock:
+                window._cancel_workflow()
+
+            assert window._wf_executor.cancel_calls == [{0, 1}]
+            question_mock.assert_called_once()
+            assert "alle laufenden Jobs" in question_mock.call_args.args[2]
+        finally:
+            window.close()
+
+    def test_cancel_workflow_stops_when_confirmation_is_declined(self):
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+            ]
+            window._refresh_table()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0})
+
+            assert window._wf_executor is not None
+
+            with patch("src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.No):
+                window._cancel_workflow()
+
+            assert window._wf_executor.cancel_calls == []
+        finally:
+            window.close()
 
 
 class TestSessionRepair:
@@ -482,8 +580,10 @@ class TestConverterAppResumeState:
 
             assert last_workflow_file.exists() is True
 
-            restored = Workflow.load(last_workflow_file)
+            with patch("src.workflow.storage.LAST_WORKFLOW_FILE", last_workflow_file):
+                restored = Workflow.load_last()
 
+            assert restored is not None
             assert restored.to_dict() == workflow.to_dict()
             assert restored.job is not None
             assert restored.job.to_dict() == workflow.job.to_dict()
@@ -500,7 +600,7 @@ class TestConverterAppResumeState:
         finally:
             window.close()
 
-    def test_save_last_workflow_excludes_runtime_only_fields_from_file(self, tmp_path):
+    def test_save_last_workflow_persists_resume_state_but_not_transient_error_fields(self, tmp_path):
         last_workflow_file = tmp_path / "last_workflow.json"
         runtime_job = _rich_job()
         runtime_job.status = "Läuft"
@@ -521,14 +621,14 @@ class TestConverterAppResumeState:
 
             assert '"resume_status": "YT-Version erstellen …"' in payload
             assert '"step_statuses"' in payload
+            assert '"progress_pct": 44' in payload
+            assert '"overall_progress_pct": 78' in payload
+            assert '"current_step_key": "yt_version"' in payload
+            assert '"transfer_status": "Transfer 1/3"' in payload
+            assert '"transfer_progress_pct": 66' in payload
             assert '"graph_nodes"' in payload
             assert '"graph_edges"' in payload
             assert '"status"' not in payload
-            assert '"progress_pct"' not in payload
-            assert '"overall_progress_pct"' not in payload
-            assert '"current_step_key"' not in payload
-            assert '"transfer_status"' not in payload
-            assert '"transfer_progress_pct"' not in payload
             assert '"error_msg"' not in payload
         finally:
             window.close()
@@ -545,7 +645,7 @@ class TestConverterAppResumeState:
             assert window._workflow.job.to_dict() == expected.job.to_dict()
             assert window.table.item(0, 1).text() == "Gespeicherter Workflow"
             assert window.table.item(0, 4).text() == "YT-Version erstellen …"
-            assert window.table.item(0, 5).text() == "0%"
+            assert window.table.item(0, 5).text() == "78%"
         finally:
             window.close()
 
@@ -1134,6 +1234,95 @@ class TestConverterAppResumeState:
             assert job.run_elapsed_seconds == 300
             assert job.run_finished_at == "2026-03-23T10:05:00"
             assert window.table.item(0, 6).text() == "5min 00s"
+        finally:
+            window.close()
+
+    def test_job_duration_pauses_while_job_waits_for_pipeline_slot(self):
+        window = _new_app()
+        try:
+            job = WorkflowJob(
+                name="Job 2",
+                source_mode="files",
+                files=[FileEntry(source_path="/tmp/b.mp4")],
+            )
+            window._workflow = Workflow(jobs=[job])
+            window._refresh_table()
+
+            with patch.object(window, "_ask_resume_behavior", return_value=QMessageBox.No), patch(
+                "src.app.QThread", _DummyThread
+            ), patch("src.app.WorkflowExecutor", _DummyExecutor), patch("src.app.execution.time.monotonic", return_value=1_000.0):
+                window._start_workflow(active_indices={0})
+
+            with patch("src.app.execution.time.monotonic", return_value=1_000.0):
+                window._on_job_status(0, "Transfer 1/1: b.mp4 …")
+            with patch("src.app.execution.time.monotonic", return_value=1_120.0):
+                window._refresh_runtime_durations()
+
+            assert job.run_elapsed_seconds == 120.0
+
+            with patch("src.app.execution.time.monotonic", return_value=1_120.0):
+                window._on_job_status(0, "Transfer OK")
+            with patch("src.app.execution.time.monotonic", return_value=1_400.0):
+                window._refresh_runtime_durations()
+
+            assert job.run_elapsed_seconds == 120.0
+            assert window.table.item(0, 6).text() == "2min 00s"
+
+            with patch("src.app.execution.time.monotonic", return_value=1_400.0):
+                window._on_job_status(0, "Zusammenführen …")
+            with patch("src.app.execution.time.monotonic", return_value=1_460.0):
+                window._refresh_runtime_durations()
+
+            assert job.run_elapsed_seconds == 180.0
+            assert window.table.item(0, 6).text() == "3min 00s"
+        finally:
+            window.close()
+
+    def test_job_durations_only_advance_for_the_job_that_is_currently_working(self):
+        window = _new_app()
+        try:
+            first = WorkflowJob(name="Job 1", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")])
+            second = WorkflowJob(name="Job 2", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")])
+            third = WorkflowJob(name="Job 3", source_mode="files", files=[FileEntry(source_path="/tmp/c.mp4")])
+            window._workflow = Workflow(jobs=[first, second, third])
+            window._refresh_table()
+
+            with patch.object(window, "_ask_resume_behavior", return_value=QMessageBox.No), patch(
+                "src.app.QThread", _DummyThread
+            ), patch("src.app.WorkflowExecutor", _DummyExecutor), patch("src.app.execution.time.monotonic", return_value=2_000.0):
+                window._start_workflow(active_indices={0, 1, 2})
+
+            with patch("src.app.execution.time.monotonic", return_value=2_000.0):
+                window._on_job_status(0, "Transfer 1/1: a.mp4 …")
+            with patch("src.app.execution.time.monotonic", return_value=2_120.0):
+                window._refresh_runtime_durations()
+
+            assert first.run_elapsed_seconds == 120.0
+            assert second.run_elapsed_seconds == 0.0
+            assert third.run_elapsed_seconds == 0.0
+
+            with patch("src.app.execution.time.monotonic", return_value=2_120.0):
+                window._on_job_status(0, "Transfer OK")
+                window._on_job_status(1, "Transfer 1/1: b.mp4 …")
+            with patch("src.app.execution.time.monotonic", return_value=2_300.0):
+                window._refresh_runtime_durations()
+
+            assert first.run_elapsed_seconds == 120.0
+            assert second.run_elapsed_seconds == 180.0
+            assert third.run_elapsed_seconds == 0.0
+
+            with patch("src.app.execution.time.monotonic", return_value=2_300.0):
+                window._on_job_status(1, "Transfer OK")
+                window._on_job_status(2, "Transfer 1/1: c.mp4 …")
+            with patch("src.app.execution.time.monotonic", return_value=2_420.0):
+                window._refresh_runtime_durations()
+
+            assert first.run_elapsed_seconds == 120.0
+            assert second.run_elapsed_seconds == 180.0
+            assert third.run_elapsed_seconds == 120.0
+            assert window.table.item(0, 6).text() == "2min 00s"
+            assert window.table.item(1, 6).text() == "3min 00s"
+            assert window.table.item(2, 6).text() == "2min 00s"
         finally:
             window.close()
 

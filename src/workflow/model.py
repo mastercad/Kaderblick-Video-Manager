@@ -8,14 +8,29 @@ from pathlib import Path
 import uuid
 
 
-_RUNTIME_FIELDS = {
+_TRANSIENT_JOB_FIELDS = {
     "status",
+    "error_msg",
+}
+
+_SESSION_JOB_FIELDS = {
+    "resume_status",
+    "step_statuses",
+    "step_details",
     "progress_pct",
     "overall_progress_pct",
     "current_step_key",
-    "error_msg",
     "transfer_status",
     "transfer_progress_pct",
+    "run_started_at",
+    "run_finished_at",
+    "run_elapsed_seconds",
+}
+
+_SESSION_WORKFLOW_FIELDS = {
+    "last_run_started_at",
+    "last_run_finished_at",
+    "last_run_elapsed_seconds",
 }
 
 
@@ -138,19 +153,25 @@ class WorkflowJob:
     run_finished_at: str = ""
     run_elapsed_seconds: float = 0.0
 
-    def to_dict(self) -> dict:
+    def to_dict(self, *, include_runtime: bool = False) -> dict:
         payload = asdict(self)
-        for key in _RUNTIME_FIELDS:
+        excluded_fields = set(_TRANSIENT_JOB_FIELDS)
+        if not include_runtime:
+            excluded_fields.update(_SESSION_JOB_FIELDS)
+        for key in excluded_fields:
             payload.pop(key, None)
         return payload
 
     @classmethod
-    def from_dict(cls, data: dict) -> "WorkflowJob":
+    def from_dict(cls, data: dict, *, include_runtime: bool = False) -> "WorkflowJob":
         valid = set(cls.__dataclass_fields__)
+        excluded_fields = set(_TRANSIENT_JOB_FIELDS)
+        if not include_runtime:
+            excluded_fields.update(_SESSION_JOB_FIELDS)
         filtered = {
             key: value
             for key, value in data.items()
-            if key in valid and key not in _RUNTIME_FIELDS
+            if key in valid and key not in excluded_fields
         }
         raw_files = filtered.pop("files", [])
         files = [
@@ -225,20 +246,26 @@ class Workflow:
         else:
             self.jobs = [value]
 
-    def to_dict(self) -> dict:
-        return {
+    def to_dict(self, *, include_runtime: bool = False) -> dict:
+        payload = {
             "name": self.name,
             "shutdown_after": self.shutdown_after,
             "created_at": self.created_at,
-            "last_run_started_at": self.last_run_started_at,
-            "last_run_finished_at": self.last_run_finished_at,
-            "last_run_elapsed_seconds": self.last_run_elapsed_seconds,
-            "job": self.job.to_dict() if self.job is not None else None,
-            "jobs": [job.to_dict() for job in self.jobs],
+            "job": self.job.to_dict(include_runtime=include_runtime) if self.job is not None else None,
+            "jobs": [job.to_dict(include_runtime=include_runtime) for job in self.jobs],
         }
+        if include_runtime:
+            payload.update(
+                {
+                    "last_run_started_at": self.last_run_started_at,
+                    "last_run_finished_at": self.last_run_finished_at,
+                    "last_run_elapsed_seconds": self.last_run_elapsed_seconds,
+                }
+            )
+        return payload
 
     @classmethod
-    def from_dict(cls, data: dict) -> "Workflow":
+    def from_dict(cls, data: dict, *, include_runtime: bool = False) -> "Workflow":
         from .migration import _migrate_source_to_job
 
         raw_jobs = data.get("jobs", [])
@@ -253,15 +280,15 @@ class Workflow:
         jobs: list[WorkflowJob] = []
         for raw_job in raw_jobs:
             if isinstance(raw_job, dict):
-                jobs.append(WorkflowJob.from_dict(raw_job))
+                jobs.append(WorkflowJob.from_dict(raw_job, include_runtime=include_runtime))
         return cls(
             name=data.get("name", ""),
             jobs=jobs,
             shutdown_after=data.get("shutdown_after", False),
             created_at=data.get("created_at", ""),
-            last_run_started_at=data.get("last_run_started_at", ""),
-            last_run_finished_at=data.get("last_run_finished_at", ""),
-            last_run_elapsed_seconds=data.get("last_run_elapsed_seconds", 0.0),
+            last_run_started_at=data.get("last_run_started_at", "") if include_runtime else "",
+            last_run_finished_at=data.get("last_run_finished_at", "") if include_runtime else "",
+            last_run_elapsed_seconds=data.get("last_run_elapsed_seconds", 0.0) if include_runtime else 0.0,
         )
 
     def save(self, path: Path) -> None:
@@ -278,7 +305,7 @@ class Workflow:
     def save_as_last(self) -> None:
         from .storage import LAST_WORKFLOW_FILE, save_workflow
 
-        save_workflow(self, LAST_WORKFLOW_FILE)
+        save_workflow(self, LAST_WORKFLOW_FILE, include_runtime=True)
 
     @classmethod
     def load_last(cls) -> "Workflow | None":

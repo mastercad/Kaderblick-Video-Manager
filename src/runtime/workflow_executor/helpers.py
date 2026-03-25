@@ -43,6 +43,12 @@ class _PipelineWorkerView:
     def _set_job_status(self, orig_idx: int, status: str) -> None:
         self._event_queue.put(("job_status", (orig_idx, status)))
 
+    def _is_job_cancelled(self, orig_idx: int) -> bool:
+        return self._owner._is_job_cancelled(orig_idx)
+
+    def _cancel_flag_for_job(self, orig_idx: int):
+        return self._owner._cancel_flag_for_job(orig_idx)
+
     def _set_step_status(self, job: WorkflowJob, step: str, status: str) -> None:
         self._owner._set_step_status(job, step, status)
 
@@ -63,6 +69,9 @@ class _PipelineWorkerView:
 
     def _prepared_output_reaches_type(self, prepared: PreparedOutput, target_type: str) -> bool:
         return self._owner._prepared_output_reaches_type(prepared, target_type)
+
+    def _advance_prepared_output_cursor(self, prepared: PreparedOutput, step_name: str) -> None:
+        self._owner._advance_prepared_output_cursor(prepared, step_name)
 
     def _graph_node_id_for_type(self, job: WorkflowJob, node_type: str) -> str:
         return self._owner._graph_node_id_for_type(job, node_type)

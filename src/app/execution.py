@@ -20,15 +20,6 @@ def _start_selected_workflows(self):
         if not active_jobs:
             QMessageBox.information(self, "Hinweis", "Kein aktiver Workflow vorhanden.")
             return
-        choice = QMessageBox.question(
-            self,
-            "Keine Auswahl",
-            "Es ist kein Workflow ausgewählt. Sollen alle aktiven Workflows gestartet werden?",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if choice != QMessageBox.StandardButton.Yes:
-            return
         self._start_workflow(active_indices={index for index, job in enumerate(self._workflow.jobs) if job.enabled})
         return
     self._start_workflow(active_indices=set(selected_rows))
@@ -150,9 +141,46 @@ def _start_workflow(self, *, active_indices: set[int] | None = None):
 
 
 def _cancel_workflow(self):
-    if self._wf_executor:
-        self._wf_executor.cancel()
-    self._append_log("Abbruch angefordert …")
+    from . import QMessageBox
+
+    if not self._wf_executor:
+        return
+
+    selected_rows = {
+        row for row in self._selected_job_rows()
+        if 0 <= row < len(self._workflow.jobs) and self._workflow.jobs[row].enabled
+    }
+    if selected_rows:
+        if len(selected_rows) == 1:
+            row = next(iter(selected_rows))
+            prompt = f"Soll der ausgewählte Job '{self._workflow.jobs[row].name}' wirklich abgebrochen werden?"
+        else:
+            prompt = f"Sollen die {len(selected_rows)} ausgewählten Jobs wirklich abgebrochen werden?"
+        scope_label = "ausgewählte Jobs"
+        active_indices = selected_rows
+    else:
+        active_indices = {
+            index for index, job in enumerate(self._workflow.jobs)
+            if job.enabled
+        }
+        if not active_indices:
+            QMessageBox.information(self, "Hinweis", "Kein aktiver Workflow vorhanden.")
+            return
+        prompt = "Sollen alle laufenden Jobs wirklich abgebrochen werden?"
+        scope_label = "alle Jobs"
+
+    choice = QMessageBox.question(
+        self,
+        "Abbruch bestätigen",
+        prompt,
+        QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        QMessageBox.StandardButton.No,
+    )
+    if choice != QMessageBox.StandardButton.Yes:
+        return
+
+    self._wf_executor.cancel(active_indices=active_indices)
+    self._append_log(f"Abbruch angefordert ({scope_label}) …")
 
 
 @Slot(int, str)
@@ -166,8 +194,10 @@ def _on_job_status(self, orig_idx: int, status: str):
         job.overall_progress_pct = overall_pct
         if _is_terminal_job_status(status, overall_pct):
             _freeze_job_duration(self, orig_idx)
-        else:
+        elif _is_active_job_status(status):
             _touch_job_duration(self, orig_idx)
+        else:
+            _pause_job_duration(self, orig_idx)
         item = self.table.item(orig_idx, 4)
         if item is not None:
             item.setToolTip(_format_resume_tooltip(job))
@@ -204,6 +234,7 @@ def _on_source_progress(self, orig_idx: int, pct: int):
         job.transfer_progress_pct = pct
         current_step = job.current_step_key or "transfer"
         if current_step in {"", "transfer"}:
+            _touch_job_duration(self, orig_idx)
             job.progress_pct = pct
             overall_pct = _compute_job_overall_progress(job, job.resume_status or job.status, pct)
             job.overall_progress_pct = overall_pct
@@ -347,6 +378,21 @@ def _touch_job_duration(self, orig_idx: int):
     job.run_elapsed_seconds = _effective_job_elapsed_seconds(self, job)
 
 
+def _pause_job_duration(self, orig_idx: int):
+    if not (0 <= orig_idx < len(self._workflow.jobs)):
+        return
+    job = self._workflow.jobs[orig_idx]
+    if getattr(job, "run_finished_at", ""):
+        return
+    started = self._job_run_started_monotonic.get(job.id)
+    if started is None:
+        return
+    base = _effective_job_elapsed_seconds(self, job)
+    job.run_elapsed_seconds = base
+    self._job_run_elapsed_base_seconds[job.id] = base
+    self._job_run_started_monotonic.pop(job.id, None)
+
+
 def _freeze_job_duration(self, orig_idx: int):
     if not (0 <= orig_idx < len(self._workflow.jobs)):
         return
@@ -367,6 +413,41 @@ def _is_terminal_job_status(status: str, overall_pct: int) -> bool:
     if status.startswith("Fertig") and overall_pct >= 100:
         return True
     return False
+
+
+def _is_active_job_status(status: str) -> bool:
+    active_prefixes = (
+        "Läuft",
+        "Herunterladen",
+        "Transfer",
+        "Konvertiere",
+        "Zusammenführen",
+        "Titelkarte",
+        "Kompatibilität prüfen",
+        "Deep-Scan",
+        "Bereinige Altdateien",
+        "Repariere",
+        "YT-Version",
+        "YouTube-Upload",
+        "Kaderblick",
+    )
+    inactive_prefixes = (
+        "Transfer OK",
+        "Zusammenführen OK",
+        "Titelkarte OK",
+        "Cleanup OK",
+        "Reparatur OK",
+        "YT-Version OK",
+        "Workflow-Zweig beendet",
+        "Validierung ohne gültiges Eingangsartefakt",
+        "Datei ist ",
+        "Vorhandenes",
+    )
+    if not status:
+        return False
+    if status.startswith(inactive_prefixes):
+        return False
+    return status.startswith(active_prefixes)
 
 
 def _now_iso() -> str:

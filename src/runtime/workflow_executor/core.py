@@ -19,6 +19,15 @@ from .pipeline import WorkflowExecutorPipelineMixin
 from .support import WorkflowExecutorSupportMixin
 
 
+class _JobCancelFlag:
+    def __init__(self, executor: "WorkflowExecutor", orig_idx: int):
+        self._executor = executor
+        self._orig_idx = orig_idx
+
+    def is_set(self) -> bool:
+        return self._executor._cancel.is_set() or self._orig_idx in self._executor._cancelled_indices
+
+
 class WorkflowExecutor(WorkflowExecutorPipelineMixin, WorkflowExecutorSupportMixin, QObject):
     """Führt einen Workflow zweiphasig aus."""
 
@@ -62,9 +71,47 @@ class WorkflowExecutor(WorkflowExecutorPipelineMixin, WorkflowExecutorSupportMix
         self._output_step_stack = OutputStepStack()
         self._processing_phase = ProcessingPhase()
         self._transfer_fail = 0
+        self._cancelled_indices: set[int] = set()
+        self._job_cancel_flags: dict[int, _JobCancelFlag] = {}
 
-    def cancel(self) -> None:
-        self._cancel.set()
+    def cancel(self, active_indices: set[int] | None = None) -> None:
+        if active_indices is None:
+            self._cancel.set()
+            indices = set(self._active_indices) if self._active_indices else {
+                index for index, job in enumerate(self._workflow.jobs) if job.enabled
+            }
+        else:
+            indices = {index for index in active_indices if 0 <= index < len(self._workflow.jobs)}
+        for orig_idx in indices:
+            self._request_job_cancel(orig_idx)
+
+    def _request_job_cancel(self, orig_idx: int) -> None:
+        if not (0 <= orig_idx < len(self._workflow.jobs)):
+            return
+        if orig_idx in self._cancelled_indices:
+            return
+        self._cancelled_indices.add(orig_idx)
+        self._job_cancel_flags.setdefault(orig_idx, _JobCancelFlag(self, orig_idx))
+        self._mark_job_cancelled(orig_idx)
+
+    def _is_job_cancelled(self, orig_idx: int) -> bool:
+        return self._cancel.is_set() or orig_idx in self._cancelled_indices
+
+    def _cancel_flag_for_job(self, orig_idx: int):
+        return self._job_cancel_flags.setdefault(orig_idx, _JobCancelFlag(self, orig_idx))
+
+    def _mark_job_cancelled(self, orig_idx: int) -> None:
+        if not (0 <= orig_idx < len(self._workflow.jobs)):
+            return
+        job = self._workflow.jobs[orig_idx]
+        step_key = str(getattr(job, "current_step_key", "") or "")
+        if step_key and str(job.step_statuses.get(step_key, "") or "") == "running":
+            self._set_step_status(job, step_key, "cancelled")
+            self._set_step_detail(job, step_key, "Durch Benutzer abgebrochen")
+            self._set_job_status(orig_idx, f"{_step_label(step_key)} abgebrochen")
+        else:
+            self._set_job_status(orig_idx, "Job abgebrochen")
+        self.job_progress.emit(orig_idx, 0)
 
     def _handle_direct_files(self, job):
         return self._transfer_step._files_step.execute(self, 0, job)
@@ -100,3 +147,21 @@ class WorkflowExecutor(WorkflowExecutorPipelineMixin, WorkflowExecutorSupportMix
         icon = "✅" if total_fail == 0 else "❌"
         self.log_message.emit(f"\n{icon} Fertig: {ok} OK, {skip} übersprungen, {total_fail} Fehler")
         self.finished.emit(ok, skip, total_fail)
+
+
+def _step_label(step_key: str) -> str:
+    labels = {
+        "transfer": "Transfer",
+        "convert": "Konvertierung",
+        "merge": "Zusammenführen",
+        "titlecard": "Titelkarte",
+        "validate_surface": "Kompatibilität prüfen",
+        "validate_deep": "Deep-Scan",
+        "cleanup": "Cleanup",
+        "repair": "Reparatur",
+        "yt_version": "YT-Version",
+        "stop": "Workflow-Zweig",
+        "youtube_upload": "YouTube-Upload",
+        "kaderblick": "Kaderblick",
+    }
+    return labels.get(step_key, "Job")

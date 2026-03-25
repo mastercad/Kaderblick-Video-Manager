@@ -8,7 +8,7 @@ from ..integrations.youtube import clear_registry_entry_for_output, get_video_id
 from ..settings import AppSettings
 from ..workflow_steps.executor_support import ExecutorSupport
 from ..workflow_steps.merge_group_step import MergeGroupStep
-from .graph import graph_edge_defs, graph_has_post_merge_titlecard, graph_merge_precedes_convert, graph_node_id_for_type, graph_node_map
+from .graph import graph_edge_defs, graph_has_post_merge_titlecard, graph_merge_precedes_convert, graph_node_id_for_type, graph_node_map, graph_reachable_types
 from .model import WorkflowJob
 
 
@@ -348,7 +348,7 @@ def _planned_steps(job: WorkflowJob) -> list[str]:
     }
     has_merge = any(file.merge_group_id for file in job.files) or "merge" in graph_types
     has_graph = bool(getattr(job, "graph_nodes", None))
-    reachable_types = set(graph_types) if has_graph else set()
+    reachable_types = graph_reachable_types(job) if has_graph else set()
     convert_enabled = "convert" in reachable_types if has_graph else job.convert_enabled
     titlecard_enabled = "titlecard" in reachable_types if has_graph else job.title_card_enabled
     youtube_version_enabled = "yt_version" in reachable_types if has_graph else job.create_youtube_version

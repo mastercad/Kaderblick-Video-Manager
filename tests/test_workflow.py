@@ -86,6 +86,9 @@ class TestWorkflowJob:
 
     def test_to_dict_excludes_runtime_fields(self):
         job = WorkflowJob()
+        job.resume_status = "Transfer OK"
+        job.step_statuses = {"transfer": "done"}
+        job.step_details = {"transfer": "Datei: a.mp4"}
         job.status = "Läuft"
         job.progress_pct = 42
         job.overall_progress_pct = 84
@@ -93,7 +96,13 @@ class TestWorkflowJob:
         job.error_msg = "test"
         job.transfer_status = "Transfer 1/3"
         job.transfer_progress_pct = 66
+        job.run_started_at = "2026-03-25T10:00:00"
+        job.run_finished_at = "2026-03-25T10:05:00"
+        job.run_elapsed_seconds = 300.0
         d = job.to_dict()
+        assert "resume_status" not in d
+        assert "step_statuses" not in d
+        assert "step_details" not in d
         assert "status" not in d
         assert "progress_pct" not in d
         assert "overall_progress_pct" not in d
@@ -101,6 +110,39 @@ class TestWorkflowJob:
         assert "error_msg" not in d
         assert "transfer_status" not in d
         assert "transfer_progress_pct" not in d
+        assert "run_started_at" not in d
+        assert "run_finished_at" not in d
+        assert "run_elapsed_seconds" not in d
+
+    def test_to_dict_can_include_resume_runtime_for_last_workflow(self):
+        job = WorkflowJob(
+            resume_status="Transfer OK",
+            step_statuses={"transfer": "done", "convert": "running"},
+            step_details={"convert": "Quelldatei: a.mp4"},
+            progress_pct=42,
+            overall_progress_pct=84,
+            current_step_key="convert",
+            transfer_status="Transfer OK",
+            transfer_progress_pct=100,
+            run_started_at="2026-03-25T10:00:00",
+            run_finished_at="",
+            run_elapsed_seconds=120.0,
+        )
+
+        d = job.to_dict(include_runtime=True)
+
+        assert d["resume_status"] == "Transfer OK"
+        assert d["step_statuses"] == {"transfer": "done", "convert": "running"}
+        assert d["step_details"] == {"convert": "Quelldatei: a.mp4"}
+        assert d["progress_pct"] == 42
+        assert d["overall_progress_pct"] == 84
+        assert d["current_step_key"] == "convert"
+        assert d["transfer_status"] == "Transfer OK"
+        assert d["transfer_progress_pct"] == 100
+        assert d["run_started_at"] == "2026-03-25T10:00:00"
+        assert d["run_elapsed_seconds"] == 120.0
+        assert "status" not in d
+        assert "error_msg" not in d
 
     def test_to_dict_contains_core_fields(self):
         job = WorkflowJob(name="Test", encoder="libx264", crf=22)
@@ -171,12 +213,31 @@ class TestWorkflowJob:
             resume_status="Transfer OK",
             step_statuses={"transfer": "done", "convert": "running"},
         )
-        restored = WorkflowJob.from_dict(job.to_dict())
+        restored = WorkflowJob.from_dict(job.to_dict(include_runtime=True), include_runtime=True)
         assert restored.resume_status == "Transfer OK"
         assert restored.step_statuses == {
             "transfer": "done",
             "convert": "running",
         }
+
+    def test_from_dict_ignores_resume_fields_for_shared_workflow_load(self):
+        restored = WorkflowJob.from_dict(
+            {
+                "name": "Job A",
+                "resume_status": "Transfer OK",
+                "step_statuses": {"transfer": "done"},
+                "progress_pct": 75,
+                "current_step_key": "convert",
+                "run_elapsed_seconds": 3600.0,
+            }
+        )
+
+        assert restored.name == "Job A"
+        assert restored.resume_status == ""
+        assert restored.step_statuses == {}
+        assert restored.progress_pct == 0
+        assert restored.current_step_key == ""
+        assert restored.run_elapsed_seconds == 0.0
 
 
 # ─── Workflow ─────────────────────────────────────────────────────────────────
@@ -201,6 +262,25 @@ class TestWorkflow:
         assert d["name"] == "Test-WF"
         assert isinstance(d["job"], dict)
         assert d["job"]["name"] == "Job A"
+        assert "last_run_started_at" not in d
+        assert "last_run_finished_at" not in d
+        assert "last_run_elapsed_seconds" not in d
+
+    def test_to_dict_can_include_runtime_for_last_workflow_snapshot(self):
+        wf = Workflow(
+            name="Test-WF",
+            job=WorkflowJob(name="Job A", resume_status="Transfer OK", step_statuses={"transfer": "done"}),
+            last_run_started_at="2026-03-25T10:00:00",
+            last_run_finished_at="2026-03-25T10:05:00",
+            last_run_elapsed_seconds=300.0,
+        )
+
+        d = wf.to_dict(include_runtime=True)
+
+        assert d["last_run_started_at"] == "2026-03-25T10:00:00"
+        assert d["last_run_finished_at"] == "2026-03-25T10:05:00"
+        assert d["last_run_elapsed_seconds"] == 300.0
+        assert d["job"]["resume_status"] == "Transfer OK"
 
     def test_roundtrip(self):
         wf = self._make_workflow()
@@ -238,6 +318,43 @@ class TestWorkflow:
             loaded = Workflow.load(path)
 
         assert [job.name for job in loaded.jobs] == ["Job A", "Job B"]
+
+    def test_save_and_load_shared_workflow_strips_resume_state(self):
+        wf = Workflow(
+            name="Test-WF",
+            job=WorkflowJob(
+                name="Job A",
+                source_mode="files",
+                files=[FileEntry(source_path="/tmp/a.mp4")],
+                resume_status="Transfer OK",
+                step_statuses={"transfer": "done", "convert": "running"},
+                progress_pct=42,
+                current_step_key="convert",
+                run_elapsed_seconds=120.0,
+            ),
+            last_run_started_at="2026-03-25T10:00:00",
+            last_run_finished_at="2026-03-25T10:05:00",
+            last_run_elapsed_seconds=300.0,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "workflow.json"
+            wf.save(path)
+            loaded = Workflow.load(path)
+            raw = path.read_text(encoding="utf-8")
+
+        assert '"resume_status"' not in raw
+        assert '"step_statuses"' not in raw
+        assert '"progress_pct"' not in raw
+        assert '"current_step_key"' not in raw
+        assert '"last_run_elapsed_seconds"' not in raw
+        assert loaded.job is not None
+        assert loaded.job.resume_status == ""
+        assert loaded.job.step_statuses == {}
+        assert loaded.job.progress_pct == 0
+        assert loaded.job.current_step_key == ""
+        assert loaded.job.run_elapsed_seconds == 0.0
+        assert loaded.last_run_elapsed_seconds == 0.0
 
     def test_save_creates_parent_dirs(self):
         wf = self._make_workflow()

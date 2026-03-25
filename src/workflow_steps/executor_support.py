@@ -20,9 +20,12 @@ from ..workflow import (
     WorkflowJob,
     graph_node_branch_has_targets,
     graph_node_id_for_type,
+    graph_next_reachable_node_id,
     graph_merge_reaches_type,
     graph_merge_precedes_convert,
+    graph_node_reaches_type,
     graph_reachable_types,
+    graph_source_has_pre_merge_type,
     graph_source_has_pre_merge_titlecard,
     graph_source_nodes,
     graph_source_reaches_merge,
@@ -321,7 +324,7 @@ class ExecutorSupport:
             return cls._fallback_step_enabled(job, target_type)
         source_node_id = cls.source_node_id_for_file(job, file_path)
         if source_node_id:
-            return graph_source_reaches_type(job, source_node_id, target_type)
+            return graph_node_reaches_type(job, source_node_id, target_type)
         return target_type in graph_reachable_types(job)
 
     @staticmethod
@@ -329,6 +332,15 @@ class ExecutorSupport:
         if not ExecutorSupport._has_graph(job):
             return ExecutorSupport._fallback_step_enabled(job, target_type)
         return graph_merge_reaches_type(job, target_type)
+
+    @classmethod
+    def source_reaches_type_before_merge(cls, job: WorkflowJob, file_path: str, target_type: str) -> bool:
+        if not cls._has_graph(job):
+            return False
+        source_node_id = cls.source_node_id_for_file(job, file_path)
+        if not source_node_id:
+            return False
+        return graph_source_has_pre_merge_type(job, source_node_id, target_type)
 
     @staticmethod
     def job_reaches_type(job: WorkflowJob, target_type: str) -> bool:
@@ -376,12 +388,37 @@ class ExecutorSupport:
         if not cls._has_graph(job):
             return cls._fallback_step_enabled(job, target_type)
         branch_results = getattr(prepared, "validation_results", {}) or {}
+        start_node_id = cls._prepared_output_start_node_id(prepared)
+        if start_node_id:
+            return graph_node_reaches_type(job, start_node_id, target_type, branch_results)
         if getattr(prepared, "graph_origin_kind", "source") == "merge":
             return graph_merge_reaches_type(job, target_type, branch_results)
-        origin = getattr(prepared, "graph_origin_node_id", "")
-        if origin:
-            return graph_source_reaches_type(job, origin, target_type, branch_results)
         return target_type in graph_reachable_types(job)
+
+    @classmethod
+    def advance_prepared_output_cursor(cls, prepared: Any, step_name: str) -> None:
+        job = prepared.job
+        if not cls._has_graph(job):
+            return
+        start_node_id = cls._prepared_output_start_node_id(prepared)
+        if not start_node_id:
+            return
+        branch_results = getattr(prepared, "validation_results", {}) or {}
+        next_node_id = graph_next_reachable_node_id(job, start_node_id, step_name, branch_results)
+        if next_node_id:
+            prepared.graph_cursor_node_id = next_node_id
+
+    @staticmethod
+    def _prepared_output_start_node_id(prepared: Any) -> str:
+        cursor_node_id = str(getattr(prepared, "graph_cursor_node_id", "") or "")
+        if cursor_node_id:
+            return cursor_node_id
+        origin_node_id = str(getattr(prepared, "graph_origin_node_id", "") or "")
+        if origin_node_id:
+            return origin_node_id
+        if getattr(prepared, "graph_origin_kind", "source") == "merge":
+            return graph_node_id_for_type(prepared.job, "merge")
+        return ""
 
     @staticmethod
     def graph_node_id_for_type(job: WorkflowJob, node_type: str) -> str:

@@ -40,6 +40,11 @@ class TitleCardStep:
             prepared.job,
             prepared.per_settings,
         )
+        if executor._is_job_cancelled(prepared.orig_idx):
+            executor._set_step_status(prepared.job, "titlecard", "cancelled")
+            executor._set_step_detail(prepared.job, "titlecard", f"Durch Benutzer abgebrochen: {prepared.cv_job.source_path.name}")
+            executor._set_job_status(prepared.orig_idx, "Titelkarte abgebrochen")
+            return 0
         if not success:
             executor._set_step_status(prepared.job, "titlecard", "error")
             executor._set_step_detail(prepared.job, "titlecard", f"Titelkarte fehlgeschlagen für {prepared.cv_job.source_path.name}")
@@ -51,6 +56,7 @@ class TitleCardStep:
         return 0
 
     def _prepend_title_card(self, executor: Any, orig_idx: int, cv_job, job, per_settings) -> tuple[Path, bool]:
+        cancel_flag = executor._cancel_flag_for_job(orig_idx)
         video_path = cv_job.output_path
         if not video_path:
             raise ValueError("cv_job.output_path ist None")
@@ -92,12 +98,12 @@ class TitleCardStep:
             bg_color=job.title_card_bg_color,
             fg_color=job.title_card_fg_color,
             encoder=per_settings.video.encoder,
-            cancel_flag=executor._cancel,
+            cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
             progress_callback=lambda pct: executor.job_progress.emit(orig_idx, min(50, int(pct * 0.5))),
             work_dir=tmpdir,
         )
-        if not ok or executor._cancel.is_set():
+        if not ok or cancel_flag.is_set():
             executor.log_message.emit("  ⚠ Titelkarte konnte nicht erstellt werden")
             self._cleanup_tmpdir(tmpdir)
             return video_path, False
@@ -117,7 +123,7 @@ class TitleCardStep:
         concat_ok = executor._concat_func(
             [card_path, video_path],
             with_intro_path,
-            cancel_flag=executor._cancel,
+            cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
             encoder=per_settings.video.encoder,
             progress_callback=lambda pct: executor.job_progress.emit(orig_idx, 50 + int(pct * 0.5)),
@@ -126,7 +132,7 @@ class TitleCardStep:
 
         self._cleanup_tmpdir(tmpdir)
 
-        if not concat_ok or executor._cancel.is_set():
+        if not concat_ok or cancel_flag.is_set():
             executor.log_message.emit("  ⚠ Zusammenführen mit Titelkarte fehlgeschlagen")
             if with_intro_path.exists():
                 with_intro_path.unlink(missing_ok=True)

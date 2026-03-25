@@ -8,6 +8,8 @@ from .graph import (
     graph_merge_node_ids,
     graph_merge_precedes_convert,
     graph_merge_reaches_type,
+    graph_next_reachable_node_id,
+    graph_node_reaches_type,
     graph_node_branch_has_targets,
     graph_node_id_for_type,
     graph_node_map,
@@ -19,6 +21,7 @@ from .graph import (
     graph_reachable_types,
     graph_source_has_pre_merge_titlecard,
     graph_source_nodes,
+        graph_source_has_pre_merge_type,
     graph_source_reaches_merge,
     graph_source_reaches_type,
 )
@@ -50,6 +53,7 @@ __all__ = [
     "graph_has_multiple_sources",
     "graph_outgoing",
     "graph_outgoing_for_branches",
+        "graph_source_has_pre_merge_type",
     "graph_reachable_node_ids",
     "graph_reachable_types",
     "graph_merge_node_ids",
@@ -61,5 +65,7 @@ __all__ = [
     "graph_path_exists_between_types_for_branches",
     "graph_merge_reaches_type",
     "graph_merge_precedes_convert",
+    "graph_node_reaches_type",
+    "graph_next_reachable_node_id",
     "graph_node_branch_has_targets",
 ]

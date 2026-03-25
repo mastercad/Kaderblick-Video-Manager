@@ -44,6 +44,11 @@ class YoutubeUploadStep:
             yt_service,
             prepared.orig_idx,
         )
+        if executor._is_job_cancelled(prepared.orig_idx):
+            executor._set_step_status(prepared.job, "youtube_upload", "cancelled")
+            executor._set_step_detail(prepared.job, "youtube_upload", self._build_cancelled_summary(prepared))
+            executor._set_job_status(prepared.orig_idx, "YouTube-Upload abgebrochen")
+            return 0
         if not yt_ok:
             executor._set_step_status(prepared.job, "youtube_upload", "error")
             executor._set_step_detail(prepared.job, "youtube_upload", self._build_error_summary(prepared))
@@ -66,7 +71,7 @@ class YoutubeUploadStep:
             settings,
             yt_service,
             log_callback=executor.log_message.emit,
-            cancel_flag=executor._cancel,
+            cancel_flag=executor._cancel_flag_for_job(orig_idx),
             allow_reuse_existing=ExecutorSupport.allow_reuse_existing(executor),
             progress_callback=lambda pct: executor.job_progress.emit(orig_idx, pct),
         )
@@ -81,6 +86,17 @@ class YoutubeUploadStep:
         title = prepared.cv_job.youtube_title or (upload_file.stem if upload_file is not None else "")
         playlist = prepared.cv_job.youtube_playlist or "-"
         return f"Quelldatei: {file_name} | Titel: {title} | Playlist: {playlist} | Ergebnis: Upload fehlgeschlagen"
+
+    @staticmethod
+    def _build_cancelled_summary(prepared: PreparedOutput) -> str:
+        upload_file = YoutubeUploadStep._upload_artifact(prepared)
+        output = prepared.cv_job.output_path
+        if upload_file is not None and not upload_file.exists():
+            upload_file = output
+        file_name = upload_file.name if upload_file is not None else "unbekannt"
+        title = prepared.cv_job.youtube_title or (upload_file.stem if upload_file is not None else "")
+        playlist = prepared.cv_job.youtube_playlist or "-"
+        return f"Quelldatei: {file_name} | Titel: {title} | Playlist: {playlist} | Ergebnis: Durch Benutzer abgebrochen"
 
     @staticmethod
     def _build_summary(prepared: PreparedOutput, video_id: str | None, upload_seconds: float, yt_service: Any, *, existing: bool) -> str:

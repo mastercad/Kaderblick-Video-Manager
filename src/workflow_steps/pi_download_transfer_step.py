@@ -17,6 +17,7 @@ class PiDownloadTransferStep:
         job: WorkflowJob,
         on_file_ready: Callable[[str], None] | None = None,
     ) -> list[str]:
+        cancel_flag = executor._cancel_flag_for_job(orig_idx)
         executor.source_progress.emit(orig_idx, 0)
         device = next(
             (configured for configured in executor._settings.cameras.devices if configured.name == job.device_name),
@@ -66,7 +67,7 @@ class PiDownloadTransferStep:
                 config=executor._settings.cameras,
                 log_cb=executor.log_message.emit,
                 progress_cb=_on_progress,
-                cancel_flag=executor._cancel,
+                cancel_flag=cancel_flag,
                 allow_reuse_existing=ExecutorSupport.allow_reuse_existing(executor),
                 destination_override=str(destination_root) if destination_root is not None else "",
                 create_device_subdir=False,
@@ -74,6 +75,11 @@ class PiDownloadTransferStep:
                 selective_bases=selective,
             )
         except Exception as exc:
+            if cancel_flag.is_set():
+                executor._set_step_status(job, "transfer", "cancelled")
+                executor._set_step_detail(job, "transfer", f"Download von {device.name} ({device.ip}) | Durch Benutzer abgebrochen")
+                executor._set_job_status(orig_idx, "Transfer abgebrochen")
+                return []
             fallback = self._existing_targets(executor, job) if ExecutorSupport.allow_reuse_existing(executor) else []
             if fallback:
                 executor.log_message.emit(
@@ -88,6 +94,11 @@ class PiDownloadTransferStep:
             raise
 
         paths = [result[2] for result in results]
+        if cancel_flag.is_set():
+            executor._set_step_status(job, "transfer", "cancelled")
+            executor._set_step_detail(job, "transfer", f"Download von {device.name} ({device.ip}) | Durch Benutzer abgebrochen")
+            executor._set_job_status(orig_idx, "Transfer abgebrochen")
+            return []
         if paths:
             executor._set_step_detail(
                 job,

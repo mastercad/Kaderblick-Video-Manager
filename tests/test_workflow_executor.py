@@ -173,6 +173,29 @@ class TestResolveYoutubeTitle:
         assert entry.title_card_subtitle == "aufnahme_001"
 
 
+class TestPlannedGraphSteps:
+    def test_disconnected_titlecard_is_not_a_planned_step(self):
+        job = WorkflowJob(
+            name="Disconnected Titlecard",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/input.mp4", graph_source_id="source-1")],
+            graph_nodes=[
+                {"id": "source-1", "type": "source_files"},
+                {"id": "merge-1", "type": "merge"},
+                {"id": "upload-1", "type": "youtube_upload"},
+                {"id": "title-1", "type": "titlecard"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "merge-1"},
+                {"source": "merge-1", "target": "upload-1"},
+            ],
+        )
+
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+
+        assert ex._planned_job_steps(job) == ["transfer", "merge", "youtube_upload"]
+
+
 # ─── _build_job_settings ──────────────────────────────────────────────────────
 
 class TestBuildJobSettings:
@@ -2106,6 +2129,28 @@ class TestWorkflowStackScenarios:
         assert runner.is_alive() is False
         assert converted == ["first.mp4"]
 
+    def test_selective_cancel_marks_current_step_as_aborted_not_failed(self, tmp_path):
+        source = tmp_path / "clip.mp4"
+        source.write_text("a", encoding="utf-8")
+        job = WorkflowJob(
+            name="Job A",
+            source_mode="files",
+            convert_enabled=True,
+            files=[FileEntry(source_path=str(source))],
+        )
+        job.current_step_key = "convert"
+        job.step_statuses = {"convert": "running"}
+
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings(), active_indices={0})
+        statuses: list[str] = []
+        ex.job_status.connect(lambda _idx, status: statuses.append(status))
+
+        ex.cancel(active_indices={0})
+
+        assert job.step_statuses["convert"] == "cancelled"
+        assert job.step_details["convert"] == "Durch Benutzer abgebrochen"
+        assert statuses[-1] == "Konvertierung abgebrochen"
+
     def test_pipeline_can_merge_before_convert_when_graph_requests_it(self, tmp_path):
         source_a = tmp_path / "kamera1.mp4"
         source_b = tmp_path / "kamera2.mp4"
@@ -2280,6 +2325,72 @@ class TestWorkflowStackScenarios:
         assert second_convert_during_upload.is_set()
         assert "Fertig 1/2" in statuses
         assert statuses[-1] == "Fertig"
+
+    def test_dead_end_convert_branch_does_not_affect_parallel_merge_inputs(self, tmp_path):
+        source_a = tmp_path / "part1.mp4"
+        source_b = tmp_path / "part2.mp4"
+        source_a.write_text("a", encoding="utf-8")
+        source_b.write_text("b", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Parallel Dead-End Convert",
+            source_mode="files",
+            convert_enabled=True,
+            upload_youtube=True,
+            files=[
+                FileEntry(source_path=str(source_a), graph_source_id="source-1"),
+                FileEntry(source_path=str(source_b), graph_source_id="source-1"),
+            ],
+            graph_nodes=[
+                {"id": "source-1", "type": "source_files"},
+                {"id": "convert-1", "type": "convert"},
+                {"id": "merge-1", "type": "merge"},
+                {"id": "upload-1", "type": "youtube_upload"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "convert-1"},
+                {"source": "source-1", "target": "merge-1"},
+                {"source": "merge-1", "target": "upload-1"},
+            ],
+        )
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+        concat_sources: list[Path] = []
+
+        def _transfer(_executor, _orig_idx, _job, on_file_ready=None):
+            assert on_file_ready is not None
+            on_file_ready(str(source_a))
+            on_file_ready(str(source_b))
+            return [str(source_a), str(source_b)]
+
+        def _convert(_executor, _orig_idx, _job, cv_job, _settings, _done_count, _total_count):
+            output = cv_job.source_path.with_stem(cv_job.source_path.stem + "_converted")
+            output.write_text("converted", encoding="utf-8")
+            cv_job.output_path = output
+            cv_job.status = "Fertig"
+            return "ok"
+
+        def _concat(sources, dest, **_kwargs):
+            concat_sources[:] = list(sources)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_text("merged", encoding="utf-8")
+            return True
+
+        with patch.object(ex._transfer_step, "execute", side_effect=_transfer), patch.object(
+            ex._convert_step,
+            "execute",
+            side_effect=_convert,
+        ), patch.object(ex, "_concat_func", side_effect=_concat), patch.object(
+            ex._output_step_stack,
+            "execute_processing_steps",
+            return_value=0,
+        ), patch.object(
+            ex._output_step_stack,
+            "execute_delivery_steps",
+            return_value=0,
+        ), patch("src.runtime.workflow_executor.get_youtube_service", return_value=MagicMock()):
+            ex.run()
+
+        assert concat_sources == [source_a, source_b]
 
 
 # ─── Merge-Concat: Standard-Dateien verwenden ────────────────────────────────

@@ -136,40 +136,76 @@ def graph_source_reaches_merge(job: WorkflowJob, source_node_id: str) -> bool:
     return False
 
 
-def graph_source_reaches_type(
+def graph_node_reaches_type(
     job: WorkflowJob,
-    source_node_id: str,
+    start_node_id: str,
     target_type: str,
     branch_results: dict[str, str] | None = None,
 ) -> bool:
     nodes = graph_node_map(job)
     outgoing = graph_outgoing_for_branches(job, branch_results)
-    stack = [source_node_id]
+    stack = [start_node_id]
     visited: set[str] = set()
     while stack:
         node_id = stack.pop()
         if node_id in visited:
             continue
         visited.add(node_id)
-        if nodes.get(node_id) == target_type and node_id != source_node_id:
+        if nodes.get(node_id) == target_type and node_id != start_node_id:
             return True
         stack.extend(outgoing.get(node_id, []))
     return False
 
 
+def graph_next_reachable_node_id(
+    job: WorkflowJob,
+    start_node_id: str,
+    target_type: str,
+    branch_results: dict[str, str] | None = None,
+) -> str:
+    nodes = graph_node_map(job)
+    outgoing = graph_outgoing_for_branches(job, branch_results)
+    stack = [start_node_id]
+    visited: set[str] = set()
+    while stack:
+        node_id = stack.pop()
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+        if nodes.get(node_id) == target_type and node_id != start_node_id:
+            return node_id
+        next_nodes = list(outgoing.get(node_id, []))
+        next_nodes.reverse()
+        stack.extend(next_nodes)
+    return ""
+
+
+def graph_source_reaches_type(
+    job: WorkflowJob,
+    source_node_id: str,
+    target_type: str,
+    branch_results: dict[str, str] | None = None,
+) -> bool:
+    return graph_node_reaches_type(job, source_node_id, target_type, branch_results)
+
+
 def graph_source_has_pre_merge_titlecard(job: WorkflowJob, source_node_id: str) -> bool:
+    return graph_source_has_pre_merge_type(job, source_node_id, "titlecard")
+
+
+def graph_source_has_pre_merge_type(job: WorkflowJob, source_node_id: str, target_type: str) -> bool:
     nodes = graph_node_map(job)
     outgoing = graph_outgoing(job)
     stack: list[tuple[str, bool]] = [(source_node_id, False)]
     visited: set[tuple[str, bool]] = set()
     while stack:
-        node_id, seen_titlecard = stack.pop()
-        state = (node_id, seen_titlecard)
+        node_id, seen_target = stack.pop()
+        state = (node_id, seen_target)
         if state in visited:
             continue
         visited.add(state)
         node_type = nodes.get(node_id)
-        next_seen = seen_titlecard or (node_type == "titlecard" and node_id != source_node_id)
+        next_seen = seen_target or (node_type == target_type and node_id != source_node_id)
         if node_type == "merge" and node_id != source_node_id:
             if next_seen:
                 return True

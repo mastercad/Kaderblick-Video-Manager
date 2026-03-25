@@ -48,13 +48,19 @@ class RepairOutputStep:
         executor._set_step_status(prepared.job, "repair", "running")
         executor._set_job_status(prepared.orig_idx, "Repariere Ausgabe …")
         executor.job_progress.emit(prepared.orig_idx, 0)
+        cancel_flag = executor._cancel_flag_for_job(prepared.orig_idx)
         ok = run_repair_output(
             prepared.cv_job,
             prepared.per_settings,
-            cancel_flag=executor._cancel,
+            cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
             progress_callback=lambda pct: executor.job_progress.emit(prepared.orig_idx, pct),
         )
+        if executor._is_job_cancelled(prepared.orig_idx):
+            executor._set_step_status(prepared.job, "repair", "cancelled")
+            executor._set_step_detail(prepared.job, "repair", f"Durch Benutzer abgebrochen: {current_output.name}")
+            executor._set_job_status(prepared.orig_idx, "Reparatur abgebrochen")
+            return 0
         if not ok:
             executor._set_step_status(prepared.job, "repair", "error")
             executor._set_step_detail(prepared.job, "repair", f"Reparatur fehlgeschlagen für {current_output.name}")

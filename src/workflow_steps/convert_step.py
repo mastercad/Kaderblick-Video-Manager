@@ -22,6 +22,7 @@ class ConvertStep:
         done_count: int,
         total_count: int,
     ) -> str:
+        cancel_flag = executor._cancel_flag_for_job(orig_idx)
         existing_output = self._find_existing_output(cv_job, job, per_settings)
         if existing_output is not None and existing_output.exists() and not per_settings.video.overwrite:
             cv_job.output_path = existing_output
@@ -54,10 +55,16 @@ class ConvertStep:
         success = executor._convert_func(
             cv_job,
             per_settings,
-            cancel_flag=executor._cancel,
+            cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
             progress_callback=_progress,
         )
+
+        if executor._is_job_cancelled(orig_idx) or cv_job.status == "Abgebrochen":
+            executor._set_step_status(job, "convert", "cancelled")
+            executor._set_step_detail(job, "convert", f"Quelle: {cv_job.source_path.name} | Durch Benutzer abgebrochen")
+            executor._set_job_status(orig_idx, "Konvertierung abgebrochen")
+            return "cancelled"
 
         if success and cv_job.status == "Fertig":
             executor._set_step_status(job, "convert", "done")
