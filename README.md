@@ -1,533 +1,550 @@
 # Kaderblick — Video Manager
 
-Grafische Oberfläche für die Video-Konvertierung und den Download von Videos von Raspberry Pi
-Kamera-Systemen (Kaderblick). Unterstützt sowohl MJPEG-Rohstreams (Pi-Kameras) als auch reguläre
-Video-Container (MP4, MKV, AVI, MOV) mit eingebetteter Tonspur. Bietet eine komfortable Qt-GUI
-(PySide6) mit Jobliste, Profilen, GPU-Beschleunigung, Raspberry Pi Download,
-Halbzeit-Zusammenführung, persistenten Einstellungen, Hintergrund-Verarbeitung und einem
-**Job-Editor** für die komfortable Konfiguration einzelner Verarbeitungs-Aufträge.
+Der Kaderblick — Video Manager hilft Ihnen dabei, Fußball-Videos an einem Ort zu sammeln, zu verarbeiten und bei Bedarf auf YouTube und Kaderblick weiterzugeben.
+
+Diese Anleitung richtet sich an Menschen ohne Technik-Erfahrung. Sie erklärt nicht die interne Technik der App, sondern den einfachen Arbeitsablauf im Alltag.
+
+Mit der App können Sie:
+
+- einzelne Videos auswählen und verarbeiten
+- einen ganzen Ordner mit Videos verarbeiten
+- Aufnahmen direkt von einer Raspberry-Pi-Kamera laden
+- Videos umwandeln
+- mehrere zusammengehörige Videos zusammenführen
+- eine Titelkarte vor ein Video setzen
+- eine YouTube-Version erzeugen
+- Videos auf YouTube hochladen
+- den YouTube-Link bei Kaderblick eintragen
+
+Weiterführende Anleitung für YouTube: [YouTube API – Credentials einrichten](docs/youtube_credentials.md)
+
+---
+
+## So sieht die App aus
 
 <p align="center">
-  <img src="assets/application_main.png" alt="Kaderblick — Video Manager — Hauptbildschirm" width="600">
+  <img src="assets/application_main.png" alt="Hauptfenster des Kaderblick — Video Managers mit Workflow-Liste oben und Protokoll unten" width="1200">
 </p>
 
-Weiterführende Doku: [YouTube API – Credentials einrichten](docs/youtube_credentials.md)
+Das Hauptfenster besteht aus drei Bereichen:
+
+- oben: die grüne Leiste mit den wichtigsten Aktionen
+- in der Mitte: Ihre Workflow-Liste
+- unten: das Protokoll mit allen laufenden Meldungen
+
+Jede Zeile in der Mitte ist ein Workflow.
+
+Ein Workflow ist einfach ein kompletter Arbeitsauftrag, zum Beispiel:
+
+- „Zwei Halbzeiten von der Kamera holen, zusammenführen und hochladen“
+- „Drei vorhandene MP4-Dateien nur konvertieren“
+- „Einen Ordner mit Aufnahmen prüfen und für YouTube vorbereiten“
 
 ---
 
-## Features
+## Der einfachste Einstieg
 
-- **Jobliste** – Aufträge anlegen, bearbeiten, duplizieren und als Queue abarbeiten
-- **Job-Editor** – Ein-Dialog-Baukasten: Quelle, Verarbeitung, Audio und YouTube in einem einzigen, scrollbaren Dialog konfigurieren; beim Anlegen stehen vorgefertigte **Pipeline-Vorlagen** zur Auswahl
-- **Profile** – Vorkonfigurierte Einstellungen: *KI Auswertung*, *YouTube*, *Benutzerdefiniert*
-- **Hardware-Encoding** – NVIDIA NVENC-Beschleunigung mit automatischer Erkennung und Fallback auf CPU
-- **GPU-Diagnose** – Detaillierte Statusanzeige mit Lösungsvorschlägen bei Problemen
-- **Raspberry Pi Download** – Videos direkt von angebundenen Kamera-Systemen herunterladen (rsync mit nativem SSH, SFTP als Fallback)
-- **Halbzeiten zusammenführen** – Automatische Erkennung und Zusammenführung mit Titelkarten
-- **Einstellungs-Dialoge** – Video, Audio und YouTube werden in separaten Dialogen konfiguriert
-- **Persistente Einstellungen** – Alle Settings werden in `data/settings.json` gespeichert
-- **Hintergrund-Verarbeitung** – ffmpeg läuft in einem Worker-Thread, die GUI bleibt bedienbar
-- **Fortschrittsanzeige** – Statusbar mit Fortschrittsbalken, Geschwindigkeit (MB/s) und ETA-Anzeige
-- **Resume-Unterstützung** – Abgebrochene Downloads werden beim nächsten Start automatisch fortgesetzt
-- **Protokoll** – Scrollbares Log mit detaillierten Meldungen
-- **Abbruch-Funktion** – Laufende Konvertierungen oder Downloads abbrechen
-- **YouTube-Upload** – Automatischer Upload mit Playlist-Verwaltung (Playlist wird bei Bedarf angelegt)
-- **Download → Konvertierung → Upload** – Durchgängige Pipeline: Pi-Downloads, Konvertierung und YouTube-Upload in einem Durchlauf
-- **Container-Unterstützung** – Neben MJPEG-Rohstreams auch MP4/MKV/AVI/MOV mit eingebetteter Tonspur. Leise Aufnahmen können direkt verstärkt werden (konfigurierbar in dB)
+Wenn Sie die App das erste Mal benutzen, arbeiten Sie am besten immer in dieser Reihenfolge:
+
+1. Workflow anlegen
+2. Workflow bearbeiten
+3. Workflow speichern
+4. Workflow starten
+5. Fortschritt beobachten
+
+Die folgenden Kapitel erklären genau diese Reihenfolge.
 
 ---
 
-## Voraussetzungen
+## Schritt 1: Einen Workflow anlegen
 
-- **Python** ≥ 3.11
-- **ffmpeg** und **ffprobe** (für die Video-Konvertierung)
-- *Optional:* **NVIDIA-GPU** mit Treiber ≥ 550.54 für Hardware-Encoding (NVENC)
-- *Optional:* SSH-Zugang zu den Raspberry Pi Kameras (für den Download)
-- *Optional:* **rsync** – wird als primäre Transfermethode genutzt (hardware-beschleunigte AES-NI, ~100 MB/s auf 1 Gbit)
-- *Optional:* **sshpass** – wird für rsync mit Passwort-Auth benötigt (`sudo apt install sshpass`)
+Klicken Sie oben auf `＋ Neuer Workflow`.
+
+Danach öffnet die App zuerst den grafischen Workflow-Editor.
+
+Das ist normal.
+
+Für Einsteiger ist der einfachste Weg:
+
+1. `＋ Neuer Workflow` klicken
+2. den geöffneten Workflow-Editor einfach mit `Übernehmen` bestätigen
+3. danach den neuen Workflow in der Liste markieren
+4. auf `Bearbeiten` klicken
+
+Damit arbeiten Sie anschließend im einfachen Assistenten weiter.
+
+Wenn Sie schon einen ähnlichen Workflow haben, ist es oft noch einfacher, diesen zu markieren und `Kopieren` zu klicken. Danach ändern Sie nur noch die Stellen, die anders sein sollen.
 
 ---
 
-## Installation
+## Schritt 2: Einen Workflow bearbeiten
 
-```bash
-# 1. Virtual Environment erstellen (falls noch nicht vorhanden)
-python3 -m venv .venv
-source .venv/bin/activate
+Markieren Sie einen Workflow in der Liste und klicken Sie oben auf `Bearbeiten`.
 
-# 2. Abhängigkeiten installieren
-pip install -r requirements.txt
+Dann öffnet sich ein Assistent mit 4 Seiten:
+
+- `1 Quelle`
+- `2 Verarbeitung`
+- `3 Titelkarte`
+- `4 Upload`
+
+Gehen Sie diese Seiten von links nach rechts durch.
+
+---
+
+## Schritt 2a: Die Quelle festlegen
+
+Auf der Seite `1 Quelle` legen Sie fest, woher das Material kommt.
+
+Die App kennt genau drei Möglichkeiten:
+
+- `Dateien auswählen`
+- `Ordner scannen`
+- `Pi-Kamera`
+
+### Wenn Sie schon fertige Dateien haben
+
+Wählen Sie `Dateien auswählen`.
+
+Dann können Sie mit `＋ Dateien …` Ihre Videos in die Liste einfügen.
+
+In dieser Liste können Sie pro Datei direkt pflegen:
+
+- Ausgabename
+- YouTube-Titel
+- Playlist
+- Kaderblick-Start in Sekunden
+
+Wenn Sie viele Dateien auf einmal mit Spieldaten füllen möchten, nutzen Sie `🎬 Alle belegen …`.
+
+### Wenn Ihre Dateien in einem Ordner liegen
+
+Wählen Sie `Ordner scannen`.
+
+Dann tragen Sie ein:
+
+- den `Quellordner`
+- das `Datei-Muster`, zum Beispiel `*.mp4`
+- optional einen `Zielordner`
+- optional ein `Ausgabe-Präfix`
+
+Das ist sinnvoll, wenn Sie regelmäßig denselben Ordner verarbeiten.
+
+### Wenn die Videos erst von einer Pi-Kamera geholt werden sollen
+
+Wählen Sie `Pi-Kamera`.
+
+Dann stellen Sie ein:
+
+- welches Gerät verwendet werden soll
+- wohin die Dateien gespeichert werden sollen
+- ob die Aufnahmen nach dem Download von der Kamera gelöscht werden sollen
+
+Mit `📋 Dateien von Kamera laden` liest die App die vorhandenen Aufnahmen von der gewählten Kamera ein.
+
+Danach erscheint darunter eine Liste mit den gefundenen Dateien.
+
+In dieser Liste können Sie dann wieder Titel, Playlist und weitere Angaben pflegen.
+
+> Screenshot-Platzhalter: `assets/readme_job_editor_1_quelle.png`
+> Zu sehen sein soll: Seite `1 Quelle` mit den drei Quellen-Karten und darunter der Eingabebereich.
+
+---
+
+## Schritt 2b: Festlegen, was mit dem Video gemacht werden soll
+
+Auf der Seite `2 Verarbeitung` legen Sie fest, wie das Video bearbeitet werden soll.
+
+Die wichtigste Schaltfläche dort ist `Dateien konvertieren`.
+
+Wenn diese Option aktiv ist, wandelt die App das Material in das gewünschte Zielformat um.
+
+Sie können dort unter anderem einstellen:
+
+- `Encoder`
+- `Preset`
+- `CRF`
+- `Framerate`
+- `Auflösung`
+- `Format`
+- `Vorhandene Ausgabedateien überschreiben`
+
+Darunter gibt es den Bereich `Audio`.
+
+Dort können Sie zum Beispiel:
+
+- eine separate Audio-Spur zusammenführen
+- die Lautstärke anpassen
+- `Audio-Sync aktivieren`
+
+Wenn Sie sich unsicher sind, ändern Sie nur das Nötigste und arbeiten mit den Standardwerten weiter.
+
+> Screenshot-Platzhalter: `assets/readme_job_editor_2_verarbeitung.png`
+> Zu sehen sein soll: Seite `2 Verarbeitung` mit den Video-Einstellungen oben und dem Audio-Bereich unten.
+
+---
+
+## Schritt 2c: Eine Titelkarte verwenden
+
+Auf der Seite `3 Titelkarte` können Sie eine Titelkarte vor das Video setzen.
+
+Das ist sinnvoll, wenn am Anfang eines Videos zum Beispiel Mannschaften und Datum eingeblendet werden sollen.
+
+Dort können Sie eintragen:
+
+- Logo
+- Heim
+- Gast
+- Datum
+- Dauer
+- Hintergrundfarbe
+- Textfarbe
+
+Wenn Sie keine Titelkarte brauchen, lassen Sie diese Funktion einfach ausgeschaltet.
+
+> Screenshot-Platzhalter: `assets/readme_job_editor_3_titelkarte.png`
+> Zu sehen sein soll: Seite `3 Titelkarte` mit aktivierter Titelkarte und sichtbaren Feldern für Logo, Teams, Datum, Dauer und Farben.
+
+---
+
+## Schritt 2d: YouTube und Kaderblick festlegen
+
+Auf der Seite `4 Upload` bestimmen Sie, was nach der Verarbeitung passieren soll.
+
+Sie können dort:
+
+- `Auf YouTube hochladen`
+- `YouTube-optimierte Version erstellen`
+- einen `Standard-Titel` setzen
+- eine `Playlist` setzen
+- `Video nach YouTube-Upload auf Kaderblick eintragen`
+
+Wenn Sie Kaderblick nutzen möchten, können Sie dort außerdem eine `Spiel-ID` eintragen.
+
+Wichtig:
+
+- Kaderblick ist nur sinnvoll, wenn das Video vorher auf YouTube hochgeladen wurde.
+- Für YouTube braucht die App die Dateien `config/client_secret.json` und `data/youtube_token.json`.
+
+> Screenshot-Platzhalter: `assets/readme_job_editor_4_upload.png`
+> Zu sehen sein soll: Seite `4 Upload` mit dem Bereich `YouTube` und dem Bereich `Kaderblick`.
+
+---
+
+## Schritt 3: Den Workflow speichern
+
+Wenn Ihr Workflow fertig eingerichtet ist, klicken Sie im Hauptfenster auf `Speichern`.
+
+Die App speichert dann eine Workflow-Datei als JSON-Datei.
+
+Diese Datei enthält:
+
+- Ihren Workflow-Aufbau
+- Ihre Quelle
+- Ihre Einstellungen
+
+Diese Datei enthält nicht:
+
+- den aktuellen Fortschritt
+- den aktuellen Bearbeitungsstand
+- die aktuelle Laufzeit
+
+Das ist wichtig, wenn Sie einen Workflow an andere Menschen weitergeben möchten.
+
+Der Empfänger bekommt nur den Workflow selbst, nicht Ihren persönlichen Zwischenstand.
+
+---
+
+## Schritt 4: Den Workflow starten
+
+Markieren Sie einen oder mehrere Workflows in der Liste.
+
+Klicken Sie danach auf `▶ Starten`.
+
+Wenn Sie nichts markieren, startet die App alle aktiven Workflows.
+
+Während der Verarbeitung sehen Sie in der Liste:
+
+- in `Status`, was gerade passiert
+- in `Job`, wie weit der Workflow insgesamt ist
+- in `Dauer`, wie lange dieser Workflow schon gearbeitet hat
+
+Im Protokoll unten sehen Sie zusätzlich die einzelnen Meldungen im Detail.
+
+---
+
+## Schritt 5: Einen laufenden Workflow abbrechen
+
+Wenn Sie eine Verarbeitung anhalten möchten, klicken Sie auf `■ Abbrechen`.
+
+Die App fragt dann zur Sicherheit nach.
+
+Wenn Sie vorher bestimmte Zeilen markiert haben, werden nur diese Workflows abgebrochen.
+
+Wenn nichts markiert ist, werden alle laufenden Workflows abgebrochen.
+
+---
+
+## Wenn die App fragt: Fortsetzen oder neu starten?
+
+Manchmal meldet die App beim Start, dass es gespeicherte Fortschrittsdaten gibt.
+
+Dann bietet sie an:
+
+- `Fortsetzen`
+- `Neu starten`
+- `Abbrechen`
+
+`Fortsetzen` bedeutet:
+
+- die App macht dort weiter, wo der letzte Lauf aufgehört hat
+
+`Neu starten` bedeutet:
+
+- der gespeicherte Fortschritt wird verworfen
+- der Workflow beginnt wieder von vorne
+
+---
+
+## Was der grafische Workflow-Editor macht
+
+Wenn Sie im Hauptfenster einen Workflow markieren und `Workflow` klicken, öffnet sich der grafische Workflow-Editor.
+
+Dieser Bereich ist für den Ablauf des Workflows zuständig.
+
+Dort können Sie festlegen, welche Schritte nacheinander ausgeführt werden.
+
+Die App kennt dort unter anderem diese Bausteine:
+
+- `Dateien`
+- `Ordner-Scan`
+- `Pi-Download`
+- `Konvertierung`
+- `Merge`
+- `Titelkarte`
+- `Quick-Check`
+- `Deep-Scan`
+- `Cleanup`
+- `Reparatur`
+- `YT-Version`
+- `Stop / Log`
+- `YouTube Upload`
+- `Kaderblick`
+
+Für Einsteiger gilt:
+
+- Sie müssen den grafischen Editor nicht sofort im Detail verstehen.
+- Wenn ein Workflow für Sie schon richtig aufgebaut ist, reicht oft `Bearbeiten` im Assistenten.
+- Der grafische Editor ist vor allem dann wichtig, wenn der Ablauf selbst geändert werden soll.
+
+> Screenshot-Platzhalter: `assets/readme_workflow_editor.png`
+> Zu sehen sein soll: links die Baustein-Palette, in der Mitte der Graph und rechts die Einstellungen des ausgewählten Knotens.
+
+---
+
+## Einstellungen, die Sie kennen sollten
+
+Im Menü `Einstellungen` finden Sie diese Bereiche:
+
+- `Video …`
+- `Audio …`
+- `YouTube …`
+- `Kaderblick …`
+- `Kameras …`
+- `Allgemein …`
+
+### Video …
+
+Hier legen Sie die allgemeinen Standardwerte für die Video-Verarbeitung fest.
+
+Das ist der richtige Ort für Dinge wie:
+
+- Profil
+- Encoder
+- GPU-Status
+- CRF
+- Auflösung
+- Format
+- Audio-Video-Sync
+
+> Screenshot-Platzhalter: `assets/readme_settings_video.png`
+> Zu sehen sein soll: Dialog `Video-Einstellungen` mit Profil, Encoder, GPU-Status und den wichtigsten Video-Feldern.
+
+### Audio …
+
+Hier legen Sie die allgemeinen Standardwerte für den Ton fest, zum Beispiel:
+
+- ob Audio eingebunden wird
+- ob Audio verstärkt wird
+- wie stark verstärkt wird
+- welche Audio-Bitrate genutzt wird
+
+### YouTube …
+
+Hier legen Sie allgemeine YouTube-Standardwerte fest, zum Beispiel:
+
+- ob eine YouTube-Version erzeugt wird
+- CRF
+- maximale Bitrate
+- Buffer-Größe
+- Audio-Bitrate
+- ob Uploads aktiviert sind
+
+### Kaderblick …
+
+Hier wird die Verbindung zu Kaderblick eingerichtet.
+
+Sichtbar sind dort:
+
+- `Base-URL`
+- `Auth-Modus`
+- `JWT-Token`
+- `Refresh-Token`
+- `Bearer-Token`
+
+### Kameras …
+
+Hier verwalten Sie die Raspberry-Pi-Geräte.
+
+Pro Gerät gibt es diese Felder:
+
+- Name
+- IP-Adresse
+- Port
+- Benutzername
+- Passwort
+- SSH-Key
+
+Außerdem gibt es dort den Quellpfad auf dem Pi.
+
+> Screenshot-Platzhalter: `assets/readme_settings_kameras.png`
+> Zu sehen sein soll: Dialog `Kamera-Einstellungen` mit Geräteliste und den Schaltflächen zum Hinzufügen, Bearbeiten und Entfernen.
+
+### Allgemein …
+
+Hier stellen Sie das allgemeine Verhalten der App ein.
+
+Besonders wichtig sind:
+
+- `Letzten Workflow-Stand beim Start wiederherstellen`
+- der `Basisordner` für die globale Ausgabe
+- die globalen Spieldaten
+
+> Screenshot-Platzhalter: `assets/readme_settings_allgemein.png`
+> Zu sehen sein soll: Dialog `Allgemeine Einstellungen` mit Wiederherstellung des letzten Workflow-Stands, Basisordner und globalen Spieldaten.
+
+---
+
+## Wenn Sie mit Pi-Kameras arbeiten
+
+Dann ist dieser Ablauf im Alltag meistens der einfachste:
+
+1. in `Einstellungen` → `Kameras …` die Geräte sauber eintragen
+2. einen Workflow mit Quelle `Pi-Kamera` anlegen
+3. das richtige Gerät auswählen
+4. `📋 Dateien von Kamera laden` klicken
+5. die gewünschten Einträge in der Liste prüfen
+6. Workflow speichern
+7. Workflow starten
+
+> Screenshot-Platzhalter: `assets/readme_source_pi_dateiliste.png`
+> Zu sehen sein soll: Seite `1 Quelle` im Modus `Pi-Kamera` mit eingeblendeter Dateiliste nach dem Laden der Aufnahmen.
+
+---
+
+## Welche Dateien und Ordner für Sie wichtig sind
+
+Für normale Nutzer sind vor allem diese Orte wichtig:
+
+```text
+config/settings.json
+config/client_secret.json
+data/last_workflow.json
+data/youtube_token.json
+data/integration_state.json
+workflows/
 ```
 
-### ffmpeg installieren
+### `workflows/`
 
-```bash
-# Debian / Ubuntu
-sudo apt install ffmpeg
+Hier können Sie Ihre gespeicherten Workflow-Dateien ablegen.
 
-# Arch
-sudo pacman -S ffmpeg
-```
+### `config/settings.json`
+
+Hier speichert die App Ihre allgemeinen Einstellungen.
+
+### `data/last_workflow.json`
+
+Hier speichert die App automatisch den letzten bekannten Arbeitsstand, damit ein Workflow später fortgesetzt werden kann.
+
+### `config/client_secret.json`
+
+Diese Datei wird für YouTube gebraucht.
+
+### `data/youtube_token.json`
+
+Hier speichert die App das YouTube-Anmeldetoken.
 
 ---
 
-## Starten
+## Starten der App
+
+Die App wird mit diesem Befehl gestartet:
 
 ```bash
 python main.py
 ```
 
-### Kommandozeilen-Optionen
-
-| Option | Beschreibung |
-|---|---|
-| `--workflow PFAD` | Lädt eine Workflow-JSON-Datei und führt sie nach dem Start automatisch aus. |
-| `--add DATEI [DATEI …]` | Fügt die angegebenen Dateien (oder alle Dateien in Ordnern) beim Start in die Jobliste ein. |
-| `--restore-last-workflow` | Erzwingt die Wiederherstellung des zuletzt gespeicherten Workflows (unabhängig von der Einstellung). |
-| `--no-restore-last-workflow` | Unterdrückt die Wiederherstellung des zuletzt gespeicherten Workflows. |
-| `-h`, `--help` | Zeigt die Hilfe mit allen Optionen an. |
-
-**Beispiele:**
-
-```bash
-# Workflow direkt aus der Kommandozeile laden und starten
-python main.py --workflow workflows/spieltag.json
-
-# Letzten Workflow explizit wiederherstellen
-python main.py --restore-last-workflow
-
-# Dateien vorladen
-python main.py --add /pfad/zu/video1.mjpg /pfad/zu/video2.mjpeg
-```
+Für normale Nutzer ist das der einzige Startbefehl, den Sie brauchen.
 
 ---
 
-## Projektstruktur
+## Voraussetzungen
 
-```
-projekt-root/
-├── README.md                       <- Diese Datei
-├── config/                         <- Konfigurationsdateien
-│   ├── settings.json               <- Persistente App- und Kamera-Einstellungen
-│   └── client_secret.json          <- YouTube OAuth (manuell, nicht im Git)
-├── data/                           <- Laufzeitdaten (automatisch erzeugt)
-│   ├── last_workflow.json          <- Letzter Workflow-Zustand für Wiederherstellung
-│   ├── integration_state.json      <- Upload-Register und Metadaten-Historie
-│   └── youtube_token.json          <- YouTube OAuth-Token (automatisch)
-├── workflows/                      <- Manuell gespeicherte Workflow-Dateien (JSON)
-├── docs/
-│   └── youtube_credentials.md      <- Doku: YouTube-API-Setup
-├── main.py                         <- GUI-Einstiegspunkt
-├── src/                            <- Anwendungspaket
-│   ├── __init__.py
-│   └── ...
-│   └── youtube.py                  <- YouTube-Upload und OAuth
-└── requirements.txt                <- Python-Abhängigkeiten
-```
+Im Projekt ist aktuell vorgesehen:
+
+- Python 3.10 oder neuer
+- `ffmpeg`
+- `ffprobe`
+
+Optional, aber für bestimmte Funktionen nützlich:
+
+- `rsync`
+- `sshpass`
+
+Die Python-Abhängigkeiten stehen in `requirements.txt`.
 
 ---
 
-## Benutzeroberfläche
+## Welche Screenshots für die Doku noch sinnvoll sind
 
-### Hauptfenster
+Wenn die README später noch mit echten Bildern ergänzt werden soll, sind diese Bilder am wichtigsten:
 
-```
-+-----------------------------------------------------------------+
-|  Menü: Datei | Einstellungen                                    |
-+-----------------------------------------------------------------+
-|  Toolbar: [＋ Auftrag] [＋ Alle Kameras]                        |
-|           [Bearbeiten] [Duplizieren] [Entfernen]               |
-|           [▶ Starten] [■ Abbrechen]                            |
-|           [Laden] [Speichern]  ☐ Rechner herunterfahren        |
-+-----------------------------------------------------------------+
-|  Auftragsliste                                                  |
-|  #  | Typ            | Beschreibung          | Status | YT-Titel|
-|  1  | ⬇ Download     | Kamera1  →  /ziel/    | Wartend| Spiel1  |
-|  2  | ⬇ Download     | Kamera2  →  /ziel/    | Wartend| Spiel1  |
-|  3  | 🔄 Konvertieren | aufnahme_1.mjpg       | ████65%|         |
-|  4  | 🔄 Konvertieren | aufnahme_2.mjpg       | Fertig | Spiel2  |
-+-----------------------------------------------------------------+
-|  Protokoll (scrollbares Log)                                    |
-|  ⬇ Download von 2 Kamera(s)  →  /ziel/                         |
-|  === [1/2] aufnahme_1.mjpg ===                                  |
-|  Encoder: h264_nvenc (NVIDIA GPU)                               |
-|  Fertig: aufnahme_1.mp4 (234 MB, 45s)                          |
-+-----------------------------------------------------------------+
-|  Statusbar  [████████░░░░] 2/3  ETA 12s                        |
-+-----------------------------------------------------------------+
-```
+1. `assets/readme_job_editor_1_quelle.png`
+2. `assets/readme_job_editor_2_verarbeitung.png`
+3. `assets/readme_job_editor_3_titelkarte.png`
+4. `assets/readme_job_editor_4_upload.png`
+5. `assets/readme_workflow_editor.png`
+6. `assets/readme_settings_video.png`
+7. `assets/readme_settings_kameras.png`
+8. `assets/readme_settings_allgemein.png`
+9. `assets/readme_source_pi_dateiliste.png`
 
-### Toolbar-Buttons
-
-| Button | Funktion |
-|--------|----------|
-| **＋ Auftrag** | Öffnet den Job-Editor zum Anlegen eines neuen Auftrags |
-| **＋ Alle Kameras** | Legt für alle konfigurierten Pi-Kameras sofort je einen Download+Konvertierungs-Auftrag an |
-| **Bearbeiten** | Öffnet den Job-Editor für den ausgewählten Auftrag |
-| **Duplizieren** | Erstellt eine Kopie des ausgewählten Auftrags |
-| **Entfernen** | Entfernt ausgewählte Aufträge aus der Liste (Mehrfachauswahl möglich) |
-| **▶ Starten** | Startet die gesamte Pipeline (Downloads → Konvertierung → Upload) |
-| **■ Abbrechen** | Bricht laufende Verarbeitung ab |
-| **Laden** | Lädt eine gespeicherte Workflow-JSON-Datei in die Auftragsliste |
-| **Speichern** | Speichert die aktuelle Auftragsliste als Workflow-JSON-Datei |
-| **Rechner herunterfahren** | System-Shutdown nach Abschluss aller Aufträge |
-
-> **Tipp:** Aufträge können auch über **Datei → Alle Aufträge entfernen** komplett gelöscht werden.
-
-### Menü
-
-| Menü | Eintrag | Funktion |
-|------|---------|----------|
-| Datei | Workflow laden … (Strg+I) | Workflow-JSON laden und Aufträge in die Liste einfügen |
-| Datei | Workflow speichern … (Strg+E) | Aktuelle Auftragsliste als Workflow-JSON speichern |
-| Datei | Alle Aufträge entfernen | Auftragsliste leeren |
-| Datei | Beenden | Anwendung beenden |
-| Einstellungen | Video … | Video-Kodierung konfigurieren |
-| Einstellungen | Audio … | Audio-Verarbeitung konfigurieren |
-| Einstellungen | YouTube … | YouTube-Upload konfigurieren |
-| Einstellungen | Kameras … | Raspberry Pi Geräte verwalten |
-| Einstellungen | Allgemein … | Session-Wiederherstellung und allgemeine Optionen |
+Diese Dateinamen sind in dieser README bereits passend vorbereitet.
 
 ---
 
-## Raspberry Pi Download
-
-Pi-Kamera-Downloads werden als Aufträge über den **Job-Editor** angelegt:
-
-- **＋ Auftrag** → Quellmodus *Pi-Kamera herunterladen* → Kamera wählen und Pipeline konfigurieren
-- **＋ Alle Kameras** → legt für jede konfigurierte Kamera sofort einen fertig konfigurierten Auftrag an
-
-### Kamera-Konfiguration
-
-Geräte werden über **Einstellungen → Kameras** verwaltet. Dort können Geräte angelegt, bearbeitet
-und gelöscht werden.
-
-Jedes Gerät benötigt:
-
-| Feld | Beschreibung |
-|------|-------------|
-| **Name** | Anzeigename; wird als Unterordner im Zielverzeichnis verwendet |
-| **IP** | IP-Adresse des Raspberry Pi |
-| **Port** | SSH-Port (Standard: 22) |
-| **Benutzername** | SSH-Benutzername |
-| **Passwort** | SSH-Passwort (optional, wenn SSH-Key gesetzt) |
-| **SSH-Key** | Pfad zum privaten SSH-Key (optional) |
-
-Zusätzlich werden in den Kamera-Einstellungen **Quellverzeichnis** (auf den Pis) und
-**Zielverzeichnis** (lokal) sowie die Option **Nach Download löschen** konfiguriert.
-
-### Download-Workflow
-
-1. **＋ Auftrag** (oder **＋ Alle Kameras**) → Kamera-Auftrag in der Auftragsliste anlegen
-2. Auftrag **bearbeiten** → YouTube-Titel, Playlist und Verarbeitungsoptionen setzen
-3. **▶ Starten** → Downloads laufen, anschließend werden automatisch Konvertier-Aufträge erzeugt
-4. Konvertier-Aufträge **erben** YouTube-Titel und Playlist vom zugehörigen Download-Auftrag
-5. Konvertierung und ggf. YouTube-Upload laufen automatisch durch
-
-### Download-Verhalten
-
-- Es werden nur **vollständige Aufnahmen** heruntergeladen (`.mjpg` **und** `.wav` müssen vorhanden sein)
-- Bereits vorhandene Dateien werden per **Größenvergleich** geprüft und ggf. übersprungen
-- **Resume:** Abgebrochene Downloads werden beim nächsten Start automatisch fortgesetzt (partielle Dateien bleiben erhalten)
-- Fehler bei einem Gerät unterbrechen **nicht** den Download der anderen Geräte
-- Jede Kamera erhält einen eigenen Unterordner (`<Ziel>/<Kameraname>/`)
-
-### Transfermethode
-
-| Methode | Bedingung | Geschwindigkeit |
-|---------|-----------|----------------|
-| **rsync** (bevorzugt) | `rsync` installiert; bei Passwort-Auth zusätzlich `sshpass` | ~100–110 MB/s (1 Gbit) |
-| **SFTP** (Fallback) | Automatisch, wenn rsync nicht verfügbar | ~14–50 MB/s |
-
-rsync nutzt den **nativen SSH-Client** mit hardware-beschleunigter AES-NI Verschlüsselung und
-bietet eingebautes Resume (`--append --partial --inplace`). Die gewählte Transfermethode wird im
-Protokoll angezeigt.
-
-> **Empfehlung:** Für große Dateien (> 10 GB) `rsync` und `sshpass` installieren:
-> ```bash
-> sudo apt install rsync sshpass
-> ```
-
----
-
-## Menü: Einstellungen
-
-### Einstellungen → Video
-
-Steuert die Video-Kodierung. Am oberen Rand des Dialogs befindet sich die **Profil-Auswahl** und die **GPU-Statusanzeige**.
-
-#### Profile
-
-| Profil | Beschreibung |
-|--------|--------------|
-| **KI Auswertung** | CRF 12, Preset slow – hohe Qualität für Spielanalyse mit 5–8x Zoom |
-| **YouTube** | CRF 23, Preset medium – optimiert für YouTube-Upload |
-| **Benutzerdefiniert** | Alle Werte frei einstellbar |
-
-#### Encoder / GPU-Beschleunigung
-
-| Einstellung | Standard | Beschreibung |
-|-------------|----------|--------------|
-| **Encoder** | auto | `auto` = beste verfügbare Option, `h264_nvenc` = NVIDIA GPU, `libx264` = CPU |
-
-Bei `auto` wird beim Start automatisch geprüft, ob NVENC verfügbar ist. Bei Problemen erfolgt
-Fallback auf `libx264` mit Hinweis im Protokoll.
-
-#### GPU-Statusanzeige
-
-- 🟢 **GPU bereit** – NVENC ist verfügbar und funktionsfähig
-- 🔴 **GPU nicht verfügbar** – mit Erklärung und Lösungsvorschlag im Tooltip
-
-Die Diagnose prüft in vier Schritten: GPU vorhanden? → Treiber ≥ 550.54? → ffmpeg mit NVENC? → Test-Encode erfolgreich?
-
-#### Video-Einstellungen
-
-| Einstellung | Standard | Beschreibung |
-|-------------|----------|--------------|
-| **Framerate (FPS)** | 25 | Framerate der Eingabedatei |
-| **Ausgabeformat** | mp4 | `mp4` (H.264) oder `avi` (MJPEG) |
-| **CRF (Qualität)** | 18 | 0=verlustfrei · 18=sehr gut · 23=Standard · 51=schlechteste |
-| **Preset** | medium | ffmpeg-Preset (ultrafast … veryslow). Langsamer = kleinere Datei |
-| **Verlustfrei** | aus | Aktiviert CRF=0 und Preset=slow |
-| **Audio-Video-Sync** | aus | Korrigiert Drift durch Frame-Drops (zählt alle Frames, passt FPS an Audio-Dauer an) |
-| **Überschreiben** | aus | Vorhandene Ausgabedateien überschreiben |
-
-> **Tipp:** Für Spielanalyse mit bis zu 8x Zoom empfiehlt sich CRF ≤ 18 oder das Profil *KI Auswertung*.
-
-#### Audio-Video-Sync (Frame-Drop-Korrektur)
-
-MJPEG-Aufnahmen können durch Frame-Drops weniger Frames enthalten als erwartet. Mit fester Framerate
-entsteht eine zunehmende Desynchronisation mit der Audio-Spur. Bei aktiviertem **Audio-Video-Sync**
-wird die MJPEG-Datei vorab komplett gelesen, alle JPEG-SOI-Marker gezählt und die Input-Framerate
-so angepasst, dass Video-Dauer = Audio-Dauer.
-
-- Bei einer 222 GB-Datei dauert der Scan ca. 10–25 Minuten (I/O-bound)
-- Fortschritt wird im Protokoll angezeigt (alle 10%)
-- Hat keinen Effekt, wenn kein Audio vorhanden oder keine Abweichung erkannt wird
-
-#### Halbzeiten zusammenführen
-
-| Einstellung | Standard | Beschreibung |
-|-------------|----------|--------------|
-| **Halbzeiten zusammenführen** | aus | Erkennt zusammengehörige Halbzeiten und fügt sie zusammen |
-| **Titelkarten-Dauer** | 3 s | Dauer der Titelkarte zwischen den Halbzeiten |
-| **Hintergrundfarbe** | #000000 | Hintergrund der Titelkarte |
-| **Textfarbe** | #FFFFFF | Textfarbe der Titelkarte |
-
-### Einstellungen → Audio
-
-| Einstellung | Standard | Beschreibung |
-|-------------|----------|--------------|
-| **Audio einbinden** | an | Ob die WAV-Datei eingebunden werden soll |
-| **Audio verstärken** | an | Wendet volume + loudnorm Filterchain an |
-| **Verstärkung** | 6.0 dB | Verstärkung in Dezibel (+6 dB ≈ doppelte Lautstärke, 0 = unverändert). Anschließend wird loudnorm (EBU R128) angewendet |
-| **Audio-Suffix** | _(leer)_ | Suffix für alternative WAV-Dateien (z. B. `_normalized`) |
-| **Audio-Bitrate** | 192k | AAC-Bitrate (96k, 128k, 192k, 256k, 320k) |
-
-Wenn die WAV-Datei einen abweichenden Namen hat: MJPG `aufnahme.mjpg` + Suffix `_norm` → sucht `aufnahme_norm.wav`.
-
-> **Eingebettete Tonspur:** Bei Videodateien mit bereits enthaltener Audiospur (z. B. MP4, MKV)
-wird keine externe WAV-Datei benötigt. Die eingebettete Tonspur wird automatisch erkannt und
-kann mit dem konfigurierbaren dB-Wert verstärkt werden. Ohne Verstärkung wird die Audiospur
-1:1 übernommen (`-c:a copy`).
-
-### Einstellungen → YouTube
-
-| Einstellung | Standard | Beschreibung |
-|-------------|----------|--------------|
-| **YouTube-Version erstellen** | aus | Erstellt zusätzlich eine `*_youtube.mp4` |
-| **CRF** | 23 | Qualität der YouTube-Version |
-| **Max. Bitrate** | 8M | Maximale Bitrate |
-| **Buffer-Größe** | 16M | VBV-Buffergröße |
-| **Audio-Bitrate** | 128k | AAC-Bitrate der YouTube-Version |
-| **YouTube hochladen** | aus | Upload auf YouTube (erfordert [API-Credentials](docs/youtube_credentials.md)) |
-
----
-
-## Job-Editor
-
-Über **＋ Auftrag** in der Toolbar oder per Doppelklick auf einen vorhandenen Auftrag öffnet sich
-der **Job-Editor-Dialog**. Er fasst Quelle, Verarbeitung, Audio und YouTube in einem einzigen,
-scrollbaren Dialog zusammen.
-
-### Pipeline-Vorlage
-
-Beim Anlegen eines neuen Auftrags erscheint oben eine **Pipeline-Vorlage**-Auswahl. Die gewählte
-Vorlage befüllt alle Felder automatisch; anschließend kann alles frei angepasst werden:
-
-| Vorlage | Beschreibung |
-|---------|-------------|
-| **Benutzerdefiniert** | Leeres Formular, alle Felder frei konfigurierbar |
-| **Pi-Kamera → Konvertieren** | Download von Raspberry Pi + Konvertierung |
-| **Pi-Kamera → Konvertieren → YouTube** | Download + Konvertierung + YouTube-Upload |
-| **Ordner → Konvertieren** | Alle Dateien eines Ordners konvertieren |
-| **Ordner → Konvertieren → YouTube** | Ordner konvertieren + YouTube-Upload |
-| **Dateien → YouTube hochladen** | Fertige Dateien direkt hochladen |
-| **Dateien → Konvertieren → YouTube** | Dateien konvertieren + YouTube-Upload |
-
-### Abschnitt: Quelle
-
-| Quellmodus | Beschreibung |
-|------------|-------------|
-| **Dateien auswählen** | Einzelne Videodateien direkt auswählen; jede Datei kann eigenen YT-Titel und Playlist erhalten |
-| **Ordner scannen** | Alle Dateien eines Ordners mit passendem Glob-Muster verarbeiten; optionaler Zielordner, Ausgabe-Präfix und Verschieben-Option |
-| **Pi-Kamera herunterladen** | Aufnahmen einer konfigurierten Raspberry-Pi-Kamera per rsync/SSH herunterladen und verarbeiten |
-
-### Abschnitt: Verarbeitung
-
-Kann komplett deaktiviert werden (z. B. für reinen YouTube-Upload ohne Neu-Kodierung).
-
-| Einstellung | Beschreibung |
-|-------------|-------------|
-| **Encoding aktivieren** | Schalter – deaktiviert alle Encoding-Optionen |
-| **Profil-Schnellauswahl** | Buttons *KI Auswertung*, *YouTube*, *Benutzerdefiniert* – setzt Encoder, Preset, CRF und Format |
-| **Encoder** | `auto`, `h264_nvenc` (NVIDIA) oder `libx264` (CPU) |
-| **Preset** | ffmpeg-Preset (ultrafast … veryslow) |
-| **CRF** | Qualität; 0 = verlustfrei, 18 = sehr gut, 23 = Standard |
-| **FPS** | Eingabe-Framerate |
-| **Format** | `mp4` oder `avi` |
-| **Halbzeiten zusammenführen** | Erkennt zusammengehörige Halbzeiten und fügt sie zusammen |
-
-### Abschnitt: Audio
-
-| Einstellung | Beschreibung |
-|-------------|-------------|
-| **Audio zusammenführen** | Externe WAV-Datei in die Ausgabe einbinden (für MJPEG-Rohaufnahmen) |
-| **Audio verstärken** | Verstärkung in dB + EBU R128 Loudnorm |
-| **Audio-Sync** | Frame-Drop-Korrektur (MJPEG): passt Input-FPS an Audio-Dauer an |
-
-### Abschnitt: YouTube
-
-| Einstellung | Beschreibung |
-|-------------|-------------|
-| **YouTube-Version erstellen** | Zusätzlich eine `*_youtube.mp4` mit YouTube-optimierten Einstellungen erzeugen |
-| **YouTube hochladen** | Datei nach der Konvertierung automatisch hochladen |
-| **Titel** | YouTube-Videotitel (max. 100 Zeichen) |
-| **Playlist** | Name der Ziel-Playlist (wird automatisch angelegt, falls nicht vorhanden) |
-
----
-
-## Workflow laden / speichern
-
-Die gesamte Auftragsliste kann als JSON-Datei gespeichert und wieder geladen werden:
-
-- **Datei → Workflow speichern … (Strg+E)** – Speichert alle aktuellen Aufträge in eine `.json`-Datei  
-- **Datei → Workflow laden … (Strg+I)** – Lädt Aufträge aus einer `.json`-Datei
-- **Toolbar: Laden / Speichern** – dieselben Funktionen direkt über die Toolbar
-
-Gespeicherte Workflows liegen standardmäßig unter `workflows/`. So lassen sich vorbereitete
-Auftragslisten teilen oder für wiederkehrende Aufgaben (z. B. Spieltag) wiederverwenden.
-
-> **CLI:** Mit `--workflow PFAD` kann ein gespeicherter Workflow beim Start automatisch geladen und
-> sofort ausgeführt werden.
-
----
-
-## Session wiederherstellen
-
-Beim Beenden der App wird die aktuelle Auftragsliste automatisch als `data/session.json` gespeichert.
-Unter **Einstellungen → Allgemein** kann die Option **„Letzte Jobliste beim Start wiederherstellen"**
-aktiviert werden. Dann wird beim nächsten Programmstart die gespeicherte Auftragsliste automatisch geladen.
-
-Beim Wiederherstellen werden **unfertige Aufträge** (Status *Herunterladen*, *Heruntergeladen*, *Läuft*)
-automatisch auf **Wartend** zurückgesetzt, damit sie erneut gestartet werden können.
-
-| Datei | Beschreibung |
-|-------|-----------|
-| `data/session.json` | Wird beim Beenden automatisch geschrieben; enthält die Auftragsliste als JSON |
-
-> **Tipp:** Auch ohne aktivierte Option bleibt `data/session.json` erhalten und kann jederzeit manuell
-> über **Datei → Workflow laden** geladen werden.
-
----
-
-## Status-Werte
-
-| Status | Bedeutung |
-|--------|-----------|
-| **Wartend** | Noch nicht verarbeitet |
-| **Herunterladen** | Download vom Raspberry Pi läuft |
-| **Heruntergeladen** | Download abgeschlossen, Konvertierung folgt |
-| **Läuft** | Wird gerade konvertiert (mit Fortschrittsbalken) |
-| **Fertig** | Erfolgreich verarbeitet |
-| **Übersprungen** | Ausgabedatei existiert bereits (Überschreiben deaktiviert) |
-| **Fehler** | Verarbeitung fehlgeschlagen (Details im Log) |
-
----
-
-## Einstellungen-Datei `data/settings.json`
-
-Alle Einstellungen werden automatisch in `data/settings.json` gespeichert und beim Starten geladen.
-Die Datei kann manuell bearbeitet werden – ungültige Werte werden durch Standardwerte ersetzt.
-
-```json
-{
-  "video": {
-    "fps": 25,
-    "output_format": "mp4",
-    "crf": 18,
-    "lossless": false,
-    "preset": "medium",
-    "encoder": "auto",
-    "profile": "Benutzerdefiniert",
-    "overwrite": false,
-    "audio_sync": false,
-    "merge_halves": false,
-    "merge_title_duration": 3,
-    "merge_title_bg": "#000000",
-    "merge_title_fg": "#FFFFFF"
-  },
-  "audio": {
-    "include_audio": true,
-    "amplify_audio": true,
-    "amplify_db": 6.0,
-    "audio_suffix": "",
-    "audio_bitrate": "192k"
-  },
-  "youtube": {
-    "create_youtube": false,
-    "youtube_crf": 23,
-    "youtube_maxrate": "8M",
-    "youtube_bufsize": "16M",
-    "youtube_audio_bitrate": "128k",
-    "upload_to_youtube": false
-  },
-  "last_directory": "/media/videos/Aufnahmen",
-  "restore_last_workflow": false
-}
-```
-
----
-
-## Fehlerbehebung
-
-### Allgemein
-
-| Problem | Lösung |
-|---------|--------|
-| GUI startet nicht | `python3 -c "import PySide6"` testen; ggf. `pip install -r requirements.txt` |
-| ffmpeg nicht gefunden | `ffmpeg -version` prüfen; installieren: `sudo apt install ffmpeg` |
-| Keine WAV gefunden | WAV muss im gleichen Ordner liegen und gleichen Dateinamen haben; ggf. *Audio-Suffix* setzen |
-| Konvertierung bricht ab | Details im Protokoll; häufig: zu wenig Speicherplatz oder beschädigte Eingabedatei |
-
-### GPU / NVENC
-
-| Problem | Lösung |
-|---------|--------|
-| 🔴 Keine NVIDIA-GPU gefunden | `nvidia-smi` im Terminal testen; NVIDIA-Treiber installieren |
-| 🔴 Treiber zu alt | Treiber ≥ 550.54 installieren (`sudo apt install nvidia-driver-550`) |
-| 🔴 ffmpeg ohne NVENC | ffmpeg mit NVENC-Support installieren |
-| 🔴 Test-Encode fehlgeschlagen | Tooltip beachten; häufig: veraltete NVENC-API-Version |
-| Encoder fällt auf CPU zurück | Expected Behavior bei `auto`; Hinweis erscheint im Protokoll |
-
-### Raspberry Pi Download
-
-| Problem | Lösung |
-|---------|--------|
-| Verbindung fehlgeschlagen | IP und Port in den Kamera-Einstellungen prüfen; SSH-Zugang testen: `ssh user@ip` |
-| Authentifizierungsfehler | Benutzername/Passwort prüfen oder `ssh_key` eintragen |
-| Keine Aufnahmen gefunden | `source`-Pfad prüfen; auf jedem Pi muss je Aufnahme `.mjpg` + `.wav` vorhanden sein |
-| Download bricht ab | Partielle Dateien bleiben für Resume erhalten; beim nächsten Start wird automatisch fortgesetzt |
-| Download langsam (< 50 MB/s) | `rsync` und `sshpass` installieren: `sudo apt install rsync sshpass` |
-| rsync nicht genutzt trotz Installation | Bei Passwort-Auth muss auch `sshpass` installiert sein; SSH-Key empfohlen |
-| SSH fragt nach Passwort | Passwort in den Kamera-Einstellungen hinterlegen oder SSH-Key konfigurieren |
+## Kurz gesagt
+
+Wenn Sie einfach nur loslegen möchten, genügt meistens dieser Ablauf:
+
+1. `＋ Neuer Workflow`
+2. `Übernehmen`
+3. Workflow markieren
+4. `Bearbeiten`
+5. Quelle auswählen
+6. Verarbeitung und Upload einstellen
+7. `Speichern`
+8. `▶ Starten`
+
+So kommen Sie ohne Technik-Wissen am schnellsten ans Ziel.
