@@ -22,7 +22,7 @@ from .controllers import (
     WorkflowExternalDataController,
     WorkflowGraphController,
 )
-from .graph import _node_visual_state, _planned_job_steps
+from .graph import _NODE_DEFINITIONS, _node_visual_state, _planned_job_steps
 from .panels import WorkflowDialogLayoutBuilder, WorkflowNotesPanel, WorkflowStatusPanel
 from ..integrations.kaderblick import fetch_cameras, fetch_video_types
 from ..media.merge_analysis import job_merge_warning
@@ -333,7 +333,9 @@ class JobWorkflowDialog(QDialog):
         if selection.get("kind") == "edge":
             self._selection_label.setText("Verbindung ausgewählt")
         else:
-            self._selection_label.setText(f"Node: {selection.get('type', 'unbekannt')}")
+            node_type = str(selection.get("type", "")).strip()
+            node_label = str(_NODE_DEFINITIONS.get(node_type, {}).get("label") or node_type or "unbekannt")
+            self._selection_label.setText(node_label)
         self._remove_node_btn.setEnabled(True)
         self._reset_from_node_btn.setEnabled(selection.get("kind") == "node")
 

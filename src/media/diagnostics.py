@@ -16,7 +16,7 @@ import subprocess
 from dataclasses import dataclass
 from functools import lru_cache
 
-from .ffmpeg_runner import get_ffmpeg_bin
+from .ffmpeg_runner import ffmpeg_cmd
 
 
 # Mindest-Treiberversion für ffmpeg ≥ 7.x NVENC
@@ -81,7 +81,7 @@ def _ffmpeg_lists_encoder(encoder_name: str) -> bool:
     """Prüft ob ffmpeg den Encoder in der Liste hat (kompiliert)."""
     try:
         result = subprocess.run(
-            [get_ffmpeg_bin(), "-hide_banner", "-encoders"],
+            ffmpeg_cmd("-hide_banner", "-encoders"),
             capture_output=True, text=True, timeout=10,
         )
         return encoder_name in result.stdout
@@ -101,9 +101,11 @@ def encoder_test_encode(encoder_name: str) -> tuple[bool, str]:
     try:
         # 256x256: NVENC hat eine Mindestauflösung (~145x49), 64x64 reicht nicht.
         result = subprocess.run(
-            [get_ffmpeg_bin(), "-hide_banner", "-y",
-             "-f", "lavfi", "-i", "color=black:s=256x256:d=0.04:r=25",
-             "-c:v", encoder_name, "-f", "null", "-"],
+            ffmpeg_cmd(
+                "-hide_banner", "-y",
+                "-f", "lavfi", "-i", "color=black:s=256x256:d=0.04:r=25",
+                "-c:v", encoder_name, "-f", "null", "-",
+            ),
             capture_output=True, text=True, timeout=10,
         )
         if result.returncode == 0:

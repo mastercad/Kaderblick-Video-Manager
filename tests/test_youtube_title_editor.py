@@ -211,6 +211,11 @@ class TestBuildVideoDescription:
         desc = build_video_description(MatchData(), SegmentData())
         assert isinstance(desc, str)
 
+    def test_contains_kaderblick_upload_note(self):
+        desc = build_video_description(MatchData(), SegmentData())
+
+        assert "automatisch hochgeladen mit Kaderblick Video-Manager" in desc
+
     def test_reuses_generated_tags_as_hashtags(self):
         m = MatchData(competition="Pokal", home_team="FC Heim", away_team="SV Gast")
         s = SegmentData(camera="Hauptkamera", side="Links", half=1, part=2, type_name="1. Halbzeit")
@@ -222,6 +227,7 @@ class TestBuildVideoDescription:
         assert "#FCHeim" in desc
         assert "#SVGast" in desc
         assert "#Hauptkamera" in desc
+        assert "#Kaderblick" in desc
 
 
 class TestBuildVideoTags:

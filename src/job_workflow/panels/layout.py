@@ -111,7 +111,7 @@ class WorkflowDialogLayoutBuilder:
         self._dialog._selection_label.setStyleSheet("color: #475569;")
         layout.addWidget(self._dialog._selection_label)
 
-        btn_row = QHBoxLayout()
+        btn_row = QVBoxLayout()
         self._dialog._remove_node_btn = QPushButton("Auswahl entfernen", self._dialog)
         self._dialog._remove_node_btn.clicked.connect(self._dialog._remove_selected_graph_node)
         self._dialog._remove_node_btn.setEnabled(False)
@@ -311,6 +311,7 @@ class WorkflowDialogLayoutBuilder:
     def build_youtube_box(self) -> QWidget:
         self._dialog._youtube_panel = YouTubeUploadPanel(
             self._dialog,
+            settings=self._dialog._settings,
             on_metadata_changed=self._dialog._on_youtube_metadata_changed,
             on_playlist_helper=self._dialog._open_match_editor_for_playlist,
         )
@@ -321,6 +322,7 @@ class WorkflowDialogLayoutBuilder:
     def build_kaderblick_box(self) -> QWidget:
         self._dialog._kaderblick_panel = KaderblickPanel(
             self._dialog,
+            settings=self._dialog._settings,
             on_game_id_changed=lambda text: self._dialog._update_text_field("default_kaderblick_game_id", text),
             on_type_changed=self._dialog._on_kaderblick_type_changed,
             on_camera_changed=self._dialog._on_kaderblick_camera_changed,
@@ -392,7 +394,7 @@ class WorkflowDialogLayoutBuilder:
             on_resolution_changed=lambda text: self._dialog._update_text_field("merge_output_resolution", text),
         )
         layout.addWidget(self._dialog._merge_encoding_panel)
-        self._dialog._merge_panel = MergeMetadataPanel(self._dialog)
+        self._dialog._merge_panel = MergeMetadataPanel(self._dialog, settings=self._dialog._settings)
         self._dialog._merge_panel.metadata_changed.connect(self._dialog._on_merge_metadata_changed)
         layout.addWidget(self._dialog._merge_panel)
         return box

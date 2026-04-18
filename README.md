@@ -20,6 +20,103 @@ Weiterführende Anleitung für YouTube: [YouTube API – Credentials einrichten]
 
 ---
 
+## Zwei Wege durch diese Anleitung
+
+Wenn Sie einfach nur loslegen möchten, lesen Sie zuerst nur diesen Teil:
+
+- `Einsteiger-Schnellstart`
+
+Wenn Sie die App danach genauer verstehen oder einen speziellen Ablauf nachlesen möchten, lesen Sie danach diesen Teil:
+
+- `Ausführliche Anleitung`
+
+---
+
+## Einsteiger-Schnellstart
+
+Dieser Teil ist für alle gedacht, die die App zum ersten Mal benutzen.
+
+Sie müssen dafür nicht alles verstehen. Es reicht, wenn Sie die folgenden Schritte nacheinander machen.
+
+### 1. App öffnen
+
+Starten Sie die App.
+
+Im Hauptfenster sehen Sie oben die grüne Leiste, in der Mitte die Workflow-Liste und unten das Protokoll.
+
+### 2. Neuen Workflow anlegen
+
+Klicken Sie oben auf `＋ Neuer Workflow`.
+
+Danach öffnet sich zuerst der grafische Workflow-Editor.
+
+Für Einsteiger ist der einfachste Weg:
+
+1. `＋ Neuer Workflow` klicken
+2. im geöffneten Fenster auf `Übernehmen` klicken
+3. den neuen Workflow in der Liste markieren
+4. auf `Bearbeiten` klicken
+
+### 3. Quelle auswählen
+
+Im Assistenten auf der Seite `1 Quelle` wählen Sie aus, woher das Material kommt:
+
+- `Dateien auswählen`, wenn Sie einzelne Dateien haben
+- `Ordner scannen`, wenn viele Dateien in einem Ordner liegen
+- `Pi-Kamera`, wenn Aufnahmen erst von einer Kamera geholt werden sollen
+
+### 4. Verarbeitung festlegen
+
+Auf der Seite `2 Verarbeitung` legen Sie fest, wie das Video bearbeitet werden soll.
+
+Wenn Sie unsicher sind, lassen Sie die Standardwerte stehen und ändern nur das, was Sie wirklich brauchen.
+
+### 5. Optional Titelkarte und Upload einstellen
+
+Auf der Seite `3 Titelkarte` können Sie eine Titelkarte aktivieren.
+
+Auf der Seite `4 Upload` können Sie festlegen, ob:
+
+- eine YouTube-Version erzeugt werden soll
+- ein Upload zu YouTube erfolgen soll
+- das Ergebnis bei Kaderblick eingetragen werden soll
+
+### 6. Workflow speichern
+
+Klicken Sie im Hauptfenster auf `Speichern`.
+
+Damit haben Sie eine Workflow-Datei, die Sie später wieder laden oder weitergeben können.
+
+### 7. Workflow starten
+
+Markieren Sie den Workflow in der Liste und klicken Sie auf `▶ Starten`.
+
+Den Fortschritt sehen Sie:
+
+- in der Spalte `Status`
+- in der Spalte `Job`
+- in der Spalte `Dauer`
+- im Protokoll unten
+
+### 8. Wenn Sie anhalten möchten
+
+Klicken Sie auf `■ Abbrechen`.
+
+Wenn Sie vorher bestimmte Workflows markiert haben, werden nur diese abgebrochen.
+
+### 9. Wenn die App nach Fortsetzen fragt
+
+Dann bedeutet:
+
+- `Fortsetzen`: dort weitermachen, wo der letzte Lauf aufgehört hat
+- `Neu starten`: wieder von vorne beginnen
+
+---
+
+## Ausführliche Anleitung
+
+Ab hier wird die App genauer erklärt.
+
 ## So sieht die App aus
 
 <p align="center">
@@ -39,20 +136,6 @@ Ein Workflow ist einfach ein kompletter Arbeitsauftrag, zum Beispiel:
 - „Zwei Halbzeiten von der Kamera holen, zusammenführen und hochladen“
 - „Drei vorhandene MP4-Dateien nur konvertieren“
 - „Einen Ordner mit Aufnahmen prüfen und für YouTube vorbereiten“
-
----
-
-## Der einfachste Einstieg
-
-Wenn Sie die App das erste Mal benutzen, arbeiten Sie am besten immer in dieser Reihenfolge:
-
-1. Workflow anlegen
-2. Workflow bearbeiten
-3. Workflow speichern
-4. Workflow starten
-5. Fortschritt beobachten
-
-Die folgenden Kapitel erklären genau diese Reihenfolge.
 
 ---
 
@@ -534,7 +617,7 @@ Diese Dateinamen sind in dieser README bereits passend vorbereitet.
 
 ---
 
-## Kurz gesagt
+## Schnellüberblick
 
 Wenn Sie einfach nur loslegen möchten, genügt meistens dieser Ablauf:
 

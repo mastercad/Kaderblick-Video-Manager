@@ -17,7 +17,7 @@ import subprocess
 from functools import lru_cache
 
 from .diagnostics import encoder_test_encode, gpu_diagnostics
-from .ffmpeg_runner import get_ffmpeg_bin
+from .ffmpeg_runner import ffmpeg_cmd
 
 # Mapping libx264-Presets → NVENC-Presets (p1=schnellstes, p7=bestes)
 _X264_TO_NVENC_PRESET: dict[str, str] = {
@@ -49,7 +49,7 @@ def detect_hw_encoders() -> list[str]:
     """
     try:
         result = subprocess.run(
-            [get_ffmpeg_bin(), "-hide_banner", "-encoders"],
+            ffmpeg_cmd("-hide_banner", "-encoders"),
             capture_output=True, text=True, timeout=10,
         )
         lines = result.stdout.splitlines()

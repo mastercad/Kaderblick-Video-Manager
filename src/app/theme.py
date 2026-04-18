@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetrics, QPainter
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetrics, QPainter, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
 
@@ -73,13 +74,14 @@ class BrandWordmarkWidget(QWidget):
 
 
 def apply_application_theme(window: QWidget) -> None:
-    app = QApplication.instance()
+    app = cast(QApplication | None, QApplication.instance())
     if app is None:
         return
 
     _ensure_brand_font_loaded()
     if not bool(app.property(_THEME_APPLIED_PROPERTY)):
         app.setFont(_default_ui_font())
+        app.setPalette(_build_palette(app.palette()))
         app.setStyleSheet(_build_stylesheet())
         app.setProperty(_THEME_APPLIED_PROPERTY, True)
 
@@ -126,6 +128,29 @@ def _ensure_brand_font_loaded() -> None:
             _loaded_brand_family = fallback
             return
     _loaded_brand_family = QApplication.font().family()
+
+
+def _build_palette(seed: QPalette) -> QPalette:
+    palette = QPalette(seed)
+    text = QColor(_TEXT)
+    surface = QColor(_SURFACE)
+    surface_alt = QColor(_SURFACE_ALT)
+    app_bg = QColor(_APP_BG)
+    selection = QColor("#D8F2DE")
+    muted = QColor(_MUTED)
+
+    for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled):
+        palette.setColor(group, QPalette.ColorRole.WindowText, text)
+        palette.setColor(group, QPalette.ColorRole.Text, text)
+        palette.setColor(group, QPalette.ColorRole.ButtonText, text)
+        palette.setColor(group, QPalette.ColorRole.Base, surface)
+        palette.setColor(group, QPalette.ColorRole.AlternateBase, surface_alt)
+        palette.setColor(group, QPalette.ColorRole.Window, app_bg)
+        palette.setColor(group, QPalette.ColorRole.Highlight, selection)
+        palette.setColor(group, QPalette.ColorRole.HighlightedText, text)
+        palette.setColor(group, QPalette.ColorRole.PlaceholderText, muted)
+
+    return palette
 
 
 def _build_stylesheet() -> str:
@@ -326,6 +351,18 @@ def _build_stylesheet() -> str:
         selection-background-color: #D8F2DE;
         selection-color: {_TEXT};
         color: {_TEXT};
+    }}
+
+    /* Inline-Editoren in Views duerfen keine Formular-Paddings bekommen,
+       sonst wird der Text in flachen Zeilen abgeschnitten. */
+    QAbstractItemView QLineEdit,
+    QTableView QLineEdit,
+    QTreeView QLineEdit,
+    QListView QLineEdit {{
+        padding: 0 2px;
+        margin: 0;
+        border-radius: 0;
+        min-height: 0px;
     }}
 
     QComboBox::drop-down,

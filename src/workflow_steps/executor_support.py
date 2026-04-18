@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import threading
 from typing import Any
 
 from ..media.converter import ConvertJob
@@ -15,11 +16,14 @@ from ..integrations.youtube_title_editor import (
 )
 from ..settings import AppSettings
 from ..integrations.youtube_title_editor import build_output_filename_from_title
+from ..workflow.defaults import resolve_kaderblick_game_id, resolve_match_data
 from ..workflow import (
     FileEntry,
     WorkflowJob,
+    graph_direct_targets,
     graph_node_branch_has_targets,
     graph_node_id_for_type,
+    graph_node_map,
     graph_next_reachable_node_id,
     graph_merge_reaches_type,
     graph_merge_precedes_convert,
@@ -38,6 +42,24 @@ class ExecutorSupport:
     @staticmethod
     def allow_reuse_existing(executor: Any) -> bool:
         return bool(getattr(executor, "_allow_reuse_existing", True))
+
+    @staticmethod
+    def cancel_flag_for_job(executor: Any, orig_idx: int):
+        getter = getattr(executor, "_cancel_flag_for_job", None)
+        if callable(getter):
+            return getter(orig_idx)
+        cancel_flag = getattr(executor, "_cancel", None)
+        if cancel_flag is not None and hasattr(cancel_flag, "is_set"):
+            return cancel_flag
+        return threading.Event()
+
+    @staticmethod
+    def is_job_cancelled(executor: Any, orig_idx: int) -> bool:
+        checker = getattr(executor, "_is_job_cancelled", None)
+        if callable(checker):
+            return bool(checker(orig_idx))
+        cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, orig_idx)
+        return bool(cancel_flag.is_set())
 
     @staticmethod
     def resolve_copy_destination(settings: AppSettings, job: WorkflowJob) -> Path | None:
@@ -249,26 +271,32 @@ class ExecutorSupport:
         return entry
 
     @classmethod
-    def resolve_youtube_title(cls, job: WorkflowJob, file_path: str) -> str:
-        return str(cls.resolve_youtube_metadata(job, file_path)["title"])
+    def resolve_youtube_title(cls, job: WorkflowJob, file_path: str, settings: AppSettings | None = None) -> str:
+        return str(cls.resolve_youtube_metadata(job, file_path, settings=settings)["title"])
 
     @classmethod
-    def resolve_youtube_playlist(cls, job: WorkflowJob, file_path: str) -> str:
-        return str(cls.resolve_youtube_metadata(job, file_path)["playlist"])
+    def resolve_youtube_playlist(cls, job: WorkflowJob, file_path: str, settings: AppSettings | None = None) -> str:
+        return str(cls.resolve_youtube_metadata(job, file_path, settings=settings)["playlist"])
 
     @classmethod
-    def resolve_youtube_description(cls, job: WorkflowJob, file_path: str) -> str:
-        return str(cls.resolve_youtube_metadata(job, file_path)["description"])
+    def resolve_youtube_description(cls, job: WorkflowJob, file_path: str, settings: AppSettings | None = None) -> str:
+        return str(cls.resolve_youtube_metadata(job, file_path, settings=settings)["description"])
 
     @classmethod
-    def resolve_youtube_tags(cls, job: WorkflowJob, file_path: str) -> list[str]:
-        return list(cls.resolve_youtube_metadata(job, file_path)["tags"])
+    def resolve_youtube_tags(cls, job: WorkflowJob, file_path: str, settings: AppSettings | None = None) -> list[str]:
+        return list(cls.resolve_youtube_metadata(job, file_path, settings=settings)["tags"])
 
     @classmethod
-    def resolve_youtube_metadata(cls, job: WorkflowJob, file_path: str) -> dict[str, object]:
+    def resolve_youtube_metadata(
+        cls,
+        job: WorkflowJob,
+        file_path: str,
+        *,
+        settings: AppSettings | None = None,
+    ) -> dict[str, object]:
         entry = cls.find_file_entry(job, file_path)
         fallback_stem = Path(file_path).stem
-        title, playlist, description, tags = cls._default_youtube_metadata(job, fallback_stem)
+        title, playlist, description, tags = cls._default_youtube_metadata(job, fallback_stem, settings=settings)
 
         entry_title = str(entry.youtube_title or "").strip() if entry else ""
         if entry_title:
@@ -292,10 +320,17 @@ class ExecutorSupport:
         }
 
     @staticmethod
-    def _default_youtube_metadata(job: WorkflowJob, fallback_stem: str) -> tuple[str, str, str, list[str]]:
-        match = MatchData(**job.youtube_match_data) if job.youtube_match_data else None
+    def _default_youtube_metadata(
+        job: WorkflowJob,
+        fallback_stem: str,
+        *,
+        settings: AppSettings | None = None,
+    ) -> tuple[str, str, str, list[str]]:
+        match = resolve_match_data(settings, job.youtube_match_data) if (job.youtube_match_data or settings is not None) else None
         segment = SegmentData(**job.youtube_segment_data) if job.youtube_segment_data else None
-        if match is not None and segment is not None:
+        if match is not None and segment is not None and any(
+            (match.date_iso, match.competition, match.home_team, match.away_team, match.location)
+        ):
             return (
                 build_video_title(match, segment),
                 build_playlist_title(match),
@@ -309,6 +344,10 @@ class ExecutorSupport:
             job.default_youtube_description,
             ExecutorSupport._tags_from_title(title),
         )
+
+    @staticmethod
+    def resolve_kaderblick_game_id(settings: AppSettings | None, job: WorkflowJob, explicit: str = "") -> str:
+        return resolve_kaderblick_game_id(settings, job, explicit)
 
     @staticmethod
     def _tags_from_title(youtube_title: str) -> list[str]:
@@ -326,6 +365,37 @@ class ExecutorSupport:
         if source_node_id:
             return graph_node_reaches_type(job, source_node_id, target_type)
         return target_type in graph_reachable_types(job)
+
+    @staticmethod
+    def node_type(job: WorkflowJob, node_id: str) -> str:
+        return graph_node_map(job).get(node_id, "")
+
+    @classmethod
+    def node_matches_or_reaches_type(
+        cls,
+        job: WorkflowJob,
+        start_node_id: str,
+        target_type: str,
+        branch_results: dict[str, str] | None = None,
+    ) -> bool:
+        if not cls._has_graph(job):
+            return cls._fallback_step_enabled(job, target_type)
+        if not start_node_id:
+            return target_type in graph_reachable_types(job)
+        if cls.node_type(job, start_node_id) == target_type:
+            return True
+        return graph_node_reaches_type(job, start_node_id, target_type, branch_results)
+
+    @classmethod
+    def direct_targets(
+        cls,
+        job: WorkflowJob,
+        node_id: str,
+        branch_results: dict[str, str] | None = None,
+    ) -> list[str]:
+        if not cls._has_graph(job) or not node_id:
+            return []
+        return graph_direct_targets(job, node_id, branch_results)
 
     @staticmethod
     def merge_reaches_type(job: WorkflowJob, target_type: str) -> bool:
@@ -356,6 +426,12 @@ class ExecutorSupport:
             youtube=replace(executor._settings.youtube),
             cameras=executor._settings.cameras,
             workflow_output_root=executor._settings.workflow_output_root,
+            default_match_date=executor._settings.default_match_date,
+            default_match_competition=executor._settings.default_match_competition,
+            default_match_home_team=executor._settings.default_match_home_team,
+            default_match_away_team=executor._settings.default_match_away_team,
+            default_match_location=getattr(executor._settings, "default_match_location", ""),
+            default_kaderblick_game_id=getattr(executor._settings, "default_kaderblick_game_id", ""),
             last_directory=executor._settings.last_directory,
         )
         settings.video.encoder = job.encoder

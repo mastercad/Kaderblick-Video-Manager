@@ -66,10 +66,8 @@ class ProcessingPhase:
             if not (item.job.upload_kaderblick and item.job.upload_youtube):
                 continue
             entry = executor._find_file_entry(item.job, str(item.cv_job.source_path))
-            game_id = (
-                (entry.kaderblick_game_id if entry and entry.kaderblick_game_id else "")
-                or item.job.default_kaderblick_game_id
-            )
+            explicit_game_id = entry.kaderblick_game_id if entry and entry.kaderblick_game_id else ""
+            game_id = ExecutorSupport.resolve_kaderblick_game_id(executor._settings, item.job, explicit_game_id)
             if game_id:
                 kb_by_game[game_id].append(item.cv_job.source_path.name)
 

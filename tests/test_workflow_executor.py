@@ -357,6 +357,62 @@ class TestLivePipelineProgress:
         assert 10 in received_progress
         assert 65 in received_progress
 
+    def test_pipeline_progress_flushes_from_worker_thread_without_manual_drain(self, tmp_path):
+        from queue import Queue
+
+        from src.runtime.workflow_executor.helpers import _PipelineWorkerView
+
+        source = tmp_path / "clip.mp4"
+        source.write_text("video", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Live Flush",
+            source_mode="files",
+            convert_enabled=True,
+            files=[FileEntry(source_path=str(source))],
+        )
+        ex = WorkflowExecutor(Workflow(job=job), _make_settings())
+        event_queue: Queue = Queue()
+        ex._pipeline_event_queue = event_queue
+        ex._pipeline_last_drain = 0.0
+        ex._pipeline_drain_lock = threading.Lock()
+        worker_executor = _PipelineWorkerView(ex, event_queue)
+        received_progress: list[int] = []
+
+        def _on_progress(_orig_idx: int, pct: int) -> None:
+            received_progress.append(pct)
+
+        ex.job_progress.connect(_on_progress)
+
+        thread = threading.Thread(target=lambda: worker_executor.job_progress.emit(0, 42))
+        thread.start()
+        thread.join(timeout=2.0)
+        _app.processEvents()
+
+        ex._pipeline_event_queue = None
+        ex._pipeline_last_drain = 0.0
+        ex._pipeline_drain_lock = None
+
+        assert not thread.is_alive()
+        assert received_progress == [42]
+        assert event_queue.empty()
+
+
+class TestJobCancelFlag:
+    def test_wait_times_out_when_job_not_cancelled(self):
+        ex = WorkflowExecutor(Workflow(), _make_settings())
+        flag = ex._cancel_flag_for_job(0)
+
+        assert flag.wait(timeout=0.01) is False
+
+    def test_wait_returns_true_after_job_cancel(self):
+        ex = WorkflowExecutor(Workflow(jobs=[WorkflowJob(name="A")]), _make_settings())
+        flag = ex._cancel_flag_for_job(0)
+
+        ex.cancel(active_indices={0})
+
+        assert flag.wait(timeout=0.01) is True
+
 
 class TestYouTubeUploadRequest:
     def test_upload_to_youtube_sends_description_in_insert_body(self, tmp_path):
@@ -2128,6 +2184,82 @@ class TestWorkflowStackScenarios:
 
         assert runner.is_alive() is False
         assert converted == ["first.mp4"]
+
+    def test_pipeline_executes_all_connected_source_branches_independently(self, tmp_path):
+        source = tmp_path / "branch-source.mp4"
+        source.write_text("src", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Branching",
+            source_mode="files",
+            convert_enabled=True,
+            title_card_enabled=True,
+            upload_youtube=True,
+            files=[FileEntry(source_path=str(source), graph_source_id="source-1")],
+            graph_nodes=[
+                {"id": "source-1", "type": "source_files"},
+                {"id": "title-1", "type": "titlecard"},
+                {"id": "convert-1", "type": "convert"},
+                {"id": "upload-1", "type": "youtube_upload"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "title-1"},
+                {"source": "source-1", "target": "convert-1"},
+                {"source": "convert-1", "target": "upload-1"},
+            ],
+        )
+
+        ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
+        titlecard_inputs: list[str] = []
+        convert_inputs: list[str] = []
+        upload_inputs: list[str] = []
+
+        def _transfer(_executor, _orig_idx, _job, on_file_ready=None):
+            assert on_file_ready is not None
+            on_file_ready(str(source))
+            return [str(source)]
+
+        def _convert(_executor, _orig_idx, _job, cv_job, _settings, _done_count, _total_count):
+            convert_inputs.append(str(cv_job.source_path))
+            output = source.with_name("branch-source_converted.mp4")
+            output.write_text("converted", encoding="utf-8")
+            cv_job.output_path = output
+            cv_job.status = "Fertig"
+            return "ok"
+
+        def _title(_executor, _orig_idx, cv_job, _job, _settings):
+            titlecard_inputs.append(str(cv_job.output_path))
+            output = source.with_name("branch-source_titlecard.mp4")
+            output.write_text("title", encoding="utf-8")
+            return output, True
+
+        def _upload(*args, **_kwargs):
+            cv_job = args[1]
+            upload_inputs.append(str(cv_job.output_path))
+            return True
+
+        with patch.object(ex._transfer_step, "execute", side_effect=_transfer), patch.object(
+            ex._convert_step,
+            "execute",
+            side_effect=_convert,
+        ), patch(
+            "src.workflow_steps.title_card_step.TitleCardStep._prepend_title_card",
+            side_effect=_title,
+        ), patch(
+            "src.runtime.workflow_executor.get_youtube_service",
+            return_value=object(),
+        ), patch(
+            "src.workflow_steps.youtube_upload_step.get_video_id_for_output",
+            return_value=None,
+        ), patch(
+            "src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube",
+            side_effect=_upload,
+        ):
+            ex.run()
+
+        assert titlecard_inputs == [str(source)]
+        assert convert_inputs == [str(source)]
+        assert upload_inputs == [str(source.with_name("branch-source_converted.mp4"))]
 
     def test_selective_cancel_marks_current_step_as_aborted_not_failed(self, tmp_path):
         source = tmp_path / "clip.mp4"

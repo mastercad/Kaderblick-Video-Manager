@@ -46,6 +46,10 @@ class _FakeExecutor:
         self.step_details.append((step, detail))
 
     @staticmethod
+    def _is_job_cancelled(_orig_idx):
+        return False
+
+    @staticmethod
     def _find_file_entry(job, file_path):
         target = Path(file_path).name
         for entry in job.files:
@@ -207,7 +211,7 @@ def test_output_step_stack_skips_upload_and_kaderblick_without_yt_service(tmp_pa
     kb_post_mock.assert_not_called()
 
 
-def test_output_step_stack_terminal_titlecard_does_not_continue_to_parallel_upload_branch(tmp_path):
+def test_output_step_stack_processes_terminal_titlecard_and_parallel_upload_branch(tmp_path):
     stack = OutputStepStack()
     executor = _FakeExecutor()
     source = tmp_path / "graph-source.mp4"
@@ -263,7 +267,7 @@ def test_output_step_stack_terminal_titlecard_does_not_continue_to_parallel_uplo
         )
 
     assert failures == 0
-    assert calls == ["titlecard"]
+    assert calls == ["titlecard", "youtube_upload"]
 
 
 @pytest.mark.parametrize(
@@ -278,7 +282,7 @@ def test_output_step_stack_terminal_titlecard_does_not_continue_to_parallel_uplo
         ("stop", "_stop_output_step"),
     ],
 )
-def test_dead_end_processing_nodes_do_not_continue_into_parallel_upload_branch(tmp_path, node_type, step_attr):
+def test_dead_end_processing_nodes_still_allow_parallel_upload_branch(tmp_path, node_type, step_attr):
     stack = OutputStepStack()
     executor = _FakeExecutor()
     source = tmp_path / f"{node_type}-source.mp4"
@@ -334,7 +338,7 @@ def test_dead_end_processing_nodes_do_not_continue_into_parallel_upload_branch(t
         )
 
     assert failures == 0
-    assert calls == [node_type]
+    assert calls == [node_type, "youtube_upload"]
 
 
 def test_output_step_stack_stops_after_upload_failure(tmp_path):

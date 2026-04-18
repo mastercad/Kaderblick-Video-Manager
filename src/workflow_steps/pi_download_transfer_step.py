@@ -17,7 +17,7 @@ class PiDownloadTransferStep:
         job: WorkflowJob,
         on_file_ready: Callable[[str], None] | None = None,
     ) -> list[str]:
-        cancel_flag = executor._cancel_flag_for_job(orig_idx)
+        cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, orig_idx)
         executor.source_progress.emit(orig_idx, 0)
         device = next(
             (configured for configured in executor._settings.cameras.devices if configured.name == job.device_name),

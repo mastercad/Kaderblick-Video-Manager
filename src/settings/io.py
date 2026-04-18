@@ -62,6 +62,8 @@ def apply_settings_payload(
     settings.default_match_competition = data.get("default_match_competition", getattr(settings, "default_match_competition", ""))
     settings.default_match_home_team = data.get("default_match_home_team", getattr(settings, "default_match_home_team", ""))
     settings.default_match_away_team = data.get("default_match_away_team", getattr(settings, "default_match_away_team", ""))
+    settings.default_match_location = data.get("default_match_location", getattr(settings, "default_match_location", ""))
+    settings.default_kaderblick_game_id = data.get("default_kaderblick_game_id", getattr(settings, "default_kaderblick_game_id", ""))
     settings.restore_last_workflow = data.get("restore_last_workflow", settings.restore_last_workflow)
 
 

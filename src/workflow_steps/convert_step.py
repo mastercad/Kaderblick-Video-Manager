@@ -7,6 +7,7 @@ from ..media.converter import ConvertJob
 from ..settings import AppSettings
 from ..media.step_reporting import format_encoder_summary, format_source_target_summary
 from ..workflow import WorkflowJob
+from .executor_support import ExecutorSupport
 
 
 class ConvertStep:
@@ -22,7 +23,7 @@ class ConvertStep:
         done_count: int,
         total_count: int,
     ) -> str:
-        cancel_flag = executor._cancel_flag_for_job(orig_idx)
+        cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, orig_idx)
         existing_output = self._find_existing_output(cv_job, job, per_settings)
         if existing_output is not None and existing_output.exists() and not per_settings.video.overwrite:
             cv_job.output_path = existing_output
@@ -60,7 +61,7 @@ class ConvertStep:
             progress_callback=_progress,
         )
 
-        if executor._is_job_cancelled(orig_idx) or cv_job.status == "Abgebrochen":
+        if ExecutorSupport.is_job_cancelled(executor, orig_idx) or cv_job.status == "Abgebrochen":
             executor._set_step_status(job, "convert", "cancelled")
             executor._set_step_detail(job, "convert", f"Quelle: {cv_job.source_path.name} | Durch Benutzer abgebrochen")
             executor._set_job_status(orig_idx, "Konvertierung abgebrochen")

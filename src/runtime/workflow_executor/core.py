@@ -1,6 +1,7 @@
 """Workflow-Executor mit konservativer Pipeline-Ausführung."""
 
 import threading
+import time
 
 from PySide6.QtCore import QObject, Signal, Slot
 
@@ -26,6 +27,25 @@ class _JobCancelFlag:
 
     def is_set(self) -> bool:
         return self._executor._cancel.is_set() or self._orig_idx in self._executor._cancelled_indices
+
+    def wait(self, timeout: float | None = None) -> bool:
+        if self.is_set():
+            return True
+        if timeout is not None and timeout <= 0:
+            return self.is_set()
+
+        deadline = None if timeout is None else time.monotonic() + timeout
+        while True:
+            if self.is_set():
+                return True
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return self.is_set()
+                wait_time = min(0.05, remaining)
+            else:
+                wait_time = 0.05
+            self._executor._cancel.wait(wait_time)
 
 
 class WorkflowExecutor(WorkflowExecutorPipelineMixin, WorkflowExecutorSupportMixin, QObject):

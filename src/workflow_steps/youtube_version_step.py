@@ -60,7 +60,7 @@ class YoutubeVersionStep:
         elif convert_before_yt:
             inherited_encoder = prepared.per_settings.video.encoder
             inherited_crf = prepared.per_settings.video.crf
-        cancel_flag = executor._cancel_flag_for_job(prepared.orig_idx)
+        cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, prepared.orig_idx)
         ok = executor._youtube_convert_func(
             prepared.cv_job,
             prepared.per_settings,
@@ -75,7 +75,7 @@ class YoutubeVersionStep:
             output_format=prepared.job.yt_version_output_format,
             output_resolution=prepared.job.yt_version_output_resolution,
         )
-        if executor._is_job_cancelled(prepared.orig_idx):
+        if ExecutorSupport.is_job_cancelled(executor, prepared.orig_idx):
             executor._set_step_status(prepared.job, "yt_version", "cancelled")
             executor._set_step_detail(prepared.job, "yt_version", f"Durch Benutzer abgebrochen: {prepared.cv_job.output_path.name}")
             executor._set_job_status(prepared.orig_idx, "YT-Version abgebrochen")

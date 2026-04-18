@@ -95,6 +95,14 @@ def graph_outgoing_for_branches(
     return outgoing
 
 
+def graph_direct_targets(
+    job: WorkflowJob,
+    node_id: str,
+    branch_results: dict[str, str] | None = None,
+) -> list[str]:
+    return list(graph_outgoing_for_branches(job, branch_results).get(node_id, []))
+
+
 def graph_reachable_node_ids(job: WorkflowJob) -> set[str]:
     outgoing = graph_outgoing(job)
     reachable = {node_id for node_id, _node_type in graph_source_nodes(job)}

@@ -50,6 +50,7 @@ class MatchData:
     competition: str = ""
     home_team: str = ""
     away_team: str = ""
+    location: str = ""
 
 
 @dataclass
@@ -159,6 +160,9 @@ def build_video_description(match: MatchData, seg: SegmentData) -> str:
     if match.competition:
         lines.append(f"🏆 {match.competition}")
 
+    if match.location:
+        lines.append(f"📍 {match.location}")
+
     type_label = seg.type_name or f"{seg.half}. Halbzeit"
     section = type_label
     if seg.part:
@@ -170,8 +174,10 @@ def build_video_description(match: MatchData, seg: SegmentData) -> str:
     if seg.camera:
         lines.append(f"📷 {seg.camera}")
 
-    hashtags = _unique_nonempty([_hashtag_from_tag(tag) for tag in build_video_tags(match, seg)])
+    hashtags = _unique_nonempty([_hashtag_from_tag(tag) for tag in build_video_tags(match, seg)] + ["#Kaderblick"])
 
+    lines.append("")
+    lines.append("automatisch hochgeladen mit Kaderblick Video-Manager")
     lines.append("")
     if hashtags:
         lines.append(" ".join(hashtags))
@@ -276,6 +282,7 @@ class YouTubeTitleEditorDialog(QDialog):
             competition=last_m.get("competition", ""),
             home_team=last_m.get("home_team", ""),
             away_team=last_m.get("away_team", ""),
+            location=last_m.get("location", ""),
         )
 
         # Segment aus Memory laden; bei auto_increment_part das Teil erhöhen
@@ -302,6 +309,7 @@ class YouTubeTitleEditorDialog(QDialog):
             "competition": mem.get("history_competition", []),
             "home_team":   mem.get("history_home_team",   []),
             "away_team":   mem.get("history_away_team",   []),
+            "location":    mem.get("history_location",    []),
         }
 
         # Ergebnisse (werden in _accept gesetzt)
@@ -388,6 +396,10 @@ class YouTubeTitleEditorDialog(QDialog):
         self._away_combo = self._make_history_combo("away_team",
                                                      "z. B. SSV 1862 Langburkersdorf U19")
         form.addRow("Auswärtsteam:", self._away_combo)
+
+        self._location_combo = self._make_history_combo("location",
+                                 "z. B. Sportplatz Wurgwitz")
+        form.addRow("Austragungsort:", self._location_combo)
 
         return grp
 
@@ -516,6 +528,7 @@ class YouTubeTitleEditorDialog(QDialog):
         self._competition_combo.setCurrentText(m.competition)
         self._home_combo.setCurrentText(m.home_team)
         self._away_combo.setCurrentText(m.away_team)
+        self._location_combo.setCurrentText(m.location)
 
         if self._mode != "full":
             return
@@ -558,6 +571,7 @@ class YouTubeTitleEditorDialog(QDialog):
             competition=self._competition_combo.currentText().strip(),
             home_team=self._home_combo.currentText().strip(),
             away_team=self._away_combo.currentText().strip(),
+            location=self._location_combo.currentText().strip(),
         )
 
     def _current_segment(self) -> SegmentData:
@@ -644,6 +658,7 @@ class YouTubeTitleEditorDialog(QDialog):
             "competition": self._result_match.competition,
             "home_team":   self._result_match.home_team,
             "away_team":   self._result_match.away_team,
+            "location":    self._result_match.location,
         }
         mem["last_segment"] = {
             "camera":         self._result_segment.camera,
@@ -658,6 +673,7 @@ class YouTubeTitleEditorDialog(QDialog):
             ("history_competition", self._result_match.competition),
             ("history_home_team",   self._result_match.home_team),
             ("history_away_team",   self._result_match.away_team),
+            ("history_location",    self._result_match.location),
         ]:
             mem[key] = _add_to_history(mem.get(key, []), val)
 

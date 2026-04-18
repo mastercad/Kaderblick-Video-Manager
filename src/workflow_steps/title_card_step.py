@@ -7,6 +7,7 @@ from typing import Any
 from ..media.merge import generate_title_card
 from ..media.ffmpeg_runner import get_resolution
 from ..media.step_reporting import format_media_artifact
+from ..workflow.defaults import titlecard_match_data
 from .executor_support import ExecutorSupport
 from .models import PreparedOutput
 
@@ -40,7 +41,7 @@ class TitleCardStep:
             prepared.job,
             prepared.per_settings,
         )
-        if executor._is_job_cancelled(prepared.orig_idx):
+        if ExecutorSupport.is_job_cancelled(executor, prepared.orig_idx):
             executor._set_step_status(prepared.job, "titlecard", "cancelled")
             executor._set_step_detail(prepared.job, "titlecard", f"Durch Benutzer abgebrochen: {prepared.cv_job.source_path.name}")
             executor._set_job_status(prepared.orig_idx, "Titelkarte abgebrochen")
@@ -56,7 +57,7 @@ class TitleCardStep:
         return 0
 
     def _prepend_title_card(self, executor: Any, orig_idx: int, cv_job, job, per_settings) -> tuple[Path, bool]:
-        cancel_flag = executor._cancel_flag_for_job(orig_idx)
+        cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, orig_idx)
         video_path = cv_job.output_path
         if not video_path:
             raise ValueError("cv_job.output_path ist None")
@@ -64,8 +65,9 @@ class TitleCardStep:
 
         entry = executor._find_file_entry(job, str(cv_job.source_path))
 
-        home_team = (job.title_card_home_team or "").strip()
-        away_team = (job.title_card_away_team or "").strip()
+        match = titlecard_match_data(per_settings, job)
+        home_team = (match.home_team or "").strip()
+        away_team = (match.away_team or "").strip()
 
         title = ""
         if home_team and away_team:

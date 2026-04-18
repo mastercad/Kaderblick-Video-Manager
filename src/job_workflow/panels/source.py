@@ -21,6 +21,7 @@ from ...ui import AlwaysVisiblePlaceholderLineEdit
 from ...ui.file_list_widget import FileListWidget
 from ...settings import AppSettings
 from ...workflow import WorkflowJob, graph_source_nodes, workflow_output_device_name
+from .wheel_guard import install_focus_only_wheel_guard
 
 
 class WorkflowSourcePanel(QGroupBox):
@@ -49,6 +50,7 @@ class WorkflowSourcePanel(QGroupBox):
         self._on_match_data_changed = on_match_data_changed
         self._on_load_pi_camera_files = on_load_pi_camera_files
         self._build_ui()
+        install_focus_only_wheel_guard(self)
 
     def _build_ui(self) -> None:
         self.setStyleSheet(

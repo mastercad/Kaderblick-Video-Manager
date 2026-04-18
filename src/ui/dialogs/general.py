@@ -3,11 +3,13 @@
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QDate
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDateEdit, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QVBoxLayout
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QFont
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QVBoxLayout
 
 from ...settings import AppSettings
-from ...integrations.youtube_title_editor import _add_to_history, load_memory, save_memory
+from ...integrations.youtube_title_editor import MatchData, SegmentData, _add_to_history, build_playlist_title, build_video_description, build_video_title, load_memory, save_memory
+from ...ui import ClearableDateField
 
 
 class GeneralSettingsDialog(QDialog):
@@ -50,30 +52,84 @@ class GeneralSettingsDialog(QDialog):
         match_group = QGroupBox("Globale Spieldaten")
         match_form = QFormLayout()
         match_hint = QLabel(
-            "Wettbewerb, Heim- und Auswärtsmannschaft verwenden denselben Verlauf wie der Metadaten-Editor.\n"
-            "Das Datum startet immer mit dem heutigen Tag. Pro Workflow können die Werte weiter überschrieben werden."
+            "Datum, Wettbewerb, Teams, Austragungsort und Kaderblick-Spiel-ID gelten als zentrale Vorgaben.\n"
+            "Leere Felder in Workflow-Nodes übernehmen diese Werte automatisch; nur explizite Node-Werte überschreiben sie."
         )
         match_hint.setEnabled(False)
         memory = load_memory()
-        last_match = memory.get("last_match", {})
         today = date.today()
+        default_date_iso = (settings.default_match_date or "").strip() or today.isoformat()
 
-        self.match_date_edit = QDateEdit(QDate(today.year, today.month, today.day))
-        self.match_date_edit.setCalendarPopup(True)
-        self.match_date_edit.setDisplayFormat("dd.MM.yyyy")
+        self.match_date_edit = ClearableDateField(self)
+        self.match_date_edit.setText(default_date_iso)
         self.match_competition_edit = self._make_history_combo(memory.get("history_competition", []), "z. B. Kreispokal")
         self.match_home_edit = self._make_history_combo(memory.get("history_home_team", []), "Heimmannschaft")
         self.match_away_edit = self._make_history_combo(memory.get("history_away_team", []), "Auswärtsmannschaft")
-        self.match_competition_edit.setCurrentText(str(last_match.get("competition", "")))
-        self.match_home_edit.setCurrentText(str(last_match.get("home_team", "")))
-        self.match_away_edit.setCurrentText(str(last_match.get("away_team", "")))
+        self.match_location_edit = self._make_history_combo(memory.get("history_location", []), "Austragungsort")
+        self.kb_game_id_edit = QLineEdit(settings.default_kaderblick_game_id)
+        self.kb_game_id_edit.setPlaceholderText("z. B. 42")
+        self.match_competition_edit.setCurrentText(settings.default_match_competition)
+        self.match_home_edit.setCurrentText(settings.default_match_home_team)
+        self.match_away_edit.setCurrentText(settings.default_match_away_team)
+        self.match_location_edit.setCurrentText(settings.default_match_location)
         match_form.addRow("Spieldatum:", self.match_date_edit)
         match_form.addRow("Wettbewerb:", self.match_competition_edit)
         match_form.addRow("Heimmannschaft:", self.match_home_edit)
         match_form.addRow("Auswärtsmannschaft:", self.match_away_edit)
+        match_form.addRow("Austragungsort:", self.match_location_edit)
+        match_form.addRow("Kaderblick-Spiel-ID:", self.kb_game_id_edit)
         match_form.addRow("", match_hint)
         match_group.setLayout(match_form)
         layout.addWidget(match_group)
+
+        preview_group = QGroupBox("YouTube-Vorschau")
+        preview_form = QFormLayout(preview_group)
+        preview_hint = QLabel(
+            "Vorschau auf Basis der globalen Spieldaten. Titel und Beschreibung werden exemplarisch\n"
+            "für einen Standard-Abschnitt '1. Halbzeit' ohne Kamera erzeugt."
+        )
+        preview_hint.setEnabled(False)
+        preview_form.addRow("", preview_hint)
+
+        mono = QFont("Monospace", 9)
+
+        self.playlist_preview = QLabel("–")
+        self.playlist_preview.setWordWrap(True)
+        self.playlist_preview.setFont(mono)
+        self.playlist_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.playlist_len_lbl = QLabel()
+        self.playlist_len_lbl.setFixedWidth(55)
+        self.playlist_len_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        playlist_row = QHBoxLayout()
+        playlist_row.addWidget(self.playlist_preview, 1)
+        playlist_row.addWidget(self.playlist_len_lbl)
+        preview_form.addRow("Playlist:", playlist_row)
+
+        self.title_preview = QLabel("–")
+        self.title_preview.setWordWrap(True)
+        self.title_preview.setFont(mono)
+        self.title_preview.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.title_len_lbl = QLabel()
+        self.title_len_lbl.setFixedWidth(55)
+        self.title_len_lbl.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        title_row = QHBoxLayout()
+        title_row.addWidget(self.title_preview, 1)
+        title_row.addWidget(self.title_len_lbl)
+        preview_form.addRow("Titel:", title_row)
+
+        self.description_preview = QPlainTextEdit()
+        self.description_preview.setReadOnly(True)
+        self.description_preview.setFont(mono)
+        self.description_preview.setFixedHeight(120)
+        preview_form.addRow("Beschreibung:", self.description_preview)
+        layout.addWidget(preview_group)
+
+        self.match_date_edit.effectiveTextChanged.connect(self._update_preview)
+        self.match_competition_edit.currentTextChanged.connect(self._update_preview)
+        self.match_home_edit.currentTextChanged.connect(self._update_preview)
+        self.match_away_edit.currentTextChanged.connect(self._update_preview)
+        self.match_location_edit.currentTextChanged.connect(self._update_preview)
+        self._update_preview()
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.button(QDialogButtonBox.Save).setText("Speichern")
@@ -98,25 +154,66 @@ class GeneralSettingsDialog(QDialog):
             combo.addItem(str(item))
         return combo
 
+    def _current_match(self) -> MatchData:
+        return MatchData(
+            date_iso=self.match_date_edit.isoValue(),
+            competition=self.match_competition_edit.currentText().strip(),
+            home_team=self.match_home_edit.currentText().strip(),
+            away_team=self.match_away_edit.currentText().strip(),
+            location=self.match_location_edit.currentText().strip(),
+        )
+
+    def _update_preview(self, *_args) -> None:
+        match = self._current_match()
+        segment = SegmentData(type_name="1. Halbzeit", half=1)
+
+        playlist = build_playlist_title(match)
+        title = build_video_title(match, segment)
+        description = build_video_description(match, segment)
+
+        self.playlist_preview.setText(playlist or "–")
+        self.title_preview.setText(title or "–")
+        self.description_preview.setPlainText(description)
+        self._set_len_label(self.playlist_len_lbl, len(playlist))
+        self._set_len_label(self.title_len_lbl, len(title))
+
+    @staticmethod
+    def _set_len_label(label: QLabel, length: int) -> None:
+        label.setText(f"{length} / 100")
+        if length > 100:
+            label.setStyleSheet("color: red; font-weight: bold;")
+        elif length > 88:
+            label.setStyleSheet("color: orange; font-weight: bold;")
+        else:
+            label.setStyleSheet("color: green;")
+
     def _save(self):
         self.settings.restore_last_workflow = self.restore_cb.isChecked()
         self.settings.workflow_output_root = self.output_root_edit.text().strip()
-        self.settings.save()
-
-        qd = self.match_date_edit.date()
-        date_iso = f"{qd.year():04d}-{qd.month():02d}-{qd.day():02d}"
+        date_iso = self.match_date_edit.isoValue()
         competition = self.match_competition_edit.currentText().strip()
         home_team = self.match_home_edit.currentText().strip()
         away_team = self.match_away_edit.currentText().strip()
+        location = self.match_location_edit.currentText().strip()
+        self.settings.default_match_date = date_iso
+        self.settings.default_match_competition = competition
+        self.settings.default_match_home_team = home_team
+        self.settings.default_match_away_team = away_team
+        self.settings.default_match_location = location
+        self.settings.default_kaderblick_game_id = self.kb_game_id_edit.text().strip()
+        self.settings.save()
+
         memory = load_memory()
         memory["last_match"] = {
             "date_iso": date_iso,
             "competition": competition,
             "home_team": home_team,
             "away_team": away_team,
+            "location": location,
         }
         memory["history_competition"] = _add_to_history(memory.get("history_competition", []), competition)
         memory["history_home_team"] = _add_to_history(memory.get("history_home_team", []), home_team)
         memory["history_away_team"] = _add_to_history(memory.get("history_away_team", []), away_team)
+        memory["history_location"] = _add_to_history(memory.get("history_location", []), location)
         save_memory(memory)
         self.accept()

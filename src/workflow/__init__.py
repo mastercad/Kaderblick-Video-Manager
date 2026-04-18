@@ -1,6 +1,7 @@
 """Workflow-Paket mit stabiler oeffentlicher API."""
 
 from .graph import (
+    graph_direct_targets,
     graph_edge_defs,
     graph_edges,
     graph_has_multiple_sources,
@@ -47,6 +48,7 @@ __all__ = [
     "_migrate_source_to_job",
     "graph_node_map",
     "graph_node_id_for_type",
+    "graph_direct_targets",
     "graph_edge_defs",
     "graph_edges",
     "graph_source_nodes",

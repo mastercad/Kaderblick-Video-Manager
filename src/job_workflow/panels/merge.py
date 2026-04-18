@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import copy
 from datetime import date
+import re
 
-from PySide6.QtCore import QDate, Qt, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QComboBox,
-    QDateEdit,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -32,18 +32,33 @@ from ...integrations.youtube_title_editor import (
     load_memory,
     save_memory,
 )
+from ...settings import AppSettings
+from ...ui import ClearableDateField, format_display_date, normalize_date_text
 
 
 class OutputMetadataPanel(QWidget):
     metadata_changed = Signal()
 
-    def __init__(self, parent=None, *, info_text: str):
+    _DDMMYYYY_RE = re.compile(r"^(\d{2})\.(\d{2})\.(\d{4})$")
+    _YYYYMMDD_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})$")
+
+    def __init__(self, parent=None, *, info_text: str, settings: AppSettings | None = None):
         super().__init__(parent)
         self._info_text = info_text
+        self._settings = settings
         self._kb_video_types: list[dict] = []
         self._kb_cameras: list[dict] = []
         self._initial_kb_type_id = 0
         self._initial_kb_camera_id = 0
+        today_iso = (settings.default_match_date if settings is not None else "") or date.today().isoformat()
+        self._default_match = MatchData(date_iso=today_iso)
+        self._match_field_overrides = {
+            "date_iso": False,
+            "competition": False,
+            "home_team": False,
+            "away_team": False,
+            "location": False,
+        }
         self._build_ui()
         self._load_memory_defaults()
         self._update_previews()
@@ -74,10 +89,8 @@ class OutputMetadataPanel(QWidget):
         form.setContentsMargins(14, 18, 14, 14)
         form.setSpacing(8)
 
-        self._date_edit = QDateEdit(self)
-        self._date_edit.setCalendarPopup(True)
-        self._date_edit.setDisplayFormat("dd.MM.yyyy")
-        self._date_edit.dateChanged.connect(self._on_field_changed)
+        self._date_edit = ClearableDateField(self)
+        self._date_edit.effectiveTextChanged.connect(self._on_field_changed)
         form.addRow("Datum:", self._date_edit)
 
         self._competition_combo = self._make_history_combo("history_competition", "z. B. Sparkassenpokal")
@@ -88,6 +101,9 @@ class OutputMetadataPanel(QWidget):
 
         self._away_combo = self._make_history_combo("history_away_team", "Auswärtsteam")
         form.addRow("Auswärtsteam:", self._away_combo)
+
+        self._location_combo = self._make_history_combo("history_location", "Austragungsort")
+        form.addRow("Austragungsort:", self._location_combo)
         return group
 
     def _build_segment_group(self) -> QWidget:
@@ -182,18 +198,46 @@ class OutputMetadataPanel(QWidget):
         return group
 
     def _load_memory_defaults(self) -> None:
-        memory = load_memory()
-        last_match = memory.get("last_match", {})
-        date_iso = last_match.get("date_iso") or date.today().isoformat()
-        try:
-            parsed = date.fromisoformat(date_iso)
-            self._date_edit.setDate(QDate(parsed.year, parsed.month, parsed.day))
-        except ValueError:
-            self._date_edit.setDate(QDate.currentDate())
-        self._competition_combo.setCurrentText(str(last_match.get("competition", "")))
-        self._home_combo.setCurrentText(str(last_match.get("home_team", "")))
-        self._away_combo.setCurrentText(str(last_match.get("away_team", "")))
+        self.set_default_match(self._settings_default_match())
         self._reload_kaderblick_combos()
+
+    def _settings_default_match(self) -> MatchData:
+        values = self._settings.default_match_values() if self._settings is not None else {}
+        date_iso = str(values.get("date_iso") or "").strip() or date.today().isoformat()
+        return MatchData(
+            date_iso=date_iso,
+            competition=str(values.get("competition") or "").strip(),
+            home_team=str(values.get("home_team") or "").strip(),
+            away_team=str(values.get("away_team") or "").strip(),
+            location=str(values.get("location") or "").strip(),
+        )
+
+    def set_default_match(self, match: MatchData) -> None:
+        self._default_match = MatchData(
+            date_iso=(match.date_iso or date.today().isoformat()).strip(),
+            competition=(match.competition or "").strip(),
+            home_team=(match.home_team or "").strip(),
+            away_team=(match.away_team or "").strip(),
+            location=(match.location or "").strip(),
+        )
+        self._date_edit.setPlaceholderText(self._default_match.date_iso)
+
+        if not self._match_field_overrides["date_iso"]:
+            self._date_edit.setText("")
+
+        for key, combo in (
+            ("competition", self._competition_combo),
+            ("home_team", self._home_combo),
+            ("away_team", self._away_combo),
+            ("location", self._location_combo),
+        ):
+            combo.lineEdit().setPlaceholderText(getattr(self._default_match, key))
+            if not self._match_field_overrides[key]:
+                combo.blockSignals(True)
+                combo.setCurrentText("")
+                combo.blockSignals(False)
+
+        self._apply_match_field_styles()
 
     def _make_history_combo(self, memory_key: str, placeholder: str) -> QComboBox:
         combo = QComboBox(self)
@@ -241,6 +285,28 @@ class OutputMetadataPanel(QWidget):
         self._kb_cameras = list(cameras)
         self._reload_kaderblick_combos()
 
+    def _apply_match_field_styles(self) -> None:
+        self._date_edit.setStyleSheet("")
+        for _key, combo in (
+            ("competition", self._competition_combo),
+            ("home_team", self._home_combo),
+            ("away_team", self._away_combo),
+            ("location", self._location_combo),
+        ):
+            combo.lineEdit().setStyleSheet("")
+
+    def _refresh_match_override_state(self) -> None:
+        self._match_field_overrides["date_iso"] = bool(self._normalize_date_override(self._date_edit.text()))
+        for key, combo in (
+            ("competition", self._competition_combo),
+            ("home_team", self._home_combo),
+            ("away_team", self._away_combo),
+            ("location", self._location_combo),
+        ):
+            value = combo.currentText().strip()
+            self._match_field_overrides[key] = bool(value) and value != getattr(self._default_match, key)
+        self._apply_match_field_styles()
+
     def load_from_job(
         self,
         *,
@@ -255,25 +321,23 @@ class OutputMetadataPanel(QWidget):
     ) -> None:
         self._initial_kb_type_id = kb_type_id
         self._initial_kb_camera_id = kb_camera_id
-        match = MatchData(**match_data) if match_data else fallback_match
+        self.set_default_match(fallback_match)
+        match_overrides = MatchData(**match_data) if match_data else MatchData()
         segment = SegmentData(**segment_data) if segment_data else SegmentData()
 
-        self._date_edit.blockSignals(True)
-        try:
-            parsed = date.fromisoformat(match.date_iso or date.today().isoformat())
-            self._date_edit.setDate(QDate(parsed.year, parsed.month, parsed.day))
-        except ValueError:
-            self._date_edit.setDate(QDate.currentDate())
-        self._date_edit.blockSignals(False)
+        self._date_edit.setText(self._format_display_date(match_overrides.date_iso))
+        self._match_field_overrides["date_iso"] = bool(match_overrides.date_iso.strip())
 
-        for combo, text in (
-            (self._competition_combo, match.competition),
-            (self._home_combo, match.home_team),
-            (self._away_combo, match.away_team),
+        for key, combo, text in (
+            ("competition", self._competition_combo, match_overrides.competition),
+            ("home_team", self._home_combo, match_overrides.home_team),
+            ("away_team", self._away_combo, match_overrides.away_team),
+            ("location", self._location_combo, match_overrides.location),
         ):
             combo.blockSignals(True)
-            combo.setCurrentText(text)
+            combo.setCurrentText(text or "")
             combo.blockSignals(False)
+            self._match_field_overrides[key] = bool((text or "").strip())
 
         self._reload_kaderblick_combos()
 
@@ -310,16 +374,33 @@ class OutputMetadataPanel(QWidget):
             self._playlist_preview.setText(fallback_playlist or "–")
             self._title_preview.setText(fallback_title or "–")
             self._description_preview.setText(fallback_description or "")
+        self._apply_match_field_styles()
         self._update_previews()
 
     def current_match(self) -> MatchData:
-        qd = self._date_edit.date()
         return MatchData(
-            date_iso=f"{qd.year():04d}-{qd.month():02d}-{qd.day():02d}",
-            competition=self._competition_combo.currentText().strip(),
-            home_team=self._home_combo.currentText().strip(),
-            away_team=self._away_combo.currentText().strip(),
+            date_iso=(self._normalize_date_override(self._date_edit.text()) or self._default_match.date_iso),
+            competition=(self._competition_combo.currentText().strip() or self._default_match.competition),
+            home_team=(self._home_combo.currentText().strip() or self._default_match.home_team),
+            away_team=(self._away_combo.currentText().strip() or self._default_match.away_team),
+            location=(self._location_combo.currentText().strip() or self._default_match.location),
         )
+
+    def current_match_overrides(self) -> dict[str, str]:
+        payload: dict[str, str] = {}
+        date_override = self._normalize_date_override(self._date_edit.text())
+        if self._match_field_overrides["date_iso"] and date_override:
+            payload["date_iso"] = date_override
+        for key, combo in (
+            ("competition", self._competition_combo),
+            ("home_team", self._home_combo),
+            ("away_team", self._away_combo),
+            ("location", self._location_combo),
+        ):
+            value = combo.currentText().strip()
+            if self._match_field_overrides[key] and value:
+                payload[key] = value
+        return payload
 
     def current_segment(self) -> SegmentData:
         if self._kb_cameras:
@@ -348,7 +429,7 @@ class OutputMetadataPanel(QWidget):
         match = self.current_match()
         segment = self.current_segment()
         return {
-            "match_data": copy.deepcopy(match.__dict__),
+            "match_data": copy.deepcopy(self.current_match_overrides()),
             "segment_data": copy.deepcopy(segment.__dict__),
             "title": build_video_title(match, segment),
             "playlist": build_playlist_title(match),
@@ -356,7 +437,7 @@ class OutputMetadataPanel(QWidget):
             "tags": build_video_tags(match, segment),
             "kaderblick_video_type_id": int(self._video_type_combo.currentData() or 0) if self._kb_video_types else self._initial_kb_type_id,
             "kaderblick_camera_id": int(self._camera_combo.currentData() or 0) if self._kb_cameras else self._initial_kb_camera_id,
-            "merge_match_data": copy.deepcopy(match.__dict__),
+            "merge_match_data": copy.deepcopy(self.current_match_overrides()),
             "merge_segment_data": copy.deepcopy(segment.__dict__),
             "merge_output_title": build_video_title(match, segment),
             "merge_output_playlist": build_playlist_title(match),
@@ -366,14 +447,17 @@ class OutputMetadataPanel(QWidget):
         }
 
     def apply_match_data(self, match: MatchData) -> None:
-        try:
-            parsed = date.fromisoformat(match.date_iso or date.today().isoformat())
-            self._date_edit.setDate(QDate(parsed.year, parsed.month, parsed.day))
-        except ValueError:
-            self._date_edit.setDate(QDate.currentDate())
-        self._competition_combo.setCurrentText(match.competition)
-        self._home_combo.setCurrentText(match.home_team)
-        self._away_combo.setCurrentText(match.away_team)
+        self._match_field_overrides["date_iso"] = bool((match.date_iso or "").strip())
+        self._date_edit.setText(self._format_display_date(match.date_iso))
+        for key, combo, value in (
+            ("competition", self._competition_combo, match.competition),
+            ("home_team", self._home_combo, match.home_team),
+            ("away_team", self._away_combo, match.away_team),
+            ("location", self._location_combo, getattr(match, "location", "")),
+        ):
+            combo.setCurrentText(value)
+            self._match_field_overrides[key] = bool((value or "").strip())
+        self._apply_match_field_styles()
 
     def persist_memory(self) -> None:
         match = self.current_match()
@@ -385,6 +469,7 @@ class OutputMetadataPanel(QWidget):
             "competition": match.competition,
             "home_team": match.home_team,
             "away_team": match.away_team,
+            "location": match.location,
         }
         memory["last_segment"] = {
             "camera": segment.camera,
@@ -398,11 +483,21 @@ class OutputMetadataPanel(QWidget):
         memory["history_competition"] = _add_to_history(memory.get("history_competition", []), match.competition)
         memory["history_home_team"] = _add_to_history(memory.get("history_home_team", []), match.home_team)
         memory["history_away_team"] = _add_to_history(memory.get("history_away_team", []), match.away_team)
+        memory["history_location"] = _add_to_history(memory.get("history_location", []), match.location)
         save_memory(memory)
 
     def _on_field_changed(self, *_args) -> None:
+        self._refresh_match_override_state()
         self._update_previews()
         self.metadata_changed.emit()
+
+    @classmethod
+    def _normalize_date_override(cls, raw: str) -> str:
+        return normalize_date_text(raw)
+
+    @staticmethod
+    def _format_display_date(date_iso: str) -> str:
+        return format_display_date(date_iso) or (date_iso or "")
 
     def _update_previews(self) -> None:
         match = self.current_match()
@@ -438,16 +533,18 @@ class OutputMetadataPanel(QWidget):
 
 
 class MergeMetadataPanel(OutputMetadataPanel):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, settings: AppSettings | None = None):
         super().__init__(
             parent,
+            settings=settings,
             info_text="Merge-Metadaten gehören an den Merge-Node. Hier definierst du den gemeinsamen Titel, die Playlist, die Beschreibung und optionale Kaderblick-Zuordnung für das zusammengeführte Ergebnis.",
         )
 
 
 class YouTubeMetadataPanel(OutputMetadataPanel):
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, *, settings: AppSettings | None = None):
         super().__init__(
             parent,
+            settings=settings,
             info_text="Für direkte YouTube-Uploads pflegst du hier dieselben Spieldaten, Abschnittsdaten und die Vorschau wie beim Merge. Titel, Playlist, Beschreibung und Tags werden daraus zentral abgeleitet.",
         )

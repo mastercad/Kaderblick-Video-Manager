@@ -8,6 +8,7 @@ from ..media.merge_analysis import analyze_merge_sources
 from ..media.step_reporting import format_encoder_summary, format_list_summary, format_media_artifact
 from ..workflow import WorkflowJob
 from ..integrations.youtube_title_editor import MatchData, SegmentData, build_output_filename_from_title, build_playlist_title, build_video_description, build_video_tags, build_video_title
+from ..workflow.defaults import resolve_match_data
 from .delete_sources_step import DeleteSourcesStep
 from .executor_support import ExecutorSupport
 from .models import ConvertItem, PreparedOutput
@@ -29,7 +30,7 @@ class MergeGroupStep:
         first_job = group[0].job
         first_cv = group[0].cv_job
         per_settings = executor._build_job_settings(first_job)
-        self._apply_merge_output_metadata(first_job, first_cv)
+        self._apply_merge_output_metadata(first_job, first_cv, per_settings)
         merged_path = self._expected_merged_path(first_job, first_cv)
         group_source_names = [item.cv_job.source_path.name for item in group]
 
@@ -107,7 +108,7 @@ class MergeGroupStep:
         executor._set_step_status(first_job, "merge", "running")
         executor._set_job_status(first_orig_idx, "Zusammenführen …")
         executor.job_progress.emit(first_orig_idx, 0)
-        cancel_flag = executor._cancel_flag_for_job(first_orig_idx)
+        cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, first_orig_idx)
         merged_path.parent.mkdir(parents=True, exist_ok=True)
         concat_ok = executor._concat_func(
             source_paths,
@@ -125,7 +126,7 @@ class MergeGroupStep:
             target_resolution=first_job.merge_output_resolution,
             metadata_job=first_cv,
         )
-        if executor._is_job_cancelled(first_orig_idx):
+        if ExecutorSupport.is_job_cancelled(executor, first_orig_idx):
             executor._set_step_status(first_job, "merge", "cancelled")
             executor._set_step_detail(
                 first_job,
@@ -159,10 +160,12 @@ class MergeGroupStep:
         return PreparedOutput(first_orig_idx, first_job, first_cv, per_settings, graph_origin_kind="merge"), 0
 
     @staticmethod
-    def _apply_merge_output_metadata(first_job: WorkflowJob, first_cv: ConvertJob) -> None:
-        match = MatchData(**first_job.merge_match_data) if first_job.merge_match_data else None
+    def _apply_merge_output_metadata(first_job: WorkflowJob, first_cv: ConvertJob, per_settings) -> None:
+        match = resolve_match_data(per_settings, first_job.merge_match_data) if (first_job.merge_match_data or per_settings is not None) else None
         segment = SegmentData(**first_job.merge_segment_data) if first_job.merge_segment_data else None
-        if match is not None and segment is not None:
+        if match is not None and segment is not None and any(
+            (match.date_iso, match.competition, match.home_team, match.away_team, match.location)
+        ):
             first_cv.youtube_title = build_video_title(match, segment)
             first_cv.youtube_playlist = build_playlist_title(match)
             first_cv.youtube_description = build_video_description(match, segment)

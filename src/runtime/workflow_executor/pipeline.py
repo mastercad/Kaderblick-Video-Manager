@@ -31,6 +31,7 @@ class WorkflowExecutorPipelineMixin:
         worker_executor = _PipelineWorkerView(self, event_queue)
         self._pipeline_event_queue = event_queue
         self._pipeline_last_drain = 0.0
+        self._pipeline_drain_lock = threading.Lock()
 
         def _bump_stat(key: str, amount: int = 1) -> None:
             with stats_lock:
@@ -254,6 +255,7 @@ class WorkflowExecutorPipelineMixin:
         self._transfer_fail = stats["fail"]
         self._pipeline_event_queue = None
         self._pipeline_last_drain = 0.0
+        self._pipeline_drain_lock = None
         self._pipeline_register_expected_output = None
         self._pipeline_mark_output_completed = None
         return stats["ok"], stats["skip"], stats["fail"]
@@ -262,12 +264,21 @@ class WorkflowExecutorPipelineMixin:
         event_queue = getattr(self, "_pipeline_event_queue", None)
         if event_queue is None:
             return
+        drain_lock = getattr(self, "_pipeline_drain_lock", None)
+        if drain_lock is None:
+            drain_lock = threading.Lock()
+            self._pipeline_drain_lock = drain_lock
         now = time.monotonic()
         last_drain = float(getattr(self, "_pipeline_last_drain", 0.0) or 0.0)
         if not force and (now - last_drain) < 0.05:
             return
-        self._pipeline_last_drain = now
-        self._drain_pipeline_events(event_queue)
+        if not drain_lock.acquire(blocking=False):
+            return
+        try:
+            self._pipeline_last_drain = now
+            self._drain_pipeline_events(event_queue)
+        finally:
+            drain_lock.release()
 
     @staticmethod
     def _merge_group_key(orig_idx: int, merge_group_id: str) -> tuple[int, str]:
@@ -306,47 +317,82 @@ class WorkflowExecutorPipelineMixin:
             return
 
         resume_step = self._first_pending_step(job)
-        merge_group_id = self._get_merge_group_id(job, file_path)
-        merge_before_convert = self._merge_precedes_convert(job)
-        convert_enabled = self._support.source_reaches_type(job, file_path, "convert")
-        youtube_upload_enabled = self._support.source_reaches_type(job, file_path, "youtube_upload")
+        source_node_id = self._support.source_node_id_for_file(job, file_path)
+        branch_start_node_ids = self._branch_start_node_ids(job, source_node_id)
         youtube_playlist = self._resolve_youtube_playlist(job, file_path)
         youtube_description = self._resolve_youtube_description(job, file_path)
         youtube_tags = self._resolve_youtube_tags(job, file_path)
-
-        if convert_enabled and not (merge_group_id and merge_before_convert):
-            cv_job = self._build_convert_job(job, file_path)
-        else:
-            cv_job = ConvertJob(
-                source_path=Path(file_path),
-                job_type="convert",
-                youtube_title=self._resolve_youtube_title(job, file_path),
-                youtube_description=youtube_description,
-                youtube_playlist=youtube_playlist,
-                youtube_tags=youtube_tags,
-            )
-            self._support.assign_derived_output_dir(
-                cv_job,
-                self._support.resolve_processed_destination(file_path),
-            )
-            cv_job.status = "Fertig"
-            cv_job.output_path = Path(file_path)
-
-        item = ConvertItem(orig_idx=orig_idx, job=job, cv_job=cv_job, resume_from_step=resume_step or "")
         register_expected_output = getattr(self, "_pipeline_register_expected_output", None)
-        if merge_group_id:
-            merge_key = self._merge_group_key(orig_idx, merge_group_id)
-            with merge_lock:
-                merge_groups[merge_key].append(item)
-            if register_expected_output is not None:
-                register_expected_output(orig_idx, merge_group_id)
-            if convert_enabled and not merge_before_convert and not self._should_skip_step_for_resume(job, "convert", resume_step):
-                process_queue.put(("item", item))
-            return
+        for branch_start_node_id in branch_start_node_ids:
+            merge_group_id = self._branch_merge_group_id(job, file_path, branch_start_node_id)
+            merge_before_convert = self._merge_precedes_convert(job)
+            convert_enabled = self._branch_reaches_type(job, branch_start_node_id, file_path, "convert")
 
-        if register_expected_output is not None:
-            register_expected_output(orig_idx)
-        process_queue.put(("item", item))
+            if convert_enabled and not (merge_group_id and merge_before_convert):
+                cv_job = self._build_convert_job(job, file_path)
+            else:
+                cv_job = ConvertJob(
+                    source_path=Path(file_path),
+                    job_type="convert",
+                    youtube_title=self._resolve_youtube_title(job, file_path),
+                    youtube_description=youtube_description,
+                    youtube_playlist=youtube_playlist,
+                    youtube_tags=youtube_tags,
+                )
+                self._support.assign_derived_output_dir(
+                    cv_job,
+                    self._support.resolve_processed_destination(file_path),
+                )
+                cv_job.status = "Fertig"
+                cv_job.output_path = Path(file_path)
+
+            item = ConvertItem(
+                orig_idx=orig_idx,
+                job=job,
+                cv_job=cv_job,
+                resume_from_step=resume_step or "",
+                graph_origin_node_id=branch_start_node_id,
+                merge_group_id=merge_group_id,
+            )
+            if merge_group_id:
+                merge_key = self._merge_group_key(orig_idx, merge_group_id)
+                with merge_lock:
+                    merge_groups[merge_key].append(item)
+                if register_expected_output is not None:
+                    register_expected_output(orig_idx, merge_group_id)
+                if convert_enabled and not merge_before_convert and not self._should_skip_step_for_resume(job, "convert", resume_step):
+                    process_queue.put(("item", item))
+                continue
+
+            if register_expected_output is not None:
+                register_expected_output(orig_idx)
+            process_queue.put(("item", item))
+
+    def _branch_start_node_ids(self, job: WorkflowJob, source_node_id: str) -> list[str]:
+        if not source_node_id or not getattr(job, "graph_nodes", None):
+            return [source_node_id] if source_node_id else [""]
+        direct_targets = self._support.direct_targets(job, source_node_id)
+        return direct_targets or [source_node_id]
+
+    def _branch_reaches_type(
+        self,
+        job: WorkflowJob,
+        start_node_id: str,
+        file_path: str,
+        target_type: str,
+    ) -> bool:
+        if start_node_id and getattr(job, "graph_nodes", None):
+            return self._support.node_matches_or_reaches_type(job, start_node_id, target_type)
+        return self._support.source_reaches_type(job, file_path, target_type)
+
+    def _branch_merge_group_id(self, job: WorkflowJob, file_path: str, start_node_id: str) -> str:
+        merge_group_id = self._get_merge_group_id(job, file_path)
+        if not merge_group_id:
+            return ""
+        if start_node_id and getattr(job, "graph_nodes", None):
+            if not self._support.node_matches_or_reaches_type(job, start_node_id, "merge"):
+                return ""
+        return merge_group_id
 
     def _process_pipeline_item(
         self,
@@ -359,22 +405,22 @@ class WorkflowExecutorPipelineMixin:
         if self._cancel.is_set():
             return 0, 0, 0
         mark_output_completed = getattr(self, "_pipeline_mark_output_completed", None)
-        merge_group_id = self._get_merge_group_id(item.job, str(item.cv_job.source_path))
+        merge_group_id = item.merge_group_id
         resume_step = item.resume_from_step or self._first_pending_step(item.job) or ""
         per_settings = self._build_job_settings(item.job)
         source_path = str(item.cv_job.source_path)
         convert_before_merge = bool(
             merge_group_id and self._support.source_reaches_type_before_merge(item.job, source_path, "convert")
         )
-        include_title_card = self._support.source_reaches_type(item.job, source_path, "titlecard")
-        include_repair = self._support.source_reaches_type(item.job, source_path, "repair")
-        include_youtube_version = self._support.source_reaches_type(item.job, source_path, "yt_version")
-        youtube_upload_enabled = self._support.source_reaches_type(item.job, source_path, "youtube_upload")
-        kaderblick_enabled = youtube_upload_enabled and self._support.source_reaches_type(item.job, source_path, "kaderblick")
+        include_title_card = self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "titlecard")
+        include_repair = self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "repair")
+        include_youtube_version = self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "yt_version")
+        youtube_upload_enabled = self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "youtube_upload")
+        kaderblick_enabled = youtube_upload_enabled and self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "kaderblick")
         per_settings.youtube.create_youtube = include_youtube_version
         per_settings.youtube.upload_to_youtube = youtube_upload_enabled
 
-        if self._support.source_reaches_type(item.job, source_path, "convert"):
+        if self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "convert"):
             can_skip_convert = self._should_skip_step_for_resume(item.job, "convert", resume_step) and (
                 (item.cv_job.output_path is not None and item.cv_job.output_path.exists())
                 or (resume_step in {"youtube_upload", "kaderblick"} and self._has_existing_youtube_artifact(item.cv_job))
@@ -407,7 +453,7 @@ class WorkflowExecutorPipelineMixin:
                     cv_job=item.cv_job,
                     per_settings=per_settings,
                     resume_from_step=resume_step,
-                    graph_origin_node_id=self._support.source_node_id_for_file(item.job, str(item.cv_job.source_path)),
+                    graph_origin_node_id=item.graph_origin_node_id or self._support.source_node_id_for_file(item.job, str(item.cv_job.source_path)),
                     mark_finished=False,
                     title_card_enabled_override=True,
                     repair_enabled_override=False,
@@ -422,6 +468,7 @@ class WorkflowExecutorPipelineMixin:
                     include_repair=False,
                     include_youtube_version=False,
                     start_at_step=resume_step,
+                    stop_before_merge=True,
                 )
                 if failures:
                     return 0, 0, failures
@@ -433,7 +480,7 @@ class WorkflowExecutorPipelineMixin:
             cv_job=item.cv_job,
             per_settings=per_settings,
             resume_from_step=resume_step,
-            graph_origin_node_id=self._support.source_node_id_for_file(item.job, str(item.cv_job.source_path)),
+            graph_origin_node_id=item.graph_origin_node_id or self._support.source_node_id_for_file(item.job, str(item.cv_job.source_path)),
             mark_finished=False,
             title_card_enabled_override=include_title_card,
             repair_enabled_override=include_repair,

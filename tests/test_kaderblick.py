@@ -21,6 +21,7 @@ from src.integrations.kaderblick import (
     _headers,
     _PostPreservingRedirectHandler,
     _ssl_ctx,
+    get_video_duration_seconds,
 )
 
 
@@ -219,6 +220,21 @@ class TestRefreshJwt:
 
         assert result is True
         assert kb.jwt_token == "new_token_abc"
+
+
+class TestVideoDurationSeconds:
+    def test_uses_central_ffprobe_duration_helper(self):
+        with patch("src.integrations.kaderblick.get_duration", return_value=12.9) as mock_duration:
+            result = get_video_duration_seconds(Path("/tmp/test.mp4"))
+
+        mock_duration.assert_called_once_with(Path("/tmp/test.mp4"))
+        assert result == 12
+
+    def test_returns_zero_when_duration_missing(self):
+        with patch("src.integrations.kaderblick.get_duration", return_value=None):
+            result = get_video_duration_seconds(Path("/tmp/test.mp4"))
+
+        assert result == 0
 
     def test_failed_refresh_returns_false(self):
         from src.integrations.kaderblick import _refresh_jwt

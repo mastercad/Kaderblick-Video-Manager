@@ -15,6 +15,7 @@ from datetime import date
 import pytest
 from unittest.mock import patch
 
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 
@@ -22,6 +23,7 @@ from PySide6.QtCore import Qt
 _app = QApplication.instance() or QApplication(sys.argv)
 
 from src.settings import AppSettings
+from src.job_workflow.panels.source import WorkflowSourcePanel
 from src.ui import AlwaysVisiblePlaceholderLineEdit
 from src.workflow import WorkflowJob, FileEntry
 from src.ui.job_editor import JobEditorDialog
@@ -106,7 +108,12 @@ class TestWizardInit:
 
         assert edit.text() == ""
         assert edit.showingPlaceholder() is True
-        assert edit.displayText() == "/srv/workflows/Spieltag 23 2026-03-23"
+        assert edit.displayText() == ""
+        assert edit.placeholderText() == "/srv/workflows/Spieltag 23 2026-03-23"
+        placeholder_color = edit.palette().color(edit.palette().ColorRole.PlaceholderText)
+        text_color = edit.palette().color(edit.palette().ColorRole.Text)
+        assert placeholder_color != text_color
+        assert placeholder_color.alpha() < text_color.alpha() or placeholder_color.lightness() != text_color.lightness()
 
         edit.setFocus()
         QApplication.processEvents()
@@ -134,7 +141,57 @@ class TestWizardInit:
         edit.clear()
         assert seen[-1] == ""
         assert edit.text() == ""
-        assert edit.displayText() == "/srv/workflows/Spieltag 23 2026-03-23"
+        assert edit.displayText() == ""
+        assert edit.placeholderText() == "/srv/workflows/Spieltag 23 2026-03-23"
+
+    def test_always_visible_placeholder_line_edit_uses_non_selectable_placeholder_instead_of_real_text(self):
+        edit = AlwaysVisiblePlaceholderLineEdit()
+        edit.setPlaceholderText("/srv/workflows/Spieltag 23 2026-03-23")
+        edit.show()
+        QApplication.processEvents()
+
+        edit.selectAll()
+
+        assert edit.selectedText() == ""
+
+        edit.insert("/tmp/ziel")
+        assert edit.text() == "/tmp/ziel"
+
+        edit.clear()
+        QApplication.processEvents()
+
+        assert edit.text() == ""
+        assert edit.selectedText() == ""
+
+    def test_source_panel_clearing_target_propagates_empty_value_and_keeps_placeholder(self):
+        settings = _settings()
+        settings.workflow_output_root = "/srv/workflows"
+        draft = WorkflowJob(
+            name="Dateien",
+            source_mode="files",
+            copy_destination="/altes-ziel",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+        )
+        panel = WorkflowSourcePanel(
+            settings=settings,
+            update_text_field=lambda attr, value: setattr(draft, attr, value),
+            update_bool_field=lambda _attr, _value: None,
+            on_file_pattern_changed=lambda _text: None,
+            on_device_changed=lambda _index: None,
+            on_files_changed=lambda: None,
+            on_pi_files_changed=lambda: None,
+            on_match_data_changed=lambda _home, _away, _date_iso: None,
+            on_load_pi_camera_files=lambda: None,
+        )
+
+        panel.load_from_job(draft)
+        panel._files_dst_edit.clear()
+        panel.refresh_from_job(draft)
+
+        assert panel._files_dst_edit.text() == ""
+        assert panel._files_dst_edit.displayText() == ""
+        assert panel._files_dst_edit.placeholderText() == f"/srv/workflows/Dateien {date.today().isoformat()}/raw"
+        assert draft.copy_destination == ""
 
 
 # ─── Edit-Modus: Daten laden ──────────────────────────────────────────────────

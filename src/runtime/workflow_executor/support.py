@@ -103,7 +103,7 @@ class WorkflowExecutorSupportMixin:
             candidates: list[tuple[str, str]] = []
             if job.files:
                 for entry in job.files:
-                    game_id = entry.kaderblick_game_id or job.default_kaderblick_game_id
+                    game_id = ExecutorSupport.resolve_kaderblick_game_id(self._settings, job, entry.kaderblick_game_id)
                     name = Path(entry.source_path).name if entry.source_path else ""
                     if game_id and name:
                         candidates.append((game_id, name))
@@ -114,7 +114,7 @@ class WorkflowExecutorSupportMixin:
                     for path in sorted(src_dir.glob(pattern)):
                         if not path.is_file():
                             continue
-                        game_id = job.default_kaderblick_game_id
+                        game_id = ExecutorSupport.resolve_kaderblick_game_id(self._settings, job)
                         if game_id:
                             candidates.append((game_id, path.name))
 
@@ -196,21 +196,19 @@ class WorkflowExecutorSupportMixin:
     def _get_merge_group_id(cls, job: WorkflowJob, file_path: str) -> str:
         return ExecutorSupport.get_merge_group_id(job, file_path)
 
-    @staticmethod
-    def _resolve_youtube_title(job: WorkflowJob, file_path: str) -> str:
-        return ExecutorSupport.resolve_youtube_title(job, file_path)
+    def _resolve_youtube_title(self, job: WorkflowJob | str, file_path: str | None = None) -> str:
+        if isinstance(self, WorkflowJob):
+            return ExecutorSupport.resolve_youtube_title(self, str(job), settings=None)
+        return ExecutorSupport.resolve_youtube_title(job, str(file_path or ""), settings=getattr(self, "_settings", None))
 
-    @staticmethod
-    def _resolve_youtube_playlist(job: WorkflowJob, file_path: str) -> str:
-        return ExecutorSupport.resolve_youtube_playlist(job, file_path)
+    def _resolve_youtube_playlist(self, job: WorkflowJob, file_path: str) -> str:
+        return ExecutorSupport.resolve_youtube_playlist(job, file_path, settings=self._settings)
 
-    @staticmethod
-    def _resolve_youtube_description(job: WorkflowJob, file_path: str) -> str:
-        return ExecutorSupport.resolve_youtube_description(job, file_path)
+    def _resolve_youtube_description(self, job: WorkflowJob, file_path: str) -> str:
+        return ExecutorSupport.resolve_youtube_description(job, file_path, settings=self._settings)
 
-    @staticmethod
-    def _resolve_youtube_tags(job: WorkflowJob, file_path: str) -> list[str]:
-        return ExecutorSupport.resolve_youtube_tags(job, file_path)
+    def _resolve_youtube_tags(self, job: WorkflowJob, file_path: str) -> list[str]:
+        return ExecutorSupport.resolve_youtube_tags(job, file_path, settings=self._settings)
 
     def _build_job_settings(self, job: WorkflowJob) -> AppSettings:
         return self._support.build_job_settings(self, job)

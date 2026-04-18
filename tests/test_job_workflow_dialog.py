@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from PySide6.QtCore import QDate, QPoint, QPointF, Qt
-from PySide6.QtGui import QColor
-from PySide6.QtWidgets import QApplication, QLabel, QMessageBox
+from PySide6.QtGui import QColor, QWheelEvent
+from PySide6.QtWidgets import QApplication, QLabel, QMessageBox, QVBoxLayout
 
 from src.job_workflow.graph.edge_item import _GraphEdgeItem
 from src.job_workflow.graph.builder import build_default_graph
@@ -45,6 +45,23 @@ def _node_by_type(graph_view, node_type: str):
     node = graph_view.node_item(_node_id_by_type(graph_view, node_type))
     assert node is not None
     return node
+
+
+def _send_wheel(widget, *, delta_y: int = 120) -> None:
+    local_pos = QPointF(widget.rect().center())
+    global_pos = QPointF(widget.mapToGlobal(widget.rect().center()))
+    event = QWheelEvent(
+        local_pos,
+        global_pos,
+        QPoint(),
+        QPoint(0, delta_y),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.ScrollUpdate,
+        False,
+    )
+    QApplication.sendEvent(widget, event)
+    QApplication.processEvents()
 
 
 class TestJobWorkflowDialog:
@@ -167,6 +184,36 @@ class TestJobWorkflowDialog:
             graph_view._apply_zoom_factor(1 / graph_view.ZOOM_STEP)
 
         assert graph_view.transform().m11() >= graph_view.MIN_ZOOM - 1e-6
+
+    def test_node_settings_only_change_on_wheel_when_field_has_focus(self):
+        dlg = JobWorkflowDialog(None, _make_job(convert_enabled=True), allow_edit=True, settings=_settings())
+        dlg.show()
+        dlg._on_graph_selection_changed({"kind": "node", "type": "convert"})
+        QApplication.processEvents()
+
+        dlg._name_edit.setFocus()
+        QApplication.processEvents()
+
+        dlg._crf_spin.setValue(18)
+        crf_before = dlg._crf_spin.value()
+        _send_wheel(dlg._crf_spin)
+        assert dlg._crf_spin.value() == crf_before
+
+        assert dlg._preset_combo.count() >= 3
+        dlg._preset_combo.setCurrentIndex(1)
+        preset_before = dlg._preset_combo.currentIndex()
+        _send_wheel(dlg._preset_combo)
+        assert dlg._preset_combo.currentIndex() == preset_before
+
+        dlg._crf_spin.setFocus()
+        QApplication.processEvents()
+        _send_wheel(dlg._crf_spin)
+        assert dlg._crf_spin.value() != crf_before
+
+        dlg._preset_combo.setFocus()
+        QApplication.processEvents()
+        _send_wheel(dlg._preset_combo)
+        assert dlg._preset_combo.currentIndex() != preset_before
 
     def test_graph_view_middle_mouse_pan_updates_scrollbars(self):
         graph_view = _WorkflowGraphView()
@@ -746,7 +793,7 @@ class TestJobWorkflowDialog:
             [{"id": 7, "name": "1. Halbzeit"}],
             [{"id": 9, "name": "Kamera 1"}],
         )
-        dlg._merge_panel._date_edit.setDate(QDate(2026, 3, 22))
+        dlg._merge_panel._date_edit.setText("22.03.2026")
         dlg._merge_panel._competition_combo.setCurrentText("Liga")
         dlg._merge_panel._home_combo.setCurrentText("Heim")
         dlg._merge_panel._away_combo.setCurrentText("Gast")
@@ -790,7 +837,7 @@ class TestJobWorkflowDialog:
 
         dlg._on_graph_selection_changed({"kind": "node", "id": "merge-1", "type": "merge"})
 
-        dlg._merge_panel._date_edit.setDate(QDate(2026, 3, 22))
+        dlg._merge_panel._date_edit.setText("22.03.2026")
         dlg._merge_panel._competition_combo.setCurrentText("Liga")
         dlg._merge_panel._home_combo.setCurrentText("Heim")
         dlg._merge_panel._away_combo.setCurrentText("Gast")
@@ -845,7 +892,7 @@ class TestJobWorkflowDialog:
         dlg._kb_camera_options = [{"id": 4, "name": "Hauptkamera"}]
         dlg._sync_kaderblick_selectors()
 
-        dlg._youtube_metadata_panel._date_edit.setDate(QDate(2026, 3, 22))
+        dlg._youtube_metadata_panel._date_edit.setText("22.03.2026")
         dlg._youtube_metadata_panel._competition_combo.setCurrentText("Pokal")
         dlg._youtube_metadata_panel._home_combo.setCurrentText("Heim")
         dlg._youtube_metadata_panel._away_combo.setCurrentText("Gast")
@@ -936,6 +983,36 @@ class TestJobWorkflowDialog:
         assert job.amplify_audio is True
         assert job.amplify_db == 8.0
         assert job.audio_sync is True
+
+    def test_editor_does_not_persist_inherited_defaults_as_node_overrides(self):
+        settings = _settings()
+        settings.default_match_date = "2026-03-22"
+        settings.default_match_competition = "Pokal"
+        settings.default_match_home_team = "FC Heim"
+        settings.default_match_away_team = "FC Gast"
+        settings.default_match_location = "Sportplatz Mitte"
+        settings.default_kaderblick_game_id = "77"
+
+        job = _make_job(upload_youtube=True, upload_kaderblick=True, title_card_enabled=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        assert dlg._kb_game_id_edit.text() == ""
+        assert dlg._kb_game_id_edit.placeholderText() == "77"
+        assert dlg._tc_home_edit.text() == ""
+        assert dlg._tc_home_edit.placeholderText() == "FC Heim"
+        assert dlg._youtube_metadata_panel._competition_combo.currentText() == ""
+        assert dlg._youtube_metadata_panel._competition_combo.lineEdit().placeholderText() == "Pokal"
+        assert dlg._youtube_metadata_panel._competition_combo.lineEdit().styleSheet() == ""
+
+        dlg._youtube_metadata_panel._camera_combo.setEditText("Hauptkamera")
+        dlg._apply_and_accept()
+
+        assert job.default_kaderblick_game_id == ""
+        assert job.title_card_home_team == ""
+        assert job.title_card_away_team == ""
+        assert job.title_card_date == ""
+        assert job.youtube_match_data == {}
+        assert job.default_youtube_title == "2026-03-22 | FC Heim vs FC Gast | Hauptkamera | 1. Halbzeit"
 
     def test_step_encoding_panels_show_source_material_summary(self, tmp_path):
         source = tmp_path / "source.mp4"
@@ -1277,21 +1354,145 @@ class TestJobWorkflowDialog:
 
         assert dlg._files_dst_edit.placeholderText() == f"/srv/workflows/Spieltag 23 {date.today().isoformat()}/raw"
 
-    @patch("src.job_workflow.controllers.editor.load_memory")
-    def test_youtube_metadata_panel_uses_persisted_match_memory_for_blank_job(self, mock_load_memory):
-        mock_load_memory.return_value = {
-            "last_match": {
-                "date_iso": "2026-03-20",
-                "competition": "Pokal",
-                "home_team": "FC Heim",
-                "away_team": "FC Gast",
-            }
-        }
-        dlg = JobWorkflowDialog(None, WorkflowJob(), allow_edit=True, settings=_settings())
+    def test_youtube_metadata_panel_uses_global_settings_defaults_for_blank_job(self):
+        settings = _settings()
+        settings.default_match_date = "2026-03-20"
+        settings.default_match_competition = "Pokal"
+        settings.default_match_home_team = "FC Heim"
+        settings.default_match_away_team = "FC Gast"
 
-        assert dlg._youtube_metadata_panel._competition_combo.currentText() == "Pokal"
-        assert dlg._youtube_metadata_panel._home_combo.currentText() == "FC Heim"
-        assert dlg._youtube_metadata_panel._away_combo.currentText() == "FC Gast"
+        dlg = JobWorkflowDialog(None, WorkflowJob(), allow_edit=True, settings=settings)
+
+        assert dlg._youtube_metadata_panel._competition_combo.currentText() == ""
+        assert dlg._youtube_metadata_panel._home_combo.currentText() == ""
+        assert dlg._youtube_metadata_panel._away_combo.currentText() == ""
+        assert dlg._youtube_metadata_panel._date_edit.text() == ""
+        assert dlg._youtube_metadata_panel._date_edit.placeholderText() == "20.03.2026"
+        assert dlg._youtube_metadata_panel._competition_combo.lineEdit().placeholderText() == "Pokal"
+        assert dlg._youtube_metadata_panel._home_combo.lineEdit().placeholderText() == "FC Heim"
+        assert dlg._youtube_metadata_panel._away_combo.lineEdit().placeholderText() == "FC Gast"
+        assert dlg._youtube_metadata_panel._playlist_preview.text() == "20.03.2026 | Pokal | FC Heim vs FC Gast"
+
+    def test_merge_metadata_panel_uses_global_settings_defaults_for_blank_job(self):
+        settings = _settings()
+        settings.default_match_date = "2026-03-20"
+        settings.default_match_competition = "Pokal"
+        settings.default_match_home_team = "FC Heim"
+        settings.default_match_away_team = "FC Gast"
+        settings.default_match_location = "Sportplatz Mitte"
+
+        dlg = JobWorkflowDialog(None, WorkflowJob(), allow_edit=True, settings=settings)
+
+        assert dlg._merge_panel._competition_combo.currentText() == ""
+        assert dlg._merge_panel._home_combo.currentText() == ""
+        assert dlg._merge_panel._away_combo.currentText() == ""
+        assert dlg._merge_panel._location_combo.currentText() == ""
+        assert dlg._merge_panel._date_edit.text() == ""
+        assert dlg._merge_panel._date_edit.placeholderText() == "20.03.2026"
+        assert dlg._merge_panel._competition_combo.lineEdit().placeholderText() == "Pokal"
+        assert dlg._merge_panel._location_combo.lineEdit().placeholderText() == "Sportplatz Mitte"
+        assert dlg._merge_panel._playlist_preview.text() == "20.03.2026 | Pokal | FC Heim vs FC Gast"
+
+    def test_merge_panel_does_not_persist_placeholder_defaults_as_overrides(self):
+        settings = _settings()
+        settings.default_match_date = "2026-03-20"
+        settings.default_match_competition = "Pokal"
+        settings.default_match_home_team = "FC Heim"
+        settings.default_match_away_team = "FC Gast"
+        settings.default_match_location = "Sportplatz Mitte"
+
+        job = WorkflowJob(files=[FileEntry(source_path="/tmp/a.mp4", merge_group_id="graph-merge")])
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        assert dlg._merge_panel._competition_combo.currentText() == ""
+        assert dlg._merge_panel._competition_combo.lineEdit().placeholderText() == "Pokal"
+
+        dlg._apply_and_accept()
+
+        assert job.merge_match_data == {}
+        assert job.merge_output_playlist == "20.03.2026 | Pokal | FC Heim vs FC Gast"
+
+    def test_merge_panel_can_clear_explicit_date_override_back_to_general_default(self):
+        settings = _settings()
+        settings.default_match_date = "2026-03-20"
+        settings.default_match_competition = "Pokal"
+        settings.default_match_home_team = "FC Heim"
+        settings.default_match_away_team = "FC Gast"
+
+        job = WorkflowJob(
+            files=[FileEntry(source_path="/tmp/a.mp4", merge_group_id="graph-merge")],
+            merge_match_data={"date_iso": "2026-03-22"},
+        )
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        assert dlg._merge_panel._date_edit.text() == "22.03.2026"
+        dlg._merge_panel._date_edit.setText("")
+
+        assert dlg._merge_panel._date_edit.text() == ""
+        assert dlg._merge_panel.current_match_overrides().get("date_iso") is None
+        assert dlg._merge_panel._playlist_preview.text() == "20.03.2026 | Pokal | FC Heim vs FC Gast"
+
+        dlg._apply_and_accept()
+
+        assert job.merge_match_data == {}
+
+    def test_merge_panel_date_picker_sets_local_date_override(self):
+        settings = _settings()
+        settings.default_match_date = "2026-03-20"
+        settings.default_match_competition = "Pokal"
+        settings.default_match_home_team = "FC Heim"
+        settings.default_match_away_team = "FC Gast"
+
+        job = WorkflowJob(files=[FileEntry(source_path="/tmp/a.mp4", merge_group_id="graph-merge")])
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        dlg._merge_panel._date_edit._on_calendar_date_selected(QDate(2026, 3, 22))
+
+        assert dlg._merge_panel._date_edit.text() == "22.03.2026"
+        assert dlg._merge_panel.current_match_overrides()["date_iso"] == "2026-03-22"
+
+    def test_youtube_panel_does_not_persist_placeholder_defaults_as_overrides(self):
+        settings = _settings()
+        settings.default_match_date = "2026-03-20"
+        settings.default_match_competition = "Pokal"
+        settings.default_match_home_team = "FC Heim"
+        settings.default_match_away_team = "FC Gast"
+        settings.default_match_location = "Sportplatz Mitte"
+
+        job = WorkflowJob(upload_youtube=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        assert dlg._youtube_metadata_panel._competition_combo.currentText() == ""
+        assert dlg._youtube_metadata_panel._competition_combo.lineEdit().placeholderText() == "Pokal"
+
+        dlg._apply_and_accept()
+
+        assert job.youtube_match_data == {}
+        assert job.default_youtube_playlist == "20.03.2026 | Pokal | FC Heim vs FC Gast"
+
+    def test_youtube_panel_can_clear_explicit_date_override_back_to_general_default(self):
+        settings = _settings()
+        settings.default_match_date = "2026-03-20"
+        settings.default_match_competition = "Pokal"
+        settings.default_match_home_team = "FC Heim"
+        settings.default_match_away_team = "FC Gast"
+
+        job = WorkflowJob(
+            upload_youtube=True,
+            youtube_match_data={"date_iso": "2026-03-22"},
+        )
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=settings)
+
+        assert dlg._youtube_metadata_panel._date_edit.text() == "22.03.2026"
+        dlg._youtube_metadata_panel._date_edit.setText("")
+
+        assert dlg._youtube_metadata_panel._date_edit.text() == ""
+        assert dlg._youtube_metadata_panel.current_match_overrides().get("date_iso") is None
+        assert dlg._youtube_metadata_panel._playlist_preview.text() == "20.03.2026 | Pokal | FC Heim vs FC Gast"
+
+        dlg._apply_and_accept()
+
+        assert job.youtube_match_data == {}
 
     def test_editor_disables_upload_detail_fields_when_upload_off(self):
         job = _make_job(upload_youtube=True, upload_kaderblick=True)
@@ -1337,6 +1538,16 @@ class TestJobWorkflowDialog:
         assert dlg._property_stack.currentIndex() == dlg._property_pages["default"]
         assert dlg._selection_label.text() == "Keine Auswahl"
         assert dlg._remove_node_btn.isEnabled() is False
+
+    def test_canvas_action_buttons_are_stacked_vertically(self):
+        dlg = JobWorkflowDialog(None, _make_job(convert_enabled=True), allow_edit=True, settings=_settings())
+
+        button_layout = dlg._palette_box.layout().itemAt(2).layout()
+
+        assert isinstance(button_layout, QVBoxLayout)
+        assert button_layout.itemAt(0).widget() is dlg._remove_node_btn
+        assert button_layout.itemAt(1).widget() is dlg._reset_from_node_btn
+        assert button_layout.itemAt(2).widget().text() == "Auto-Layout"
 
     def test_kaderblick_inspector_uses_distinct_heading_and_form_label(self):
         dlg = JobWorkflowDialog(None, _make_job(upload_youtube=True, upload_kaderblick=True), allow_edit=True, settings=_settings())

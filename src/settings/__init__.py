@@ -73,6 +73,8 @@ class AppSettings:
     default_match_competition: str = ""
     default_match_home_team: str = ""
     default_match_away_team: str = ""
+    default_match_location: str = ""
+    default_kaderblick_game_id: str = ""
     last_directory: str = ""
     restore_last_workflow: bool = True
 
@@ -114,6 +116,7 @@ class AppSettings:
             "competition": (self.default_match_competition or "").strip(),
             "home_team": (self.default_match_home_team or "").strip(),
             "away_team": (self.default_match_away_team or "").strip(),
+            "location": (self.default_match_location or "").strip(),
         }
 
     def save(self, preserve_existing_secrets: bool = True):

@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from .merge import YouTubeMetadataPanel
 from ...media.ffmpeg_runner import get_resolution, get_video_stream_info, has_audio_stream
+from ...settings import AppSettings
 from ...settings.profiles import (
     PROFILES,
     VIDEO_FORMAT_OPTIONS,
@@ -45,6 +46,8 @@ from ...settings.profiles import (
     VIDEO_TOOLTIP_RESOLUTION,
     matching_profile_name,
 )
+from ...ui import AlwaysVisiblePlaceholderLineEdit
+from .wheel_guard import install_focus_only_wheel_guard
 
 
 STEP_CONTAINER_OPTIONS = [("source", "Originalcontainer"), *VIDEO_FORMAT_OPTIONS]
@@ -215,6 +218,7 @@ class YouTubeUploadPanel(QGroupBox):
         self,
         parent: QWidget | None = None,
         *,
+        settings: AppSettings | None = None,
         on_metadata_changed: Callable[[], None],
         on_playlist_helper: Callable[[], None],
     ) -> None:
@@ -241,7 +245,7 @@ class YouTubeUploadPanel(QGroupBox):
         helper_row.addStretch()
         layout.addLayout(helper_row)
 
-        self._metadata_panel = YouTubeMetadataPanel(self)
+        self._metadata_panel = YouTubeMetadataPanel(self, settings=settings)
         self._metadata_panel.metadata_changed.connect(on_metadata_changed)
         layout.addWidget(self._metadata_panel)
 
@@ -282,6 +286,7 @@ class KaderblickPanel(QGroupBox):
         self,
         parent: QWidget | None = None,
         *,
+        settings: AppSettings | None = None,
         on_game_id_changed: Callable[[str], None],
         on_type_changed: Callable[[int], None],
         on_camera_changed: Callable[[int], None],
@@ -300,9 +305,10 @@ class KaderblickPanel(QGroupBox):
         hint.setStyleSheet("color: #475569;")
         form.addRow("", hint)
 
-        self._kb_game_id_edit = QLineEdit()
-        self._kb_game_id_edit.setPlaceholderText("z. B. 42")
-        self._kb_game_id_edit.textChanged.connect(on_game_id_changed)
+        self._kb_game_id_edit = AlwaysVisiblePlaceholderLineEdit()
+        inherited_game_id = (getattr(settings, "default_kaderblick_game_id", "") or "").strip()
+        self._kb_game_id_edit.setPlaceholderText(inherited_game_id or "z. B. 42")
+        self._kb_game_id_edit.effectiveTextChanged.connect(on_game_id_changed)
         form.addRow("Spiel-ID:", self._kb_game_id_edit)
 
         self._kb_type_combo = QComboBox()
@@ -326,6 +332,11 @@ class KaderblickPanel(QGroupBox):
         self._kb_status_label.setWordWrap(True)
         self._kb_status_label.setStyleSheet("color: #64748B;")
         form.addRow("", self._kb_status_label)
+
+        install_focus_only_wheel_guard(self)
+
+    def set_default_game_id(self, value: str) -> None:
+        self._kb_game_id_edit.setPlaceholderText((value or "").strip() or "z. B. 42")
 
 
 class TitlecardPreviewWidget(QFrame):
@@ -483,18 +494,18 @@ class TitlecardPanel(QGroupBox):
         form.setContentsMargins(14, 18, 14, 14)
         form.setSpacing(8)
 
-        self._tc_home_edit = QLineEdit()
-        self._tc_home_edit.textChanged.connect(on_home_changed)
+        self._tc_home_edit = AlwaysVisiblePlaceholderLineEdit()
+        self._tc_home_edit.effectiveTextChanged.connect(on_home_changed)
         self._tc_home_edit.textChanged.connect(lambda _text: self._update_preview())
         form.addRow("Heimteam:", self._tc_home_edit)
 
-        self._tc_away_edit = QLineEdit()
-        self._tc_away_edit.textChanged.connect(on_away_changed)
+        self._tc_away_edit = AlwaysVisiblePlaceholderLineEdit()
+        self._tc_away_edit.effectiveTextChanged.connect(on_away_changed)
         self._tc_away_edit.textChanged.connect(lambda _text: self._update_preview())
         form.addRow("Auswärtsteam:", self._tc_away_edit)
 
-        self._tc_date_edit = QLineEdit()
-        self._tc_date_edit.textChanged.connect(on_date_changed)
+        self._tc_date_edit = AlwaysVisiblePlaceholderLineEdit()
+        self._tc_date_edit.effectiveTextChanged.connect(on_date_changed)
         form.addRow("Datum:", self._tc_date_edit)
 
         self._tc_duration_spin = QDoubleSpinBox()
@@ -551,6 +562,14 @@ class TitlecardPanel(QGroupBox):
         form.addRow("Titelbild-Vorschau:", self._tc_preview_frame)
         self._update_preview()
 
+        install_focus_only_wheel_guard(self)
+
+    def set_defaults(self, *, home_team: str, away_team: str, date_iso: str) -> None:
+        self._tc_home_edit.setPlaceholderText((home_team or "").strip())
+        self._tc_away_edit.setPlaceholderText((away_team or "").strip())
+        self._tc_date_edit.setPlaceholderText((date_iso or "").strip())
+        self._update_preview()
+
     def set_preview_subtitle(self, subtitle: str) -> None:
         self._preview_subtitle = " ".join((subtitle or "").split()).strip() or "Dateiname / Untertitel"
         self._update_preview()
@@ -585,8 +604,8 @@ class TitlecardPanel(QGroupBox):
     def _update_preview(self) -> None:
         bg_color = self._preview_color(self._tc_bg_edit.text(), "#000000")
         fg_color = self._preview_color(self._tc_fg_edit.text(), "#FFFFFF")
-        home = self._tc_home_edit.text().strip()
-        away = self._tc_away_edit.text().strip()
+        home = (self._tc_home_edit.text().strip() or self._tc_home_edit.placeholderText().strip())
+        away = (self._tc_away_edit.text().strip() or self._tc_away_edit.placeholderText().strip())
         title = ""
         if home and away:
             title = f"{home} vs {away}"
@@ -714,6 +733,8 @@ class StepEncodingPanel(QGroupBox):
         self._no_bframes_cb.setToolTip(VIDEO_TOOLTIP_NO_BFRAMES)
         self._no_bframes_cb.toggled.connect(self._handle_no_bframes_changed)
         form.addRow("", self._no_bframes_cb)
+
+        install_focus_only_wheel_guard(self)
 
     def configure_reference_labels(
         self,
@@ -1174,6 +1195,8 @@ class ProcessingPanel(QGroupBox):
         self._audio_sync_cb.setToolTip(VIDEO_TOOLTIP_AUDIO_SYNC)
         self._audio_sync_cb.toggled.connect(on_audio_sync_changed)
         form.addRow("", self._audio_sync_cb)
+
+        install_focus_only_wheel_guard(self)
 
     def _set_profile_name(self, profile_name: str) -> None:
         self._profile_combo.blockSignals(True)

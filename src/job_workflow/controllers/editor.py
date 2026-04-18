@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 import copy
-from datetime import date
 from pathlib import Path
 
-from ...integrations.youtube_title_editor import MatchData, load_memory
+from ...integrations.youtube_title_editor import MatchData
+from ...workflow.defaults import default_match_data
 from .state import resolve_step_input_context
 
 
@@ -81,13 +81,13 @@ class WorkflowEditorController:
 
     def _fallback_match(self) -> MatchData:
         dialog = self._dialog
-        memory = load_memory()
-        last_match = memory.get("last_match", {})
+        settings_default = default_match_data(dialog._settings)
         return MatchData(
-            date_iso=dialog._draft.title_card_date.strip() or date.today().isoformat(),
-            competition=dialog._draft.default_youtube_competition.strip() or str(last_match.get("competition", "")),
-            home_team=dialog._draft.title_card_home_team.strip() or str(last_match.get("home_team", "")),
-            away_team=dialog._draft.title_card_away_team.strip() or str(last_match.get("away_team", "")),
+            date_iso=settings_default.date_iso,
+            competition=settings_default.competition,
+            home_team=settings_default.home_team,
+            away_team=settings_default.away_team,
+            location=settings_default.location,
         )
 
     def load_editor_from_job(self) -> None:
@@ -96,11 +96,18 @@ class WorkflowEditorController:
         dialog._rebuilding_graph = True
         dialog._name_edit.setText(draft.name)
         dialog._overwrite_cb.setChecked(draft.overwrite)
+        inherited_game_id = getattr(dialog._settings, "default_kaderblick_game_id", "") if dialog._settings is not None else ""
+        dialog._kaderblick_panel.set_default_game_id(inherited_game_id)
         dialog._kb_game_id_edit.setText(draft.default_kaderblick_game_id)
         fallback_match = self._fallback_match()
-        dialog._tc_home_edit.setText(draft.title_card_home_team or fallback_match.home_team)
-        dialog._tc_away_edit.setText(draft.title_card_away_team or fallback_match.away_team)
-        dialog._tc_date_edit.setText(draft.title_card_date or fallback_match.date_iso)
+        dialog._titlecard_panel.set_defaults(
+            home_team=fallback_match.home_team,
+            away_team=fallback_match.away_team,
+            date_iso=fallback_match.date_iso,
+        )
+        dialog._tc_home_edit.setText(draft.title_card_home_team)
+        dialog._tc_away_edit.setText(draft.title_card_away_team)
+        dialog._tc_date_edit.setText(draft.title_card_date)
         dialog._tc_duration_spin.setValue(draft.title_card_duration)
         dialog._tc_logo_edit.setText(draft.title_card_logo_path)
         dialog._tc_bg_edit.setText(draft.title_card_bg_color or "#000000")
@@ -181,6 +188,16 @@ class WorkflowEditorController:
         self.sync_kaderblick_selectors()
         self.load_merge_panel_from_draft()
         self.load_youtube_panel_from_draft()
+        dialog._kaderblick_panel.set_default_game_id(inherited_game_id)
+        dialog._kb_game_id_edit.setText(draft.default_kaderblick_game_id)
+        dialog._titlecard_panel.set_defaults(
+            home_team=fallback_match.home_team,
+            away_team=fallback_match.away_team,
+            date_iso=fallback_match.date_iso,
+        )
+        dialog._tc_home_edit.setText(draft.title_card_home_team)
+        dialog._tc_away_edit.setText(draft.title_card_away_team)
+        dialog._tc_date_edit.setText(draft.title_card_date)
         dialog._rebuilding_graph = False
         dialog._rebuild_graph_from_job()
         dialog._sync_editor_state()
@@ -422,14 +439,11 @@ class WorkflowEditorController:
 
         if sync_related_fields:
             match = dialog._merge_panel.current_match()
-            if match.competition:
-                dialog._draft.default_youtube_competition = match.competition
-            if match.home_team:
-                dialog._draft.title_card_home_team = match.home_team
-            if match.away_team:
-                dialog._draft.title_card_away_team = match.away_team
-            if match.date_iso:
-                dialog._draft.title_card_date = match.date_iso
+            overrides = dialog._merge_panel.current_match_overrides()
+            dialog._draft.default_youtube_competition = overrides.get("competition", "")
+            dialog._draft.title_card_home_team = overrides.get("home_team", "")
+            dialog._draft.title_card_away_team = overrides.get("away_team", "")
+            dialog._draft.title_card_date = overrides.get("date_iso", "")
 
         if persist_memory:
             dialog._merge_panel.persist_memory()
@@ -457,16 +471,13 @@ class WorkflowEditorController:
         dialog._draft.youtube_kaderblick_camera_id = int(state.get("kaderblick_camera_id") or 0)
         self._sync_kaderblick_defaults_from_metadata()
 
-        match = dialog._youtube_metadata_panel.current_match()
-        dialog._draft.default_youtube_competition = match.competition
+        overrides = dialog._youtube_metadata_panel.current_match_overrides()
+        dialog._draft.default_youtube_competition = overrides.get("competition", "")
 
         if sync_related_fields:
-            if match.home_team:
-                dialog._draft.title_card_home_team = match.home_team
-            if match.away_team:
-                dialog._draft.title_card_away_team = match.away_team
-            if match.date_iso:
-                dialog._draft.title_card_date = match.date_iso
+            dialog._draft.title_card_home_team = overrides.get("home_team", "")
+            dialog._draft.title_card_away_team = overrides.get("away_team", "")
+            dialog._draft.title_card_date = overrides.get("date_iso", "")
 
         if persist_memory:
             dialog._youtube_metadata_panel.persist_memory()

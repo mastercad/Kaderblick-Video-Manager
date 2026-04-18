@@ -27,7 +27,7 @@ def transfer_files(
     *,
     on_file_ready: Callable[[str], None] | None = None,
 ) -> list[str]:
-    cancel_flag = executor._cancel_flag_for_job(orig_idx)
+    cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, orig_idx)
     total_files = len(paths)
     total_bytes = sum(_path_size(path) for path in paths)
     transferred = 0
@@ -122,7 +122,7 @@ def _copy_path_with_progress(
 
     with source_path.open("rb") as src_handle, destination.open("wb") as dst_handle:
         while True:
-            if executor._cancel_flag_for_job(orig_idx).is_set():
+            if ExecutorSupport.cancel_flag_for_job(executor, orig_idx).is_set():
                 raise RuntimeError("Abgebrochen")
             chunk = src_handle.read(_CHUNK_SIZE)
             if not chunk:

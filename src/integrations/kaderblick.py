@@ -21,7 +21,6 @@ alle erfolgreich angelegten Einträge (keyed by YouTube-Video-ID).
 """
 
 import json
-import subprocess
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -29,6 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..settings import AppSettings
+from ..media.ffmpeg_runner import get_duration
 from .state_store import load_section, save_section
 
 # ─────────────────────────────────────────────────────────────────
@@ -308,18 +308,9 @@ def post_video(kb, game_id: str, payload: dict) -> dict:
 def get_video_duration_seconds(file_path: Path) -> int:
     """Ermittelt die Videolänge via ffprobe. Gibt 0 zurück wenn nicht möglich."""
     try:
-        result = subprocess.run(
-            [
-                "ffprobe", "-v", "error",
-                "-show_entries", "format=duration",
-                "-of", "default=noprint_wrappers=1:nokey=1",
-                str(file_path),
-            ],
-            capture_output=True, text=True, timeout=30,
-        )
-        raw = result.stdout.strip()
-        if raw and raw != "N/A":
-            return int(float(raw))
+        duration = get_duration(file_path)
+        if duration and duration > 0:
+            return int(duration)
     except Exception:
         pass
     return 0

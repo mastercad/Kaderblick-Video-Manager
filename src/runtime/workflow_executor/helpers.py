@@ -28,6 +28,7 @@ class _PipelineWorkerView:
         self._owner = owner
         self._event_queue = event_queue
         self._cancel = owner._cancel
+        self._settings = owner._settings
         self._convert_func = owner._convert_func
         self._concat_func = owner._concat_func
         self._youtube_convert_func = owner._youtube_convert_func

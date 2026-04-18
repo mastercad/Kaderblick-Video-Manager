@@ -44,7 +44,7 @@ class YoutubeUploadStep:
             yt_service,
             prepared.orig_idx,
         )
-        if executor._is_job_cancelled(prepared.orig_idx):
+        if ExecutorSupport.is_job_cancelled(executor, prepared.orig_idx):
             executor._set_step_status(prepared.job, "youtube_upload", "cancelled")
             executor._set_step_detail(prepared.job, "youtube_upload", self._build_cancelled_summary(prepared))
             executor._set_job_status(prepared.orig_idx, "YouTube-Upload abgebrochen")
@@ -71,7 +71,7 @@ class YoutubeUploadStep:
             settings,
             yt_service,
             log_callback=executor.log_message.emit,
-            cancel_flag=executor._cancel_flag_for_job(orig_idx),
+            cancel_flag=ExecutorSupport.cancel_flag_for_job(executor, orig_idx),
             allow_reuse_existing=ExecutorSupport.allow_reuse_existing(executor),
             progress_callback=lambda pct: executor.job_progress.emit(orig_idx, pct),
         )
