@@ -6,6 +6,9 @@ data/youtube_token.json
 __pycache__/
 *.pyc
 .venv/
+build/
+dist/
+dist-artifacts/
 
 # Settings (benutzerspezifisch)
 config/settings.json

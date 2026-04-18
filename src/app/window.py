@@ -10,6 +10,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QMainWindow
 
+from ..runtime_paths import asset_path
 from ..workflow import Workflow
 from .execution import (
     _cancel_workflow,
@@ -160,7 +161,7 @@ class ConverterApp(QMainWindow):
         self.resize(960, 640)
         self.setMinimumSize(720, 460)
 
-        icon_path = Path(__file__).resolve().parent.parent.parent / "assets" / "icon.svg"
+        icon_path = asset_path("icon.svg")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 

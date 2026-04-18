@@ -9,6 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import Slot
 
+from ..runtime_paths import shutdown_command
 from .helpers import _compute_job_overall_progress, _format_resume_tooltip, _job_has_source_config, format_elapsed_seconds
 
 
@@ -445,8 +446,12 @@ def _on_workflow_done(self, ok: int, skip: int, fail: int):
 
         dialog = ShutdownCountdownDialog(seconds=30, parent=self)
         if dialog.exec():
-            self._append_log("\n⏻ Rechner wird heruntergefahren …")
-            subprocess.Popen(["shutdown", "now"])
+            cmd = shutdown_command()
+            if cmd is None:
+                self._append_log("\n⚠ Herunterfahren wird auf diesem Betriebssystem nicht unterstützt.")
+            else:
+                self._append_log("\n⏻ Rechner wird heruntergefahren …")
+                subprocess.Popen(cmd)
         else:
             self._append_log("\n⚠ Herunterfahren durch Benutzer abgebrochen.")
     elif self._workflow.shutdown_after and fail > 0:

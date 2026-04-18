@@ -1,7 +1,14 @@
 from pathlib import Path
 from unittest.mock import patch
 
-from src.media.ffmpeg_runner import MediaValidationResult, inspect_media_compatibility, validate_media_output
+from src.media.ffmpeg_runner import (
+    MediaValidationResult,
+    get_ffmpeg_bin,
+    get_ffprobe_bin,
+    inspect_media_compatibility,
+    run_ffmpeg,
+    validate_media_output,
+)
 
 
 class _ProcResult:
@@ -9,6 +16,27 @@ class _ProcResult:
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+
+
+class _FakeBinaryStream:
+    def __init__(self, chunks=None):
+        self._chunks = list(chunks or [b""])
+
+    def read(self, _size):
+        return self._chunks.pop(0) if self._chunks else b""
+
+
+class _FakePopen:
+    def __init__(self):
+        self.stdout = None
+        self.stderr = _FakeBinaryStream()
+        self.returncode = 0
+
+    def poll(self):
+        return self.returncode
+
+    def wait(self, timeout=None):
+        return self.returncode
 
 
 class TestValidateMediaOutput:
@@ -119,3 +147,31 @@ class TestInspectMediaCompatibility:
         assert result.status == "ok"
         assert result.compatible is True
         assert result.details == []
+
+
+def test_get_ffmpeg_bin_uses_bundled_binary_candidate_when_present():
+    with patch("src.media.ffmpeg_runner.bundled_binary_path", return_value="/tmp/bin/ffmpeg"), \
+         patch("src.media.ffmpeg_runner.shutil.which", return_value=None):
+        assert get_ffmpeg_bin() == "/tmp/bin/ffmpeg"
+
+
+def test_get_ffprobe_bin_uses_bundled_binary_candidate_when_present():
+    with patch("src.media.ffmpeg_runner.bundled_binary_path", return_value="/tmp/bin/ffprobe"), \
+         patch("src.media.ffmpeg_runner.shutil.which", return_value=None):
+        assert get_ffprobe_bin() == "/tmp/bin/ffprobe"
+
+
+def test_run_ffmpeg_forwards_platform_process_group_kwargs():
+    popen_kwargs = {}
+
+    def _fake_popen(*_args, **kwargs):
+        popen_kwargs.update(kwargs)
+        return _FakePopen()
+
+    with patch("src.media.ffmpeg_runner.popen_process_group_kwargs", return_value={"creationflags": 1234}), \
+         patch("src.media.ffmpeg_runner.subprocess.Popen", side_effect=_fake_popen):
+        rc = run_ffmpeg(["ffmpeg", "-version"])
+
+    assert rc == 0
+    assert popen_kwargs["creationflags"] == 1234
+    assert "preexec_fn" not in popen_kwargs

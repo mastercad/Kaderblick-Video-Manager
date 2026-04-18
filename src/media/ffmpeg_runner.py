@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from ..runtime_paths import bundled_binary_path, popen_process_group_kwargs, terminate_process_tree
+
 _RE_TIME = re.compile(r"time=(\d+):(\d+):(\d+)\.(\d+)")
 _RE_STATUS = re.compile(r"(?:^|\s)(?:frame=|fps=|q=|size=|time=|bitrate=|speed=)")
 _WARNING_MARKERS = (
@@ -269,18 +271,14 @@ def get_ffmpeg_bin() -> str:
     Über ``KADERBLICK_FFMPEG_BIN`` kann ein eigenes, selbst gebautes ffmpeg
     erzwungen werden. Ohne Override wird die PATH-Auflösung verwendet.
     """
-    configured = os.environ.get("KADERBLICK_FFMPEG_BIN", "").strip()
-    if configured:
-        return configured
-    return shutil.which("ffmpeg") or "ffmpeg"
+    candidate = bundled_binary_path("KADERBLICK_FFMPEG_BIN", "ffmpeg")
+    return shutil.which(candidate) or candidate
 
 
 def get_ffprobe_bin() -> str:
     """Liefert den zentral konfigurierten ffprobe-Binärpfad."""
-    configured = os.environ.get("KADERBLICK_FFPROBE_BIN", "").strip()
-    if configured:
-        return configured
-    return shutil.which("ffprobe") or "ffprobe"
+    candidate = bundled_binary_path("KADERBLICK_FFPROBE_BIN", "ffprobe")
+    return shutil.which(candidate) or candidate
 
 
 def ffmpeg_cmd(*args: str) -> list[str]:
@@ -550,8 +548,7 @@ def run_ffmpeg(cmd: list, duration: Optional[float] = None,
         stderr=subprocess.PIPE,
         # stderr im Binary-Mode lesen weil ffmpeg \r ohne \n benutzt
         text=False,
-        # Eigene Prozessgruppe damit wir den ganzen ffmpeg-Baum killen können
-        preexec_fn=os.setsid,
+        **popen_process_group_kwargs(),
     )
 
     cancelled = False
@@ -565,17 +562,11 @@ def run_ffmpeg(cmd: list, duration: Optional[float] = None,
         while proc.poll() is None:
             if cancel_flag.wait(timeout=0.25):
                 cancelled = True
-                try:
-                    os.killpg(os.getpgid(proc.pid), signal.SIGTERM)
-                except (ProcessLookupError, OSError):
-                    pass
+                terminate_process_tree(proc)
                 try:
                     proc.wait(timeout=3)
                 except subprocess.TimeoutExpired:
-                    try:
-                        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-                    except (ProcessLookupError, OSError):
-                        pass
+                    terminate_process_tree(proc, force=True)
                 return
 
     watcher = threading.Thread(target=_cancel_watcher, daemon=True)
@@ -642,10 +633,7 @@ def run_ffmpeg(cmd: list, duration: Optional[float] = None,
 
         proc.wait()
     except Exception:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except Exception:
-            pass
+        terminate_process_tree(proc, force=True)
         proc.wait()
 
     watcher.join(timeout=2)

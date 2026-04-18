@@ -20,14 +20,13 @@ Optionen:
 import argparse
 import sys
 
-from pathlib import Path
-
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
+from src.runtime_paths import asset_path
 from src.app import ConverterApp
 
-_ICON = Path(__file__).resolve().parent / "assets" / "icon.svg"
+_ICON = asset_path("icon.svg")
 
 
 def _build_parser() -> argparse.ArgumentParser:

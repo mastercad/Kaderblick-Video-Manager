@@ -10,6 +10,7 @@ from typing import Callable, Optional
 
 import paramiko
 
+from ..runtime_paths import null_device_path, supports_rsync
 from ..settings import DeviceSettings, CameraSettings
 
 # Abwärtskompatibilität
@@ -277,6 +278,8 @@ def _sftp_download_file(
 
 def _can_use_rsync(device: DeviceSettings) -> bool:
     """Prüft ob rsync für dieses Gerät nutzbar ist."""
+    if not supports_rsync():
+        return False
     if not shutil.which("rsync"):
         return False
     # Bei Passwort-Auth brauchen wir sshpass (egal ob ssh_key gesetzt ist)
@@ -290,7 +293,7 @@ def _build_ssh_cmd(device: DeviceSettings) -> str:
     parts = [
         "ssh",
         "-o", "StrictHostKeyChecking=no",
-        "-o", "UserKnownHostsFile=/dev/null",
+        "-o", f"UserKnownHostsFile={null_device_path()}",
         "-o", "LogLevel=ERROR",
     ]
     if device.port != 22:

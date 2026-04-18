@@ -20,6 +20,43 @@ Weiterführende Anleitung für YouTube: [YouTube API – Credentials einrichten]
 
 ---
 
+## Portable Releases
+
+Die App kann jetzt als portable Desktop-Version für Linux, Windows und macOS gebaut werden.
+
+### Lokaler Build
+
+Für einen lokalen Portable-Build wird PyInstaller verwendet:
+
+```bash
+.venv/bin/python -m pip install pyinstaller
+.venv/bin/python scripts/build_portable.py
+```
+
+Ergebnis:
+
+- entpackte App im Ordner `dist/kaderblick-video-manager`
+- Release-Archiv im Ordner `dist-artifacts/`
+
+Die Build-Ausgabe enthält zusätzlich:
+
+- `config/`
+- `data/`
+- `workflows/`
+- eingebettete `ffmpeg`-/`ffprobe`-Binaries, sofern sie beim Build im `PATH` gefunden werden
+
+### GitHub Releases
+
+Für Tags wie `v1.2.3` baut der Workflow `.github/workflows/release-portable.yml` automatisch portable Archive für:
+
+- Linux
+- Windows
+- macOS
+
+Die erzeugten ZIP-Dateien werden direkt an das GitHub Release angehängt.
+
+---
+
 ## Zwei Wege durch diese Anleitung
 
 Wenn Sie einfach nur loslegen möchten, lesen Sie zuerst nur diesen Teil:

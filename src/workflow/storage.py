@@ -6,14 +6,14 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from ..settings import _BASE_DIR, _DATA_DIR
+from ..runtime_paths import data_dir, workflows_dir
 
 if TYPE_CHECKING:
     from .model import Workflow
 
 
-WORKFLOW_DIR = _BASE_DIR / "workflows"
-LAST_WORKFLOW_FILE = _DATA_DIR / "last_workflow.json"
+WORKFLOW_DIR = workflows_dir()
+LAST_WORKFLOW_FILE = data_dir() / "last_workflow.json"
 
 
 def save_workflow(workflow: "Workflow", path: Path, *, include_runtime: bool = False) -> None:

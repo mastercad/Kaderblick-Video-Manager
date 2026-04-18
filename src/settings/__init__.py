@@ -8,6 +8,8 @@ from pathlib import Path
 import re
 from typing import Any
 
+from ..runtime_paths import config_dir, data_dir, portable_root
+
 from .io import (
     apply_settings_payload,
     merge_blank_secrets,
@@ -25,9 +27,9 @@ from .model import (
 from .profiles import PROFILES
 
 
-_BASE_DIR = Path(__file__).resolve().parent.parent.parent
-_CONFIG_DIR = _BASE_DIR / "config"
-_DATA_DIR = _BASE_DIR / "data"
+_BASE_DIR = portable_root()
+_CONFIG_DIR = config_dir()
+_DATA_DIR = data_dir()
 
 SETTINGS_FILE = _CONFIG_DIR / "settings.json"
 CLIENT_SECRET_FILE = _CONFIG_DIR / "client_secret.json"

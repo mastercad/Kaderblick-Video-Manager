@@ -258,6 +258,51 @@ class TestResumeTooltip:
 class TestJobOverallProgress:
     def test_job_has_source_config_requires_real_source_definition(self):
         assert _job_has_source_config(WorkflowJob(source_mode="files", files=[])) is False
+
+
+class TestWorkflowShutdown:
+    def test_on_workflow_done_uses_platform_shutdown_command(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(name="Spieltag 23", job=_rich_job(), shutdown_after=True)
+            window._workflow.last_run_elapsed_seconds = 5.0
+            window._save_last_workflow = MagicMock()
+
+            dialog_cls = MagicMock()
+            dialog_cls.return_value.exec.return_value = True
+
+            with patch("src.ui.dialogs.ShutdownCountdownDialog", dialog_cls), \
+                 patch("src.app.execution.shutdown_command", return_value=["shutdown", "/s", "/t", "0"]), \
+                 patch("src.app.execution.subprocess.Popen") as popen:
+                window._on_workflow_done(1, 0, 0)
+
+            popen.assert_called_once_with(["shutdown", "/s", "/t", "0"])
+        finally:
+            window.close()
+
+    def test_on_workflow_done_logs_when_shutdown_is_unsupported(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(name="Spieltag 23", job=_rich_job(), shutdown_after=True)
+            window._workflow.last_run_elapsed_seconds = 5.0
+            window._save_last_workflow = MagicMock()
+            window._append_log = MagicMock()
+
+            dialog_cls = MagicMock()
+            dialog_cls.return_value.exec.return_value = True
+
+            with patch("src.ui.dialogs.ShutdownCountdownDialog", dialog_cls), \
+                 patch("src.app.execution.shutdown_command", return_value=None), \
+                 patch("src.app.execution.subprocess.Popen") as popen:
+                window._on_workflow_done(1, 0, 0)
+
+            popen.assert_not_called()
+            assert any(
+                "nicht unterstützt" in str(call.args[0])
+                for call in window._append_log.call_args_list
+            )
+        finally:
+            window.close()
         assert _job_has_source_config(WorkflowJob(source_mode="folder_scan", source_folder="")) is False
         assert _job_has_source_config(WorkflowJob(source_mode="pi_download", device_name="")) is False
         assert _job_has_source_config(

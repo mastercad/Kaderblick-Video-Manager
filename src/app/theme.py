@@ -9,6 +9,8 @@ from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetrics, QPainter, QPalette
 from PySide6.QtWidgets import QApplication, QWidget
 
+from ..runtime_paths import asset_path
+
 
 _PRIMARY_GREEN = "#06B62E"
 _PRIMARY_GREEN_DARK = "#059B28"
@@ -114,7 +116,7 @@ def _ensure_brand_font_loaded() -> None:
     if _loaded_brand_family is not None:
         return
 
-    font_path = Path(__file__).resolve().parent.parent.parent / "assets" / "ImpactLTStd.woff2"
+    font_path = asset_path("ImpactLTStd.woff2")
     if font_path.exists():
         font_id = QFontDatabase.addApplicationFont(str(font_path))
         if font_id >= 0:
