@@ -14,4 +14,4 @@ dist-artifacts/
 config/settings.json
 data/last_workflow.json
 data/integration_state.json
-workflows/
+/workflows/
