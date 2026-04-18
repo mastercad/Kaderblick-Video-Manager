@@ -19,13 +19,36 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Optional
 
-from PySide6.QtCore import QDate, Qt
-from PySide6.QtGui import QFont
-from PySide6.QtWidgets import (
-    QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
-    QDateEdit, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
-    QRadioButton, QSpinBox, QVBoxLayout,
-)
+_QT_IMPORT_ERROR: Exception | None = None
+
+try:
+    from PySide6.QtCore import QDate, Qt
+    from PySide6.QtGui import QFont
+    from PySide6.QtWidgets import (
+        QButtonGroup, QCheckBox, QComboBox, QDialog, QDialogButtonBox,
+        QDateEdit, QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
+        QRadioButton, QSpinBox, QVBoxLayout,
+    )
+    _DialogBase = QDialog
+except Exception as exc:
+    _QT_IMPORT_ERROR = exc
+    QDate = None
+    Qt = None
+    QFont = None
+    QButtonGroup = None
+    QCheckBox = None
+    QComboBox = None
+    QDialogButtonBox = None
+    QDateEdit = None
+    QFormLayout = None
+    QFrame = None
+    QGroupBox = None
+    QHBoxLayout = None
+    QLabel = None
+    QRadioButton = None
+    QSpinBox = None
+    QVBoxLayout = None
+    _DialogBase = object
 
 from .state_store import load_section, save_section
 
@@ -248,7 +271,7 @@ def _add_to_history(history: list, value: str, max_items: int = 20) -> list:
 #  Dialog
 # ═════════════════════════════════════════════════════════════════
 
-class YouTubeTitleEditorDialog(QDialog):
+class YouTubeTitleEditorDialog(_DialogBase):
     """Strukturierter Editor für YouTube-Titel und Playlist-Namen.
 
     Modi
@@ -266,6 +289,11 @@ class YouTubeTitleEditorDialog(QDialog):
                  kb_cameras: Optional[list] = None,
                  initial_kb_type_id: int = 0,
                  initial_kb_camera_id: int = 0):
+        if _QT_IMPORT_ERROR is not None:
+            raise RuntimeError(
+                "YouTubeTitleEditorDialog benötigt eine vollständige PySide6-GUI-Umgebung. "
+                "Generator-Funktionen dieses Moduls bleiben auch ohne GUI nutzbar."
+            ) from _QT_IMPORT_ERROR
         super().__init__(parent)
         self.setWindowTitle("YouTube-Metadaten")
         self.setMinimumWidth(540)
