@@ -3,7 +3,7 @@ from pathlib import Path
 from src.integrations import kaderblick as kaderblick_module
 from src.integrations import youtube as youtube_module
 from src.settings import AppSettings
-from src.workflow import FileEntry, WorkflowJob, describe_reset_target, reset_job_for_rebuild
+from src.workflow import FileEntry, WorkflowJob, describe_reset_target, describe_reset_warning, reset_job_for_rebuild
 from src.workflow_steps.executor_support import ExecutorSupport
 
 
@@ -122,3 +122,279 @@ class TestWorkflowReset:
 
         assert label == "Titelkarte"
         assert "Merge" in note
+
+    def test_full_reset_warning_only_when_moved_sources_can_be_deleted(self, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        target_dir = tmp_path / "raw"
+        target_path = target_dir / source_path.name
+        _write_file(target_path)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "done"},
+        )
+
+        warning = describe_reset_warning(job, settings)
+
+        assert warning == ""
+
+    def test_full_reset_keeps_successfully_moved_file_targets(self, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        target_dir = tmp_path / "raw"
+        target_path = target_dir / source_path.name
+        _write_file(target_path)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "done", "convert": "done"},
+        )
+
+        output_path = target_dir / "clip_converted.mp4"
+        _write_file(output_path)
+
+        result = reset_job_for_rebuild(job, settings)
+
+        assert target_path.exists()
+        assert str(target_path) not in result.deleted_paths
+
+    def test_full_reset_keeps_folder_scan_targets_after_move(self, tmp_path):
+        source_dir = tmp_path / "eingang"
+        target_dir = tmp_path / "raw"
+        target_path = target_dir / "clip.mp4"
+        _write_file(target_path)
+
+        settings = AppSettings()
+        job = _make_job(
+            source_mode="folder_scan",
+            files=[],
+            source_folder=str(source_dir),
+            file_pattern="*.mp4",
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "done"},
+        )
+
+        result = reset_job_for_rebuild(job, settings)
+
+        assert target_path.exists()
+        assert str(target_path) not in result.deleted_paths
+
+    def test_full_reset_keeps_same_directory_file_targets(self, tmp_path):
+        source_dir = tmp_path / "raw"
+        source_path = source_dir / "clip.mp4"
+        _write_file(source_path)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=False,
+            copy_destination=str(source_dir),
+            step_statuses={"transfer": "done"},
+        )
+
+        result = reset_job_for_rebuild(job, settings)
+
+        assert source_path.exists()
+        assert str(source_path) not in result.deleted_paths
+
+    def test_full_reset_deletes_copied_transfer_targets(self, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        target_dir = tmp_path / "raw"
+        target_path = target_dir / source_path.name
+        _write_file(source_path)
+        _write_file(target_path)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=False,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "done"},
+        )
+
+        result = reset_job_for_rebuild(job, settings)
+
+        assert not target_path.exists()
+        assert str(target_path) in result.deleted_paths
+
+    def test_full_reset_warning_stays_hidden_without_moved_source_risk(self, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        target_dir = tmp_path / "raw"
+        target_path = target_dir / source_path.name
+        _write_file(source_path)
+        _write_file(target_path)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=False,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "done"},
+        )
+
+        assert describe_reset_warning(job, settings) == ""
+
+    def test_full_reset_warning_stays_hidden_when_partial_reset_requested(self, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        target_dir = tmp_path / "raw"
+        _write_file(target_dir / source_path.name)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "done"},
+        )
+
+        assert describe_reset_warning(job, settings, node_type="convert") == ""
+
+    def test_full_reset_warning_stays_hidden_without_target_directory(self, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        _write_file(source_path)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination="",
+            step_statuses={"transfer": "done"},
+        )
+
+        assert describe_reset_warning(job, settings) == ""
+
+    def test_full_reset_warning_stays_hidden_when_move_keeps_same_directory(self, tmp_path):
+        source_dir = tmp_path / "raw"
+        source_path = source_dir / "clip.mp4"
+        _write_file(source_path)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination=str(source_dir),
+            step_statuses={"transfer": "done"},
+        )
+
+        assert describe_reset_warning(job, settings) == ""
+
+    def test_full_reset_warning_stays_hidden_without_existing_targets(self, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination=str(tmp_path / "raw"),
+            step_statuses={"transfer": "done"},
+        )
+
+        assert describe_reset_warning(job, settings) == ""
+
+    def test_full_reset_warning_detects_reused_target_state(self, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        target_dir = tmp_path / "raw"
+        _write_file(target_dir / source_path.name)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "reused-target"},
+        )
+
+        warning = describe_reset_warning(job, settings)
+
+        assert warning == ""
+
+    def test_full_reset_warning_stays_hidden_when_source_file_still_exists(self, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        target_dir = tmp_path / "raw"
+        _write_file(source_path)
+        _write_file(target_dir / source_path.name)
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "pending"},
+        )
+
+        assert describe_reset_warning(job, settings) == ""
+
+    def test_full_reset_warning_ignores_blank_file_entries(self, tmp_path):
+        target_dir = tmp_path / "raw"
+        _write_file(target_dir / "clip.mp4")
+
+        settings = AppSettings()
+        job = _make_job(
+            files=[FileEntry(source_path="")],
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "pending"},
+        )
+
+        assert describe_reset_warning(job, settings) == ""
+
+    def test_full_reset_warning_mentions_ordner_for_folder_scan_when_source_is_missing(self, tmp_path):
+        source_dir = tmp_path / "eingang"
+        target_dir = tmp_path / "raw"
+        _write_file(target_dir / "clip.mp4")
+
+        settings = AppSettings()
+        job = _make_job(
+            source_mode="folder_scan",
+            files=[],
+            source_folder=str(source_dir),
+            file_pattern="*.mp4",
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "pending"},
+        )
+
+        warning = describe_reset_warning(job, settings)
+
+        assert warning == ""
+
+    def test_full_reset_warning_stays_hidden_for_folder_scan_when_source_exists(self, tmp_path):
+        source_dir = tmp_path / "eingang"
+        target_dir = tmp_path / "raw"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        _write_file(target_dir / "clip.mp4")
+
+        settings = AppSettings()
+        job = _make_job(
+            source_mode="folder_scan",
+            files=[],
+            source_folder=str(source_dir),
+            file_pattern="*.mp4",
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "pending"},
+        )
+
+        assert describe_reset_warning(job, settings) == ""
+
+    def test_full_reset_warning_stays_hidden_for_folder_scan_without_source_folder(self, tmp_path):
+        target_dir = tmp_path / "raw"
+        _write_file(target_dir / "clip.mp4")
+
+        settings = AppSettings()
+        job = _make_job(
+            source_mode="folder_scan",
+            files=[],
+            source_folder="",
+            file_pattern="*.mp4",
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "pending"},
+        )
+
+        assert describe_reset_warning(job, settings) == ""

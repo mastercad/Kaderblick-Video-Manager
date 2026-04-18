@@ -66,6 +66,27 @@ def describe_reset_target(job: WorkflowJob, node_type: str | None = None) -> tup
     return label, note or f"Start ab {_label_for_node_type(effective_node_type)}."
 
 
+def describe_reset_warning(
+    job: WorkflowJob,
+    settings: AppSettings,
+    *,
+    node_type: str | None = None,
+) -> str:
+    effective_node_type, _ = _resolve_effective_node_type(job, node_type)
+    if node_type is not None or effective_node_type != "transfer":
+        return ""
+    if not _full_reset_may_delete_moved_sources(job, settings):
+        return ""
+    source_label = "Dateien" if job.source_mode == "files" else "Ordner"
+    return (
+        "ACHTUNG: Dieser Job verschiebt Quelldateien in den Zielordner. "
+        "Beim vollständigen Zurücksetzen können dort bereits verschobene Originaldateien "
+        "unter Umständen endgültig gelöscht werden.\n\n"
+        f"Setze den Workflow stattdessen möglichst nur bis zur Quelle „{source_label}“ zurück, "
+        "wenn dieser Schritt im Workflow vorhanden ist."
+    )
+
+
 def _resolve_effective_node_type(job: WorkflowJob, node_type: str | None) -> tuple[str, str]:
     if not node_type:
         return "transfer", "Der Workflow wird vollständig zurückgesetzt."
@@ -153,7 +174,7 @@ def _clear_artifacts(job: WorkflowJob, settings: AppSettings, cleared_steps: set
     cleared_upload_ids: set[str] = set()
 
     if "transfer" in cleared_steps:
-        for path in _transfer_targets(job, settings):
+        for path in _transfer_targets_for_reset(job, settings):
             if _delete_file(path):
                 deleted_paths.add(path)
 
@@ -199,6 +220,80 @@ def _delete_file(path: Path) -> bool:
     try:
         path.unlink()
         return True
+    except OSError:
+        return False
+
+
+def _full_reset_may_delete_moved_sources(job: WorkflowJob, settings: AppSettings) -> bool:
+    if not job.move_files or job.source_mode not in {"files", "folder_scan"}:
+        return False
+
+    return bool(_transfer_targets_for_reset(job, settings))
+
+
+def _transfer_targets_for_reset(job: WorkflowJob, settings: AppSettings) -> set[Path]:
+    targets = _transfer_targets(job, settings)
+    if not targets:
+        return set()
+    if job.source_mode not in {"files", "folder_scan"}:
+        return targets
+    if not _local_transfer_targets_are_disposable(job, settings):
+        return set()
+    return targets
+
+
+def _local_transfer_targets_are_disposable(job: WorkflowJob, settings: AppSettings) -> bool:
+    if job.move_files:
+        return False
+
+    target_dir = ExecutorSupport.resolve_copy_destination(settings, job)
+    if target_dir is None:
+        return False
+
+    if job.source_mode == "files":
+        saw_source = False
+        for entry in job.files:
+            raw_source = str(getattr(entry, "source_path", "") or "").strip()
+            if not raw_source:
+                continue
+            saw_source = True
+            source_path = Path(raw_source)
+            if _paths_match(source_path, target_dir / source_path.name):
+                return False
+        return saw_source
+
+    source_dir = (job.source_folder or "").strip()
+    if not source_dir:
+        return False
+    return not _paths_match(Path(source_dir), target_dir)
+
+
+def _move_changes_source_location(job: WorkflowJob, target_dir: Path) -> bool:
+    if job.source_mode == "files":
+        for entry in job.files:
+            raw_source = str(getattr(entry, "source_path", "") or "").strip()
+            if not raw_source:
+                continue
+            if not _paths_match(Path(raw_source).parent, target_dir):
+                return True
+        return False
+
+    source_dir = (job.source_folder or "").strip()
+    if not source_dir:
+        return False
+    return not _paths_match(Path(source_dir), target_dir)
+
+
+def _paths_match(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return left == right
+
+
+def _path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
     except OSError:
         return False
 

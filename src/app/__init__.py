@@ -11,6 +11,7 @@ from .helpers import (
     _compute_job_overall_progress,
     _format_resume_tooltip,
     _job_has_source_config,
+    _normalize_cancelled_resume_state,
     _planned_job_steps,
     _repair_restored_workflow,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "_compute_job_overall_progress",
     "_format_resume_tooltip",
     "_job_has_source_config",
+    "_normalize_cancelled_resume_state",
     "_planned_job_steps",
     "_repair_restored_workflow",
 ]

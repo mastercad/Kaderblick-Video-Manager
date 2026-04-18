@@ -27,7 +27,7 @@ from .panels import WorkflowDialogLayoutBuilder, WorkflowNotesPanel, WorkflowSta
 from ..integrations.kaderblick import fetch_cameras, fetch_video_types
 from ..media.merge_analysis import job_merge_warning
 from ..settings import AppSettings
-from ..workflow import WorkflowJob, describe_reset_target, reset_job_for_rebuild
+from ..workflow import WorkflowJob, describe_reset_target, describe_reset_warning, reset_job_for_rebuild
 from ..integrations.youtube_title_editor import MatchData, YouTubeTitleEditorDialog
 
 
@@ -364,9 +364,12 @@ class JobWorkflowDialog(QDialog):
 
     def _run_reset_action(self, node_type: str | None) -> None:
         label, note = describe_reset_target(self._job, node_type)
+        warning = describe_reset_warning(self._job, self._settings or AppSettings(), node_type=node_type)
         prompt = f"Soll {label} zurückgesetzt werden?"
         if note:
             prompt += f"\n\n{note}"
+        if warning:
+            prompt += f"\n\n{warning}"
         choice = QMessageBox.question(
             self,
             "Workflow zurücksetzen",

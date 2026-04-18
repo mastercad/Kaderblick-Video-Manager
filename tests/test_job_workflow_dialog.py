@@ -372,6 +372,62 @@ class TestJobWorkflowDialog:
         assert "youtube_upload" not in dlg._draft.step_statuses
         assert "kaderblick" not in dlg._draft.step_statuses
 
+    def test_full_reset_confirmation_omits_warning_for_moved_sources(self, monkeypatch, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        target_dir = tmp_path / "raw"
+        target_path = target_dir / source_path.name
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text("x", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Workflow Job",
+            source_mode="files",
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "done"},
+        )
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+        captured: dict[str, str] = {}
+
+        def fake_question(_parent, _title, prompt, *_args, **_kwargs):
+            captured["prompt"] = prompt
+            return QMessageBox.StandardButton.No
+
+        monkeypatch.setattr(QMessageBox, "question", fake_question)
+
+        dlg._run_reset_action(None)
+
+        assert "ACHTUNG" not in captured["prompt"]
+
+    def test_partial_reset_confirmation_omits_moved_source_warning(self, monkeypatch, tmp_path):
+        source_path = tmp_path / "imports" / "clip.mp4"
+        target_dir = tmp_path / "raw"
+        target_path = target_dir / source_path.name
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        target_path.write_text("x", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="Workflow Job",
+            source_mode="files",
+            files=[FileEntry(source_path=str(source_path))],
+            move_files=True,
+            copy_destination=str(target_dir),
+            step_statuses={"transfer": "done", "convert": "done"},
+        )
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+        captured: dict[str, str] = {}
+
+        def fake_question(_parent, _title, prompt, *_args, **_kwargs):
+            captured["prompt"] = prompt
+            return QMessageBox.StandardButton.No
+
+        monkeypatch.setattr(QMessageBox, "question", fake_question)
+
+        dlg._run_reset_action("convert")
+
+        assert "ACHTUNG" not in captured["prompt"]
+
     def test_validation_output_branch_hotspot_returns_branch_key(self):
         job = _make_job(convert_enabled=False)
         dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())

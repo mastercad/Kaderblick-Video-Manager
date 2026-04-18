@@ -107,6 +107,24 @@ def _format_resume_tooltip(job: WorkflowJob) -> str:
     return "\n".join(lines)
 
 
+def _step_resume_status(step_key: str) -> str:
+    labels = {
+        "transfer": "Transfer …",
+        "convert": "Konvertiere …",
+        "merge": "Zusammenführen …",
+        "titlecard": "Titelkarte erstellen …",
+        "validate_surface": "Kompatibilität prüfen …",
+        "validate_deep": "Deep-Scan …",
+        "cleanup": "Bereinige Altdateien …",
+        "repair": "Repariere Ausgabe …",
+        "yt_version": "YT-Version erstellen …",
+        "stop": "Workflow-Zweig beendet",
+        "youtube_upload": "YouTube-Upload …",
+        "kaderblick": "Kaderblick senden …",
+    }
+    return labels.get(step_key, "Wartend")
+
+
 def format_elapsed_seconds(seconds: float) -> str:
     total_seconds = max(0, int(seconds or 0))
     if total_seconds >= 3600:
@@ -240,6 +258,57 @@ def _compute_job_overall_progress(job: WorkflowJob, status: str, step_pct: int) 
     return int((completed_before_current + pct / 100.0) / len(planned_steps) * 100)
 
 
+def _normalize_cancelled_resume_state(job: WorkflowJob) -> bool:
+    changed = False
+    step_statuses = dict(job.step_statuses) if isinstance(job.step_statuses, dict) else {}
+    step_details = dict(job.step_details) if isinstance(job.step_details, dict) else {}
+
+    cancelled_steps = [
+        step_key
+        for step_key, status in step_statuses.items()
+        if str(status or "") == "cancelled"
+    ]
+    for step_key in cancelled_steps:
+        step_statuses.pop(step_key, None)
+        step_details.pop(step_key, None)
+        changed = True
+
+    if not isinstance(job.step_statuses, dict) or job.step_statuses != step_statuses:
+        job.step_statuses = step_statuses
+        changed = True
+    if not isinstance(job.step_details, dict) or job.step_details != step_details:
+        job.step_details = step_details
+        changed = True
+
+    had_cancelled_status = "abgebrochen" in str(job.resume_status or "").strip().lower()
+    if not cancelled_steps and not had_cancelled_status:
+        return changed
+
+    resume_step = None
+    for step_key in _planned_job_steps(job):
+        if not _is_finished_step(str(job.step_statuses.get(step_key, "") or "")):
+            resume_step = step_key
+            break
+
+    if resume_step:
+        next_status = _step_resume_status(resume_step)
+        if job.current_step_key != resume_step:
+            job.current_step_key = resume_step
+            changed = True
+        if job.resume_status != next_status:
+            job.resume_status = next_status
+            changed = True
+        return changed
+
+    if job.current_step_key:
+        job.current_step_key = ""
+        changed = True
+    if job.resume_status:
+        job.resume_status = ""
+        changed = True
+    return changed
+
+
 def _job_has_source_config(job: WorkflowJob) -> bool:
     if job.source_mode == "files":
         return bool(job.files)
@@ -291,7 +360,11 @@ def _repair_restored_workflow(restored: Workflow, fallback: Workflow | None) -> 
         return restored, 0, 0
 
     if all(_job_has_source_config(job) for job in restored.jobs):
-        return restored, 0, 0
+        repaired_count = 0
+        for job in restored.jobs:
+            if _normalize_cancelled_resume_state(job):
+                repaired_count += 1
+        return restored, repaired_count, 0
 
     repaired_jobs: list[WorkflowJob] = []
     repaired_count = 0
@@ -299,6 +372,8 @@ def _repair_restored_workflow(restored: Workflow, fallback: Workflow | None) -> 
 
     for index, job in enumerate(restored.jobs):
         if _job_has_source_config(job):
+            if _normalize_cancelled_resume_state(job):
+                repaired_count += 1
             repaired_jobs.append(job)
             continue
 

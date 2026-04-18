@@ -27,7 +27,7 @@ import sys
 # Einmalige App-Instanz für alle Tests in diesem Modul
 _app = QApplication.instance() or QApplication(sys.argv)
 
-from src.workflow import Workflow, WorkflowJob, FileEntry
+from src.workflow import Workflow, WorkflowJob, FileEntry, reset_job_for_rebuild
 from src.runtime.workflow_executor import WorkflowExecutor
 from src.workflow_steps import PreparedOutput
 from src.media.ffmpeg_runner import MediaValidationResult
@@ -1492,6 +1492,56 @@ class TestWorkflowStackScenarios:
 
         assert src.exists()
         assert (dst_dir / src.name).exists()
+
+    def test_reset_after_move_run_keeps_transferred_original(self, tmp_path):
+        src = tmp_path / "quelle.mp4"
+        src.write_text("data", encoding="utf-8")
+        dst_dir = tmp_path / "ziel"
+
+        job = WorkflowJob(
+            name="Move Reset",
+            source_mode="files",
+            convert_enabled=False,
+            copy_destination=str(dst_dir),
+            move_files=True,
+            files=[FileEntry(source_path=str(src))],
+        )
+        settings = _make_settings()
+        ex = WorkflowExecutor(Workflow(jobs=[job]), settings)
+
+        ex.run()
+        moved_target = dst_dir / src.name
+
+        result = reset_job_for_rebuild(job, settings)
+
+        assert not src.exists()
+        assert moved_target.exists()
+        assert str(moved_target) not in result.deleted_paths
+
+    def test_reset_after_copy_run_removes_transfer_copy(self, tmp_path):
+        src = tmp_path / "quelle.mp4"
+        src.write_text("data", encoding="utf-8")
+        dst_dir = tmp_path / "ziel"
+
+        job = WorkflowJob(
+            name="Copy Reset",
+            source_mode="files",
+            convert_enabled=False,
+            copy_destination=str(dst_dir),
+            move_files=False,
+            files=[FileEntry(source_path=str(src))],
+        )
+        settings = _make_settings()
+        ex = WorkflowExecutor(Workflow(jobs=[job]), settings)
+
+        ex.run()
+        copied_target = dst_dir / src.name
+
+        result = reset_job_for_rebuild(job, settings)
+
+        assert src.exists()
+        assert not copied_target.exists()
+        assert str(copied_target) in result.deleted_paths
 
     def test_restart_mode_does_not_reuse_existing_transfer_target_when_source_is_missing(self, tmp_path):
         dst_dir = tmp_path / "ziel"

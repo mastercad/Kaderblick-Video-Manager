@@ -5,10 +5,139 @@ from __future__ import annotations
 import subprocess
 import time
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtCore import Slot
 
 from .helpers import _compute_job_overall_progress, _format_resume_tooltip, _job_has_source_config, format_elapsed_seconds
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.resolve(strict=False) == right.resolve(strict=False)
+    except OSError:
+        return left == right
+
+
+def _job_label(index: int, job) -> str:
+    return (str(getattr(job, "name", "") or "").strip() or f"Job {index + 1}")
+
+
+def _job_source_paths(job) -> set[Path]:
+    from ..workflow import graph_has_multiple_sources, graph_source_nodes
+
+    paths: set[Path] = set()
+    if graph_has_multiple_sources(job):
+        source_file_ids = {
+            node_id
+            for node_id, node_type in graph_source_nodes(job)
+            if node_type == "source_files"
+        }
+        for entry in getattr(job, "files", []):
+            raw_source = str(getattr(entry, "source_path", "") or "").strip()
+            if not raw_source:
+                continue
+            source_id = str(getattr(entry, "graph_source_id", "") or "").strip()
+            if source_id and source_id not in source_file_ids:
+                continue
+            paths.add(Path(raw_source))
+    elif getattr(job, "files", None):
+        for entry in job.files:
+            raw_source = str(getattr(entry, "source_path", "") or "").strip()
+            if raw_source:
+                paths.add(Path(raw_source))
+
+    has_folder_scan = bool(getattr(job, "source_mode", "") == "folder_scan")
+    if not has_folder_scan:
+        from ..workflow import graph_source_nodes
+
+        has_folder_scan = any(node_type == "source_folder_scan" for _node_id, node_type in graph_source_nodes(job))
+
+    if has_folder_scan:
+        raw_folder = str(getattr(job, "source_folder", "") or "").strip()
+        if raw_folder:
+            source_dir = Path(raw_folder)
+            pattern = str(getattr(job, "file_pattern", "") or "").strip() or "*.mp4"
+            if source_dir.exists():
+                for path in sorted(source_dir.glob(pattern)):
+                    if path.is_file():
+                        paths.add(path)
+    return paths
+
+
+def _job_effectively_moves_sources(settings, job) -> bool:
+    from ..workflow_steps import ExecutorSupport
+
+    if not bool(getattr(job, "move_files", False)):
+        return False
+
+    target_dir = ExecutorSupport.resolve_copy_destination(settings, job)
+    if target_dir is None:
+        return False
+
+    source_paths = _job_source_paths(job)
+    if source_paths:
+        return any(not _same_path(source_path.parent, target_dir) for source_path in source_paths)
+
+    raw_folder = str(getattr(job, "source_folder", "") or "").strip()
+    if raw_folder:
+        return not _same_path(Path(raw_folder), target_dir)
+    return False
+
+
+def _build_source_move_conflict_warning(settings, active_job_entries) -> str:
+    sources: dict[Path, list[tuple[int, int, object, bool]]] = {}
+    for order, (index, job) in enumerate(active_job_entries):
+        move_sources = _job_effectively_moves_sources(settings, job)
+        for source_path in _job_source_paths(job):
+            sources.setdefault(source_path, []).append((order, index, job, move_sources))
+
+    conflicts: list[str] = []
+    for source_path in sorted(sources, key=lambda path: str(path).lower()):
+        claims = sources[source_path]
+        if len(claims) < 2:
+            continue
+
+        claims.sort(key=lambda item: item[0])
+        movers = [claim for claim in claims if claim[3]]
+        if len(movers) >= 2:
+            first = movers[0]
+            second = movers[1]
+            conflicts.append(
+                f"- {source_path}: {_job_label(first[1], first[2])} und {_job_label(second[1], second[2])} wollen dieselbe Quelldatei verschieben."
+            )
+            continue
+
+        mover = next((claim for claim in claims if claim[3]), None)
+        if mover is None:
+            continue
+        later_access = next((claim for claim in claims if claim[0] > mover[0]), None)
+        if later_access is None:
+            continue
+        conflicts.append(
+            f"- {source_path}: {_job_label(mover[1], mover[2])} verschiebt die Quelle, {_job_label(later_access[1], later_access[2])} greift spaeter erneut darauf zu."
+        )
+
+    if not conflicts:
+        return ""
+
+    max_items = 8
+    visible_conflicts = conflicts[:max_items]
+    hidden_count = max(0, len(conflicts) - max_items)
+    lines = [
+        "Die ausgewaehlten aktiven Workflows verwenden dieselben Quelldateien in einer kritischen Reihenfolge.",
+        "",
+        *visible_conflicts,
+    ]
+    if hidden_count:
+        lines.append(f"- ... und {hidden_count} weitere Konflikt(e).")
+    lines.extend(
+        [
+            "",
+            "Bitte die betroffenen Jobs anpassen und den Start danach erneut ausloesen.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _start_selected_workflows(self):
@@ -32,16 +161,22 @@ def _start_all_active_workflows(self):
 def _start_workflow(self, *, active_indices: set[int] | None = None):
     from . import QThread, QMessageBox, WorkflowExecutor
 
-    active_jobs = [
-        job
+    active_job_entries = [
+        (index, job)
         for index, job in enumerate(self._workflow.jobs)
         if job.enabled and (active_indices is None or index in active_indices)
     ]
+    active_jobs = [job for _index, job in active_job_entries]
     if not active_jobs:
         QMessageBox.information(self, "Hinweis", "Kein aktiver Workflow in der Auswahl vorhanden.")
         return
 
     if self._wf_thread and self._wf_thread.isRunning():
+        return
+
+    conflict_warning = _build_source_move_conflict_warning(self.settings, active_job_entries)
+    if conflict_warning:
+        QMessageBox.warning(self, "Quell-Dateikonflikt", conflict_warning)
         return
 
     resume_existing = False

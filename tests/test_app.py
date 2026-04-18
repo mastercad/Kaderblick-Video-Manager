@@ -13,10 +13,17 @@ from src.app import (
     _compute_job_overall_progress,
     _format_resume_tooltip,
     _job_has_source_config,
+    _normalize_cancelled_resume_state,
     _planned_job_steps,
     _repair_restored_workflow,
 )
+from src.app.execution import (
+    _build_source_move_conflict_warning,
+    _job_effectively_moves_sources,
+    _job_source_paths,
+)
 from src.settings import AppSettings
+from src.workflow.storage import save_workflow
 from src.workflow import FileEntry, Workflow, WorkflowJob
 
 
@@ -325,6 +332,111 @@ class TestJobOverallProgress:
 
 
 class TestSelectedWorkflowStart:
+    def test_job_source_paths_collects_folder_scan_matches(self, tmp_path):
+        source_dir = tmp_path / "input"
+        source_dir.mkdir()
+        first = source_dir / "a.mp4"
+        second = source_dir / "b.mp4"
+        ignored = source_dir / "c.mov"
+        first.write_text("a")
+        second.write_text("b")
+        ignored.write_text("c")
+
+        job = WorkflowJob(
+            source_mode="folder_scan",
+            source_folder=str(source_dir),
+            file_pattern="*.mp4",
+            move_files=True,
+            copy_destination=str(tmp_path / "target"),
+        )
+
+        assert _job_source_paths(job) == {first, second}
+
+    def test_job_source_paths_ignores_non_file_graph_entries_for_multi_source_jobs(self, tmp_path):
+        local_file = tmp_path / "lokal.mp4"
+        download_file = tmp_path / "download.mp4"
+        local_file.write_text("a")
+        download_file.write_text("b")
+
+        job = WorkflowJob(
+            source_mode="files",
+            files=[
+                FileEntry(source_path=str(local_file), graph_source_id="source-files"),
+                FileEntry(source_path=str(download_file), graph_source_id="source-pi"),
+            ],
+            graph_nodes=[
+                {"id": "source-files", "type": "source_files"},
+                {"id": "source-pi", "type": "source_pi_download"},
+            ],
+        )
+
+        assert _job_source_paths(job) == {local_file}
+
+    def test_job_effectively_moves_sources_is_false_for_in_place_target(self, tmp_path):
+        source_dir = tmp_path / "input"
+        source_dir.mkdir()
+        source_file = source_dir / "halbzeit.mp4"
+        source_file.write_text("video")
+        job = WorkflowJob(
+            source_mode="files",
+            files=[FileEntry(source_path=str(source_file))],
+            move_files=True,
+            copy_destination=str(source_dir),
+        )
+
+        assert _job_effectively_moves_sources(AppSettings(), job) is False
+
+    def test_conflict_warning_requires_move_before_later_access(self, tmp_path):
+        source_file = tmp_path / "halbzeit.mp4"
+        source_file.write_text("video")
+        move_target = tmp_path / "ziel"
+        earlier_reader = WorkflowJob(
+            name="Leser",
+            source_mode="files",
+            files=[FileEntry(source_path=str(source_file))],
+            move_files=False,
+        )
+        later_mover = WorkflowJob(
+            name="Mover",
+            source_mode="files",
+            files=[FileEntry(source_path=str(source_file))],
+            move_files=True,
+            copy_destination=str(move_target),
+        )
+
+        warning = _build_source_move_conflict_warning(
+            AppSettings(),
+            [(0, earlier_reader), (1, later_mover)],
+        )
+
+        assert warning == ""
+
+    def test_conflict_warning_limits_output_and_reports_remaining_count(self, tmp_path):
+        settings = AppSettings()
+        job_entries = []
+        for index in range(9):
+            source_file = tmp_path / f"datei-{index}.mp4"
+            source_file.write_text("video")
+            mover = WorkflowJob(
+                name=f"Mover {index}",
+                source_mode="files",
+                files=[FileEntry(source_path=str(source_file))],
+                move_files=True,
+                copy_destination=str(tmp_path / f"ziel-{index}"),
+            )
+            reader = WorkflowJob(
+                name=f"Reader {index}",
+                source_mode="files",
+                files=[FileEntry(source_path=str(source_file))],
+                move_files=False,
+            )
+            job_entries.extend([(index * 2, mover), (index * 2 + 1, reader)])
+
+        warning = _build_source_move_conflict_warning(settings, job_entries)
+
+        assert warning.count("greift spaeter erneut darauf zu") == 8
+        assert "1 weitere Konflikt(e)" in warning
+
     def test_start_selected_workflows_passes_selected_indices_to_executor(self):
         window = _new_app()
         window._workflow.jobs = [
@@ -373,6 +485,100 @@ class TestSelectedWorkflowStart:
             window._start_selected_workflows()
 
         question_mock.assert_not_called()
+        assert window._wf_executor is not None
+        assert window._wf_executor.active_indices == {0, 1}
+
+    def test_start_workflow_warns_when_two_active_jobs_move_same_source(self, tmp_path):
+        window = _new_app()
+        source_file = tmp_path / "halbzeit1.mp4"
+        source_file.write_text("video")
+        target_a = tmp_path / "ziel-a"
+        target_b = tmp_path / "ziel-b"
+        window._workflow.jobs = [
+            WorkflowJob(
+                name="A",
+                source_mode="files",
+                files=[FileEntry(source_path=str(source_file))],
+                copy_destination=str(target_a),
+                move_files=True,
+            ),
+            WorkflowJob(
+                name="B",
+                source_mode="files",
+                files=[FileEntry(source_path=str(source_file))],
+                copy_destination=str(target_b),
+                move_files=True,
+            ),
+        ]
+        window._refresh_table()
+
+        with patch("src.app.QMessageBox.warning") as warning_mock, patch("src.app.QThread", _DummyThread), patch(
+            "src.app.WorkflowExecutor", _DummyExecutor
+        ):
+            window._start_workflow(active_indices={0, 1})
+
+        warning_mock.assert_called_once()
+        assert "wollen dieselbe Quelldatei verschieben" in warning_mock.call_args.args[2]
+        assert window._wf_executor is None
+
+    def test_start_workflow_warns_when_earlier_job_moves_source_before_later_reuse(self, tmp_path):
+        window = _new_app()
+        source_file = tmp_path / "halbzeit2.mp4"
+        source_file.write_text("video")
+        target_dir = tmp_path / "ziel"
+        window._workflow.jobs = [
+            WorkflowJob(
+                name="Frueher",
+                source_mode="files",
+                files=[FileEntry(source_path=str(source_file))],
+                copy_destination=str(target_dir),
+                move_files=True,
+            ),
+            WorkflowJob(
+                name="Spaeter",
+                source_mode="files",
+                files=[FileEntry(source_path=str(source_file))],
+                move_files=False,
+            ),
+        ]
+        window._refresh_table()
+
+        with patch("src.app.QMessageBox.warning") as warning_mock, patch("src.app.QThread", _DummyThread), patch(
+            "src.app.WorkflowExecutor", _DummyExecutor
+        ):
+            window._start_workflow(active_indices={0, 1})
+
+        warning_mock.assert_called_once()
+        assert "verschiebt die Quelle" in warning_mock.call_args.args[2]
+        assert "greift spaeter erneut darauf zu" in warning_mock.call_args.args[2]
+        assert window._wf_executor is None
+
+    def test_start_workflow_allows_shared_source_when_nobody_moves_it(self, tmp_path):
+        window = _new_app()
+        source_file = tmp_path / "halbzeit3.mp4"
+        source_file.write_text("video")
+        window._workflow.jobs = [
+            WorkflowJob(
+                name="A",
+                source_mode="files",
+                files=[FileEntry(source_path=str(source_file))],
+                move_files=False,
+            ),
+            WorkflowJob(
+                name="B",
+                source_mode="files",
+                files=[FileEntry(source_path=str(source_file))],
+                move_files=False,
+            ),
+        ]
+        window._refresh_table()
+
+        with patch("src.app.QMessageBox.warning") as warning_mock, patch("src.app.QThread", _DummyThread), patch(
+            "src.app.WorkflowExecutor", _DummyExecutor
+        ):
+            window._start_workflow(active_indices={0, 1})
+
+        warning_mock.assert_not_called()
         assert window._wf_executor is not None
         assert window._wf_executor.active_indices == {0, 1}
 
@@ -568,6 +774,25 @@ class TestSessionRepair:
 
 
 class TestConverterAppResumeState:
+    def test_normalize_cancelled_resume_state_turns_aborted_job_into_resumable_step(self):
+        job = WorkflowJob(
+            name="Job 1",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            resume_status="Konvertierung abgebrochen",
+            current_step_key="convert",
+            step_statuses={"transfer": "done", "convert": "cancelled"},
+            step_details={"convert": "Durch Benutzer abgebrochen"},
+        )
+
+        changed = _normalize_cancelled_resume_state(job)
+
+        assert changed is True
+        assert job.resume_status == "Konvertiere …"
+        assert job.current_step_key == "convert"
+        assert job.step_statuses == {"transfer": "done"}
+        assert job.step_details == {}
+
     def test_save_last_workflow_persists_complete_workflow_configuration(self, tmp_path):
         last_workflow_file = tmp_path / "last_workflow.json"
         workflow = Workflow(name="Spieltag 23", job=_rich_job(), shutdown_after=True)
@@ -675,6 +900,93 @@ class TestConverterAppResumeState:
             assert window._workflow.job.resume_status == ""
             assert window._workflow.job.step_statuses == {}
             assert window._workflow.job.files == []
+        finally:
+            window.close()
+
+    def test_app_start_normalizes_cancelled_last_workflow_state(self, tmp_path):
+        settings = AppSettings()
+        settings.restore_last_workflow = True
+        last_workflow_file = tmp_path / "last_workflow.json"
+        restored = Workflow(
+            jobs=[
+                WorkflowJob(
+                    name="Gespeicherter Job",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/a.mp4")],
+                    resume_status="Konvertierung abgebrochen",
+                    current_step_key="convert",
+                    step_statuses={"transfer": "done", "convert": "cancelled"},
+                    step_details={"convert": "Durch Benutzer abgebrochen"},
+                )
+            ]
+        )
+        save_workflow(restored, last_workflow_file, include_runtime=True)
+
+        with patch("src.app.AppSettings.load", return_value=settings), \
+             patch("src.workflow.storage.LAST_WORKFLOW_FILE", last_workflow_file):
+            window = ConverterApp()
+
+        try:
+            assert window.table.rowCount() == 1
+            assert window._workflow.job is not None
+            assert window._workflow.job.resume_status == "Konvertiere …"
+            assert window._workflow.job.step_statuses == {"transfer": "done"}
+            assert window._workflow.job.step_details == {}
+            assert window.table.item(0, 4).text() == "Konvertiere …"
+        finally:
+            window.close()
+
+    def test_app_start_normalizes_cancelled_state_for_all_restored_jobs(self, tmp_path):
+        settings = AppSettings()
+        settings.restore_last_workflow = True
+        last_workflow_file = tmp_path / "last_workflow.json"
+        restored = Workflow(
+            jobs=[
+                WorkflowJob(
+                    name="Gespeicherter Job A",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/a.mp4")],
+                    resume_status="Konvertierung abgebrochen",
+                    current_step_key="convert",
+                    step_statuses={"transfer": "done", "convert": "cancelled"},
+                    step_details={"convert": "Durch Benutzer abgebrochen"},
+                ),
+                WorkflowJob(
+                    name="Gespeicherter Job B",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/b.mp4")],
+                    create_youtube_version=True,
+                    upload_youtube=True,
+                    resume_status="YouTube-Upload abgebrochen",
+                    current_step_key="youtube_upload",
+                    step_statuses={
+                        "transfer": "done",
+                        "convert": "done",
+                        "yt_version": "done",
+                        "youtube_upload": "cancelled",
+                    },
+                    step_details={"youtube_upload": "Durch Benutzer abgebrochen"},
+                ),
+            ]
+        )
+        save_workflow(restored, last_workflow_file, include_runtime=True)
+
+        with patch("src.app.AppSettings.load", return_value=settings), \
+             patch("src.workflow.storage.LAST_WORKFLOW_FILE", last_workflow_file):
+            window = ConverterApp()
+
+        try:
+            assert window.table.rowCount() == 2
+            assert window._workflow.jobs[0].resume_status == "Konvertiere …"
+            assert window._workflow.jobs[0].step_statuses == {"transfer": "done"}
+            assert window._workflow.jobs[1].resume_status == "YouTube-Upload …"
+            assert window._workflow.jobs[1].step_statuses == {
+                "transfer": "done",
+                "convert": "done",
+                "yt_version": "done",
+            }
+            assert window.table.item(0, 4).text() == "Konvertiere …"
+            assert window.table.item(1, 4).text() == "YouTube-Upload …"
         finally:
             window.close()
 
@@ -1407,6 +1719,94 @@ class TestConverterAppResumeState:
             assert job.step_statuses == {"transfer": "reused-target", "convert": "done"}
             assert window.table.item(0, 4).text() == "Transfer OK"
             window._save_last_workflow.assert_not_called()
+        finally:
+            window.close()
+
+    def test_start_workflow_resume_keeps_all_normalized_restored_jobs(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(
+                jobs=[
+                    WorkflowJob(
+                        name="Job 1",
+                        source_mode="files",
+                        files=[FileEntry(source_path="/tmp/a.mp4")],
+                        resume_status="Konvertiere …",
+                        current_step_key="convert",
+                        step_statuses={"transfer": "done"},
+                    ),
+                    WorkflowJob(
+                        name="Job 2",
+                        source_mode="files",
+                        files=[FileEntry(source_path="/tmp/b.mp4")],
+                        create_youtube_version=True,
+                        upload_youtube=True,
+                        resume_status="YouTube-Upload …",
+                        current_step_key="youtube_upload",
+                        step_statuses={"transfer": "done", "convert": "done", "yt_version": "done"},
+                    ),
+                ]
+            )
+            window._refresh_table()
+            window._save_last_workflow = MagicMock()
+
+            with patch.object(window, "_ask_resume_behavior", return_value=QMessageBox.Yes), patch(
+                "src.app.QThread", _DummyThread
+            ), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow()
+
+            assert window._wf_executor is not None
+            assert window._wf_executor.allow_reuse_existing is True
+            assert window._workflow.jobs[0].resume_status == "Konvertiere …"
+            assert window._workflow.jobs[0].step_statuses == {"transfer": "done"}
+            assert window._workflow.jobs[1].resume_status == "YouTube-Upload …"
+            assert window._workflow.jobs[1].step_statuses == {"transfer": "done", "convert": "done", "yt_version": "done"}
+            window._save_last_workflow.assert_not_called()
+        finally:
+            window.close()
+
+    def test_start_workflow_restart_clears_all_normalized_restored_jobs(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(
+                jobs=[
+                    WorkflowJob(
+                        name="Job 1",
+                        source_mode="files",
+                        files=[FileEntry(source_path="/tmp/a.mp4")],
+                        resume_status="Konvertiere …",
+                        current_step_key="convert",
+                        step_statuses={"transfer": "done"},
+                    ),
+                    WorkflowJob(
+                        name="Job 2",
+                        source_mode="files",
+                        files=[FileEntry(source_path="/tmp/b.mp4")],
+                        create_youtube_version=True,
+                        upload_youtube=True,
+                        resume_status="YouTube-Upload …",
+                        current_step_key="youtube_upload",
+                        step_statuses={"transfer": "done", "convert": "done", "yt_version": "done"},
+                    ),
+                ]
+            )
+            window._refresh_table()
+            window._save_last_workflow = MagicMock()
+
+            with patch.object(window, "_ask_resume_behavior", return_value=QMessageBox.No), patch(
+                "src.app.QThread", _DummyThread
+            ), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow()
+
+            assert window._wf_executor is not None
+            assert window._wf_executor.allow_reuse_existing is False
+            assert window._workflow.jobs[0].resume_status == ""
+            assert window._workflow.jobs[0].step_statuses == {}
+            assert window._workflow.jobs[1].resume_status == ""
+            assert window._workflow.jobs[1].step_statuses == {}
+            assert window.table.item(0, 4).text() == "Wartend"
+            assert window.table.item(1, 4).text() == "Wartend"
+            window._save_last_workflow.assert_called_once()
         finally:
             window.close()
 
