@@ -18,7 +18,7 @@ from ...workflow import WorkflowJob
 
 
 class _WorkflowGraphView(QGraphicsView):
-    selection_changed = Signal(dict)
+    selection_changed = Signal()
     graph_changed = Signal()
     SNAP_DISTANCE = 28
     PORT_PICK_DISTANCE = 18
@@ -41,6 +41,7 @@ class _WorkflowGraphView(QGraphicsView):
         self._nodes: dict[str, _StepNodeItem] = {}
         self._edges: list[tuple[str, str, str, _GraphEdgeItem]] = []
         self._draft_job: WorkflowJob | None = None
+        self._last_selection: dict = {}
         self._is_panning = False
         self._last_pan_pos: QPoint | None = None
         self._interaction = _WorkflowGraphInteraction(self)

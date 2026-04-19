@@ -88,7 +88,9 @@ class WorkflowDialogLayoutBuilder:
         layout.addWidget(hint)
 
         self._dialog._graph_view = _WorkflowGraphView(self._dialog)
-        self._dialog._graph_view.selection_changed.connect(self._dialog._on_graph_selection_changed)
+        self._dialog._graph_view.selection_changed.connect(
+            lambda: self._dialog._on_graph_selection_changed(self._dialog._graph_view._last_selection)
+        )
         self._dialog._graph_view.graph_changed.connect(self._dialog._on_graph_changed)
         layout.addWidget(self._dialog._graph_view, 1)
         return box

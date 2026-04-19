@@ -24,7 +24,7 @@ def save_workflow(workflow: "Workflow", path: Path, *, include_runtime: bool = F
 def load_workflow(path: Path, *, include_runtime: bool = False) -> "Workflow":
     from .model import Workflow
 
-    return Workflow.from_dict(json.loads(path.read_text()), include_runtime=include_runtime)
+    return Workflow.from_dict(json.loads(path.read_text(encoding="utf-8")), include_runtime=include_runtime)
 
 
 def load_last_workflow() -> "Workflow | None":
