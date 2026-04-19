@@ -55,7 +55,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: portable-${{ runner.os }}
-          path: dist-artifacts/*.zip
+          path: dist-artifacts/*
 
   publish:
     if: startsWith(github.ref, 'refs/tags/')
@@ -75,4 +75,4 @@ jobs:
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
         with:
-          files: release-artifacts/*.zip
+          files: release-artifacts/*
