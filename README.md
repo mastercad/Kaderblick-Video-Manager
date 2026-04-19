@@ -47,11 +47,15 @@ Die Build-Ausgabe enthält zusätzlich:
 
 ### GitHub Releases
 
+Für jeden Push auf einen Branch und für jeden Pull Request gegen `main` läuft zusätzlich der Workflow `.github/workflows/qa.yml` auf Linux, Windows und macOS.
+
 Für Tags wie `v1.2.3` baut der Workflow `.github/workflows/release-portable.yml` automatisch portable Archive für:
 
 - Linux
 - Windows
 - macOS
+
+Vor dem eigentlichen Release-Build wird dieselbe QA als Pflicht-Gate ausgeführt. Schlägt die QA fehl, startet kein Release-Build.
 
 Die erzeugten ZIP-Dateien werden direkt an das GitHub Release angehängt.
 

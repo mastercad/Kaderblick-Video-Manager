@@ -117,9 +117,35 @@ def graph_reachable_node_ids(job: WorkflowJob) -> set[str]:
     return reachable
 
 
+def graph_reachable_node_ids_for_branches(
+    job: WorkflowJob,
+    branch_results: dict[str, str] | None = None,
+) -> set[str]:
+    outgoing = graph_outgoing_for_branches(job, branch_results)
+    reachable = {node_id for node_id, _node_type in graph_source_nodes(job)}
+    changed = True
+    while changed:
+        changed = False
+        for source in list(reachable):
+            for target in outgoing.get(source, []):
+                if target not in reachable:
+                    reachable.add(target)
+                    changed = True
+    return reachable
+
+
 def graph_reachable_types(job: WorkflowJob) -> set[str]:
     nodes = graph_node_map(job)
     return {nodes[node_id] for node_id in graph_reachable_node_ids(job) if node_id in nodes}
+
+
+def graph_reachable_types_for_branches(
+    job: WorkflowJob,
+    branch_results: dict[str, str] | None = None,
+) -> set[str]:
+    nodes = graph_node_map(job)
+    reachable = graph_reachable_node_ids_for_branches(job, branch_results)
+    return {nodes[node_id] for node_id in reachable if node_id in nodes}
 
 
 def graph_merge_node_ids(job: WorkflowJob) -> list[str]:

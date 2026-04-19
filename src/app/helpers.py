@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ..workflow import Workflow, WorkflowJob, graph_merge_precedes_convert, graph_reachable_types, normalize_workflow_name
+from ..workflow import (
+    Workflow,
+    WorkflowJob,
+    graph_merge_precedes_convert,
+    graph_node_id_for_type,
+    graph_reachable_types_for_branches,
+    normalize_workflow_name,
+)
 
 
 def _summarize_source(job: WorkflowJob) -> str:
@@ -53,6 +60,21 @@ def _summarize_pipeline(job: WorkflowJob) -> str:
     if job.upload_kaderblick:
         parts.append("KB")
     return " → ".join(parts) if parts else "—"
+
+
+def _resolved_validation_branches(job: WorkflowJob) -> dict[str, str]:
+    if not getattr(job, "graph_nodes", None):
+        return {}
+
+    branch_results: dict[str, str] = {}
+    for step_name in ("validate_surface", "validate_deep"):
+        status = str(getattr(job, "step_statuses", {}).get(step_name, "") or "")
+        if status not in {"ok", "repairable", "irreparable"}:
+            continue
+        node_id = graph_node_id_for_type(job, step_name)
+        if node_id:
+            branch_results[node_id] = status
+    return branch_results
 
 
 def _format_resume_tooltip(job: WorkflowJob) -> str:
@@ -138,15 +160,15 @@ def format_elapsed_seconds(seconds: float) -> str:
     return f"{total_seconds}s"
 
 
-def _planned_job_steps(job: WorkflowJob) -> list[str]:
+def _planned_job_steps(job: WorkflowJob, branch_results: dict[str, str] | None = None) -> list[str]:
     graph_types = {
         str(node.get("type", ""))
         for node in getattr(job, "graph_nodes", [])
         if isinstance(node, dict)
     }
-    has_merge = any(file.merge_group_id for file in job.files) or "merge" in graph_types
-    reachable_types = graph_reachable_types(job) if getattr(job, "graph_nodes", None) else set()
     has_graph = bool(getattr(job, "graph_nodes", None))
+    reachable_types = graph_reachable_types_for_branches(job, branch_results) if has_graph else set()
+    has_merge = "merge" in reachable_types if has_graph else (any(file.merge_group_id for file in job.files) or "merge" in graph_types)
     convert_enabled = "convert" in reachable_types if has_graph else job.convert_enabled
     titlecard_enabled = "titlecard" in reachable_types if has_graph else job.title_card_enabled
     surface_validation_enabled = "validate_surface" in reachable_types if has_graph else False
@@ -203,8 +225,12 @@ def _planned_job_steps(job: WorkflowJob) -> list[str]:
     return steps
 
 
+def _current_planned_job_steps(job: WorkflowJob) -> list[str]:
+    return _planned_job_steps(job, _resolved_validation_branches(job))
+
+
 def _is_finished_step(status: str) -> bool:
-    return status in {"done", "reused-target", "skipped"}
+    return status in {"done", "reused-target", "skipped", "ok", "repairable", "irreparable"}
 
 
 def _infer_step_key(job: WorkflowJob, status: str) -> str:
@@ -229,14 +255,14 @@ def _infer_step_key(job: WorkflowJob, status: str) -> str:
         if status.startswith(prefix):
             return step_key
 
-    for step_key in reversed(_planned_job_steps(job)):
+    for step_key in reversed(_current_planned_job_steps(job)):
         if step_key in job.step_statuses:
             return step_key
     return "transfer"
 
 
 def _compute_job_overall_progress(job: WorkflowJob, status: str, step_pct: int) -> int:
-    planned_steps = _planned_job_steps(job)
+    planned_steps = _current_planned_job_steps(job)
     if not planned_steps:
         return 100 if status == "Fertig" else 0
     if status == "Fertig":
@@ -256,6 +282,34 @@ def _compute_job_overall_progress(job: WorkflowJob, status: str, step_pct: int) 
 
     completed_before_current = min(completed, step_index)
     return int((completed_before_current + pct / 100.0) / len(planned_steps) * 100)
+
+
+def _workflow_step_progress(jobs: list[WorkflowJob], active_indices: set[int] | None = None) -> tuple[int, int]:
+    done = 0
+    total = 0
+
+    for index, job in enumerate(jobs):
+        if not job.enabled:
+            continue
+        if active_indices is not None and index not in active_indices:
+            continue
+
+        planned_steps = _current_planned_job_steps(job)
+        if not planned_steps:
+            continue
+
+        total += len(planned_steps)
+        status = str(job.resume_status or job.status or "")
+        if status == "Fertig":
+            done += len(planned_steps)
+            continue
+
+        done += sum(
+            1 for step_key in planned_steps
+            if _is_finished_step(str(job.step_statuses.get(step_key, "") or ""))
+        )
+
+    return done, max(total, 1)
 
 
 def _normalize_cancelled_resume_state(job: WorkflowJob) -> bool:
@@ -285,7 +339,7 @@ def _normalize_cancelled_resume_state(job: WorkflowJob) -> bool:
         return changed
 
     resume_step = None
-    for step_key in _planned_job_steps(job):
+    for step_key in _current_planned_job_steps(job):
         if not _is_finished_step(str(job.step_statuses.get(step_key, "") or "")):
             resume_step = step_key
             break

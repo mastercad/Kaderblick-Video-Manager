@@ -30,6 +30,7 @@ _app = QApplication.instance() or QApplication(sys.argv)
 from src.workflow import Workflow, WorkflowJob, FileEntry, reset_job_for_rebuild
 from src.runtime.workflow_executor import WorkflowExecutor
 from src.workflow_steps import PreparedOutput
+from src.workflow_steps.models import ConvertItem
 from src.media.ffmpeg_runner import MediaValidationResult
 from src.media.converter import ConvertJob
 from src.integrations.youtube import upload_to_youtube
@@ -247,6 +248,37 @@ class TestBuildJobSettings:
 
         assert s.video.no_bframes is False
         assert s.video.keyframe_interval >= 1
+    def test_resume_existing_merge_group_applies_merge_metadata_and_uses_existing_merged_output(self, tmp_path):
+        source = tmp_path / "halbzeit1.mp4"
+        source.write_text("video", encoding="utf-8")
+        job = WorkflowJob(
+            source_mode="files",
+            files=[FileEntry(source_path=str(source), merge_group_id="hz2")],
+            merge_output_title="DJI 2. Halbzeit",
+            merge_output_playlist="Spieltag 12",
+            merge_output_description="Zusammengesetzte Halbzeit",
+        )
+        workflow = Workflow(jobs=[job])
+        executor = WorkflowExecutor(workflow, _make_settings())
+        cv_job = ConvertJob(
+            source_path=source,
+            output_path=source,
+            youtube_title="Alter Titel",
+            youtube_playlist="Alte Playlist",
+            youtube_description="Alte Beschreibung",
+        )
+        item = ConvertItem(orig_idx=0, job=job, cv_job=cv_job)
+        merged_path = source.with_stem("DJI 2. Halbzeit")
+        merged_path.write_text("merged", encoding="utf-8")
+
+        prepared = executor._resume_existing_merge_group([item], "youtube_upload")
+
+        assert prepared is not None
+        assert prepared.cv_job.output_path == merged_path
+        assert prepared.cv_job.youtube_title == "DJI 2. Halbzeit"
+        assert prepared.cv_job.youtube_playlist == "Spieltag 12"
+        assert prepared.cv_job.youtube_description == "Zusammengesetzte Halbzeit"
+        assert prepared.resume_from_step == "youtube_upload"
 
     def test_build_convert_job_uses_sanitized_title_as_default_output_filename(self, tmp_path):
         ex = self._executor()
@@ -357,7 +389,7 @@ class TestLivePipelineProgress:
         assert 10 in received_progress
         assert 65 in received_progress
 
-    def test_pipeline_progress_flushes_from_worker_thread_without_manual_drain(self, tmp_path):
+    def test_pipeline_progress_waits_for_owner_thread_drain(self, tmp_path):
         from queue import Queue
 
         from src.runtime.workflow_executor.helpers import _PipelineWorkerView
@@ -384,16 +416,19 @@ class TestLivePipelineProgress:
 
         ex.job_progress.connect(_on_progress)
 
-        thread = threading.Thread(target=lambda: worker_executor.job_progress.emit(0, 42))
-        thread.start()
-        thread.join(timeout=2.0)
-        _app.processEvents()
+        ex._pipeline_owner_thread_id = -1
+        worker_executor.job_progress.emit(0, 42)
+
+        assert received_progress == []
+        assert not event_queue.empty()
+
+        ex._pipeline_owner_thread_id = ex._owner_thread_id
+        ex._drain_pipeline_events(event_queue)
 
         ex._pipeline_event_queue = None
         ex._pipeline_last_drain = 0.0
         ex._pipeline_drain_lock = None
 
-        assert not thread.is_alive()
         assert received_progress == [42]
         assert event_queue.empty()
 

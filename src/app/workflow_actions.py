@@ -42,6 +42,7 @@ def _apply_workflow(self, wf_path: str):
         self._append_log(f"[FEHLER] --workflow: Laden fehlgeschlagen: {exc}")
         return
     self._workflow = workflow
+    self._sync_shutdown_checkbox()
     self._refresh_table()
     self._update_count()
     self._append_log(f"CLI: Workflow geladen aus {path.name}")
@@ -219,6 +220,7 @@ def _load_workflow(self):
     if path:
         try:
             self._workflow = Workflow.load(Path(path))
+            self._sync_shutdown_checkbox()
             self._refresh_table()
             self._update_count()
             self._append_log(f"Workflow geladen: {path}")
@@ -259,6 +261,7 @@ def _restore_last_workflow(self):
         try:
             restored, repaired, dropped = _repair_restored_workflow(restored, None)
             self._workflow = restored
+            self._sync_shutdown_checkbox()
             self._refresh_table()
             self._update_count()
             message = "Letzter Workflow wiederhergestellt"
@@ -269,6 +272,18 @@ def _restore_last_workflow(self):
             self._append_log(message)
         except Exception:
             pass
+
+
+def _sync_shutdown_checkbox(self):
+    checked = bool(getattr(self._workflow, "shutdown_after", False))
+    self._shutdown_cb.blockSignals(True)
+    self._shutdown_cb.setChecked(checked)
+    self._shutdown_cb.blockSignals(False)
+
+
+def _on_shutdown_toggled(self, checked: bool):
+    self._workflow.shutdown_after = bool(checked)
+    self._save_last_workflow()
 
 
 def _has_resumeable_jobs(self) -> bool:

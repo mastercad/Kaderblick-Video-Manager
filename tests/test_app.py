@@ -16,6 +16,7 @@ from src.app import (
     _normalize_cancelled_resume_state,
     _planned_job_steps,
     _repair_restored_workflow,
+    _workflow_step_progress,
 )
 from src.app.execution import (
     _build_source_move_conflict_warning,
@@ -261,10 +262,54 @@ class TestJobOverallProgress:
 
 
 class TestWorkflowShutdown:
+    def test_on_workflow_done_uses_live_checkbox_state_even_when_workflow_flag_is_false(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(name="Spieltag 23", job=_rich_job(), shutdown_after=False)
+            window._shutdown_cb.setChecked(True)
+            window._workflow.last_run_elapsed_seconds = 5.0
+            window._save_last_workflow = MagicMock()
+
+            dialog_cls = MagicMock()
+            dialog_cls.return_value.exec.return_value = True
+
+            with patch("src.ui.dialogs.ShutdownCountdownDialog", dialog_cls), \
+                 patch("src.app.execution.shutdown_command", return_value=["shutdown", "/s", "/t", "0"]), \
+                 patch("src.app.execution.subprocess.Popen") as popen:
+                window._on_workflow_done(1, 0, 0)
+
+            dialog_cls.assert_called_once()
+            popen.assert_called_once_with(["shutdown", "/s", "/t", "0"])
+            assert window._workflow.shutdown_after is True
+        finally:
+            window.close()
+
+    def test_on_workflow_done_skips_shutdown_when_live_checkbox_state_is_false(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(name="Spieltag 23", job=_rich_job(), shutdown_after=True)
+            window._shutdown_cb.setChecked(False)
+            window._workflow.last_run_elapsed_seconds = 5.0
+            window._save_last_workflow = MagicMock()
+
+            dialog_cls = MagicMock()
+
+            with patch("src.ui.dialogs.ShutdownCountdownDialog", dialog_cls), \
+                 patch("src.app.execution.shutdown_command", return_value=["shutdown", "/s", "/t", "0"]), \
+                 patch("src.app.execution.subprocess.Popen") as popen:
+                window._on_workflow_done(1, 0, 0)
+
+            dialog_cls.assert_not_called()
+            popen.assert_not_called()
+            assert window._workflow.shutdown_after is False
+        finally:
+            window.close()
+
     def test_on_workflow_done_uses_platform_shutdown_command(self):
         window = _new_app()
         try:
             window._workflow = Workflow(name="Spieltag 23", job=_rich_job(), shutdown_after=True)
+            window._shutdown_cb.setChecked(True)
             window._workflow.last_run_elapsed_seconds = 5.0
             window._save_last_workflow = MagicMock()
 
@@ -284,6 +329,7 @@ class TestWorkflowShutdown:
         window = _new_app()
         try:
             window._workflow = Workflow(name="Spieltag 23", job=_rich_job(), shutdown_after=True)
+            window._shutdown_cb.setChecked(True)
             window._workflow.last_run_elapsed_seconds = 5.0
             window._save_last_workflow = MagicMock()
             window._append_log = MagicMock()
@@ -374,6 +420,75 @@ class TestWorkflowShutdown:
 
         assert _planned_job_steps(job) == ["transfer", "merge", "youtube_upload"]
         assert _compute_job_overall_progress(job, "Zusammenführen …", 0) == 33
+
+    def test_compute_job_overall_progress_prunes_unselected_validation_branches(self):
+        job = WorkflowJob(
+            convert_enabled=False,
+            create_youtube_version=True,
+            upload_youtube=True,
+            upload_kaderblick=True,
+            graph_nodes=[
+                {"id": "source-1", "type": "source_files"},
+                {"id": "check-1", "type": "validate_surface"},
+                {"id": "repair-1", "type": "repair"},
+                {"id": "stop-1", "type": "stop"},
+                {"id": "yt-1", "type": "yt_version"},
+                {"id": "upload-1", "type": "youtube_upload"},
+                {"id": "kb-1", "type": "kaderblick"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "check-1"},
+                {"source": "check-1", "target": "repair-1", "branch": "repairable"},
+                {"source": "check-1", "target": "stop-1", "branch": "irreparable"},
+                {"source": "check-1", "target": "yt-1", "branch": "ok"},
+                {"source": "repair-1", "target": "yt-1"},
+                {"source": "yt-1", "target": "upload-1"},
+                {"source": "upload-1", "target": "kb-1"},
+            ],
+        )
+        job.step_statuses = {"transfer": "done", "validate_surface": "ok"}
+        job.current_step_key = "yt_version"
+
+        assert _planned_job_steps(job) == [
+            "transfer",
+            "validate_surface",
+            "repair",
+            "yt_version",
+            "stop",
+            "youtube_upload",
+            "kaderblick",
+        ]
+        assert _compute_job_overall_progress(job, "YT-Version erstellen …", 0) == 40
+
+    def test_workflow_step_progress_counts_only_effective_branch_steps(self):
+        job = WorkflowJob(
+            convert_enabled=False,
+            create_youtube_version=True,
+            upload_youtube=True,
+            upload_kaderblick=True,
+            graph_nodes=[
+                {"id": "source-1", "type": "source_files"},
+                {"id": "check-1", "type": "validate_surface"},
+                {"id": "repair-1", "type": "repair"},
+                {"id": "stop-1", "type": "stop"},
+                {"id": "yt-1", "type": "yt_version"},
+                {"id": "upload-1", "type": "youtube_upload"},
+                {"id": "kb-1", "type": "kaderblick"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "check-1"},
+                {"source": "check-1", "target": "repair-1", "branch": "repairable"},
+                {"source": "check-1", "target": "stop-1", "branch": "irreparable"},
+                {"source": "check-1", "target": "yt-1", "branch": "ok"},
+                {"source": "repair-1", "target": "yt-1"},
+                {"source": "yt-1", "target": "upload-1"},
+                {"source": "upload-1", "target": "kb-1"},
+            ],
+        )
+        job.step_statuses = {"transfer": "done", "validate_surface": "ok"}
+        job.resume_status = "YT-Version erstellen …"
+
+        assert _workflow_step_progress([job], {0}) == (2, 5)
 
 
 class TestSelectedWorkflowStart:
@@ -911,6 +1026,7 @@ class TestConverterAppResumeState:
         try:
             assert window.table.rowCount() == 1
             assert window._workflow.to_dict() == expected.to_dict()
+            assert window._shutdown_cb.isChecked() is True
             assert window._workflow.job is not None
             assert window._workflow.job.to_dict() == expected.job.to_dict()
             assert window.table.item(0, 1).text() == "Gespeicherter Workflow"

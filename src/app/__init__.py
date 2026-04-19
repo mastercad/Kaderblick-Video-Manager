@@ -14,6 +14,7 @@ from .helpers import (
     _normalize_cancelled_resume_state,
     _planned_job_steps,
     _repair_restored_workflow,
+    _workflow_step_progress,
 )
 from .window import ConverterApp
 from .theme import apply_application_theme
@@ -37,4 +38,5 @@ __all__ = [
     "_normalize_cancelled_resume_state",
     "_planned_job_steps",
     "_repair_restored_workflow",
+    "_workflow_step_progress",
 ]

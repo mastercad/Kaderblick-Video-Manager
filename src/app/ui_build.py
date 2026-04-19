@@ -89,6 +89,7 @@ def _build_toolbar(self: QMainWindow):
     tb.addSeparator()
 
     self._shutdown_cb = QCheckBox("Rechner herunterfahren")
+    self._shutdown_cb.toggled.connect(self._on_shutdown_toggled)
     tb.addWidget(self._shutdown_cb)
 
 

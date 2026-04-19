@@ -40,9 +40,12 @@ class _PipelineWorkerView:
         self.convert_progress = _QueuedSignalEmitter(event_queue, "convert_progress", flush_callback)
         self.source_status = _QueuedSignalEmitter(event_queue, "source_status", flush_callback)
         self.source_progress = _QueuedSignalEmitter(event_queue, "source_progress", flush_callback)
+        self._flush_callback = flush_callback
 
     def _set_job_status(self, orig_idx: int, status: str) -> None:
         self._event_queue.put(("job_status", (orig_idx, status)))
+        if self._flush_callback is not None:
+            self._flush_callback(force=True)
 
     def _is_job_cancelled(self, orig_idx: int) -> bool:
         return self._owner._is_job_cancelled(orig_idx)

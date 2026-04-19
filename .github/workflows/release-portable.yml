@@ -7,7 +7,12 @@ on:
       - "v*"
 
 jobs:
+  qa:
+    name: QA Gate
+    uses: ./.github/workflows/qa.yml
+
   build:
+    needs: qa
     name: Build ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     permissions:

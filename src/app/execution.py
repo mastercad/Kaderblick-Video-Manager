@@ -10,7 +10,13 @@ from pathlib import Path
 from PySide6.QtCore import Slot
 
 from ..runtime_paths import shutdown_command
-from .helpers import _compute_job_overall_progress, _format_resume_tooltip, _job_has_source_config, format_elapsed_seconds
+from .helpers import (
+    _compute_job_overall_progress,
+    _format_resume_tooltip,
+    _job_has_source_config,
+    _workflow_step_progress,
+    format_elapsed_seconds,
+)
 
 
 def _same_path(left: Path, right: Path) -> bool:
@@ -408,9 +414,15 @@ def _on_phase_changed(self, phase: str):
 @Slot(int, int)
 def _on_overall_progress(self, done: int, total: int):
     elapsed = _effective_workflow_elapsed_seconds(self)
-    self.progress.setMaximum(total)
-    self.progress.setValue(done)
-    self.status_label.setText(f"Schritt {done}/{total}  ({self._format_duration(elapsed)})")
+    actual_done, actual_total = _workflow_step_progress(
+        self._workflow.jobs,
+        getattr(self, "_active_run_indices", None),
+    )
+    display_done = actual_done if actual_total > 0 else done
+    display_total = actual_total if actual_total > 0 else max(total, 1)
+    self.progress.setMaximum(display_total)
+    self.progress.setValue(min(display_done, display_total))
+    self.status_label.setText(f"Schritt {display_done}/{display_total}  ({self._format_duration(elapsed)})")
     if hasattr(self, "duration_label"):
         self.duration_label.setText(f"Gesamtdauer: {format_elapsed_seconds(elapsed)}")
 
@@ -439,9 +451,11 @@ def _on_workflow_done(self, ok: int, skip: int, fail: int):
     if hasattr(self, "duration_label"):
         self.duration_label.setText(f"Gesamtdauer: {('–' if elapsed < 1.0 else format_elapsed_seconds(elapsed))}")
     self._set_busy(False)
+    self._workflow.shutdown_after = self._shutdown_cb.isChecked()
     self._save_last_workflow()
 
-    if self._workflow.shutdown_after and fail == 0:
+    shutdown_requested = self._shutdown_cb.isChecked()
+    if shutdown_requested and fail == 0:
         from ..ui.dialogs import ShutdownCountdownDialog
 
         dialog = ShutdownCountdownDialog(seconds=30, parent=self)
@@ -454,7 +468,7 @@ def _on_workflow_done(self, ok: int, skip: int, fail: int):
                 subprocess.Popen(cmd)
         else:
             self._append_log("\n⚠ Herunterfahren durch Benutzer abgebrochen.")
-    elif self._workflow.shutdown_after and fail > 0:
+    elif shutdown_requested and fail > 0:
         self._append_log("\n⚠ Herunterfahren übersprungen wegen Fehlern.")
 
 

@@ -79,6 +79,8 @@ class WorkflowExecutor(WorkflowExecutorPipelineMixin, WorkflowExecutorSupportMix
         self._active_indices = set(active_indices or set())
         self._allow_reuse_existing = allow_reuse_existing
         self._cancel = threading.Event()
+        self._owner_thread_id = threading.get_ident()
+        self._pipeline_owner_thread_id = self._owner_thread_id
         self._convert_func = run_convert
         self._concat_func = run_concat
         self._youtube_convert_func = run_youtube_convert

@@ -32,6 +32,7 @@ class WorkflowExecutorPipelineMixin:
         self._pipeline_event_queue = event_queue
         self._pipeline_last_drain = 0.0
         self._pipeline_drain_lock = threading.Lock()
+        self._pipeline_owner_thread_id = threading.get_ident()
 
         def _bump_stat(key: str, amount: int = 1) -> None:
             with stats_lock:
@@ -256,6 +257,7 @@ class WorkflowExecutorPipelineMixin:
         self._pipeline_event_queue = None
         self._pipeline_last_drain = 0.0
         self._pipeline_drain_lock = None
+        self._pipeline_owner_thread_id = getattr(self, "_owner_thread_id", None)
         self._pipeline_register_expected_output = None
         self._pipeline_mark_output_completed = None
         return stats["ok"], stats["skip"], stats["fail"]
@@ -263,6 +265,9 @@ class WorkflowExecutorPipelineMixin:
     def _pump_pipeline_events(self, *, force: bool = False) -> None:
         event_queue = getattr(self, "_pipeline_event_queue", None)
         if event_queue is None:
+            return
+        owner_thread_id = getattr(self, "_pipeline_owner_thread_id", None)
+        if owner_thread_id is not None and threading.get_ident() != owner_thread_id:
             return
         drain_lock = getattr(self, "_pipeline_drain_lock", None)
         if drain_lock is None:
@@ -647,7 +652,7 @@ class WorkflowExecutorPipelineMixin:
         first_job = first_item.job
         first_cv = first_item.cv_job
         per_settings = self._build_job_settings(first_job)
-        self._merge_step._apply_merge_output_metadata(first_job, first_cv)
+        self._merge_step._apply_merge_output_metadata(first_job, first_cv, per_settings)
         merged_path = self._merge_step._expected_merged_path(first_job, first_cv)
         if not merged_path.exists():
             return None
