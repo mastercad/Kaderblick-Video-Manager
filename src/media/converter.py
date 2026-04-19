@@ -62,7 +62,7 @@ class ConvertJob:
     def to_dict(self) -> dict:
         """Serialisiert den Job als JSON-fähiges dict."""
         return {
-            "source_path": str(self.source_path),
+            "source_path": self.source_path.as_posix(),
             "job_type": self.job_type,
             "status": self.status,
             "output_path": str(self.output_path) if self.output_path else "",

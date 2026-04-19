@@ -50,7 +50,15 @@ def _youtube_variant_candidates(output_path: Path, derived_output_dir: str = "")
     return unique
 
 
+_MIME_TYPE_OVERRIDES = {
+    ".avi": "video/x-msvideo",
+}
+
+
 def _upload_mime_type(file_path: Path) -> str:
+    ext = file_path.suffix.lower()
+    if ext in _MIME_TYPE_OVERRIDES:
+        return _MIME_TYPE_OVERRIDES[ext]
     guessed, _ = mimetypes.guess_type(str(file_path))
     return guessed or "application/octet-stream"
 

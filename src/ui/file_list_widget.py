@@ -395,7 +395,7 @@ class FileListWidget(QWidget):
             "Alle Dateien (*)")
         if not paths:
             return
-        self._set_last_dir(str(Path(paths[0]).parent))
+        self._set_last_dir(Path(paths[0]).parent.as_posix())
         for p in sorted(paths):
             self._append_row(FileEntry(
                 source_path=p,

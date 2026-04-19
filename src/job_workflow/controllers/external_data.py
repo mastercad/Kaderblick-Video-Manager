@@ -170,7 +170,7 @@ class WorkflowExternalDataController:
         destination = self._get_pi_destination().strip() or default_destination
         entries = [
             FileEntry(
-                source_path=str(Path(destination) / f"{item['base']}.mjpg"),
+                source_path=(Path(destination) / f"{item['base']}.mjpg").as_posix(),
                 source_size_bytes=int(item.get("total_size") or 0),
             )
             for item in files

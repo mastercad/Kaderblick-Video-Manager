@@ -84,7 +84,7 @@ class AppSettings:
         root = (root or "").strip()
         if not root:
             return ""
-        return str(Path(root) / _default_output_leaf(workflow_name, device_name))
+        return (Path(root) / _default_output_leaf(workflow_name, device_name)).as_posix()
 
     def workflow_output_dir_for(self, workflow_name: str, device_name: str = "") -> str:
         return self._output_dir_for_root(self.workflow_output_root, workflow_name, device_name)
@@ -100,7 +100,7 @@ class AppSettings:
     @staticmethod
     def stage_root_for(path_value: str) -> str:
         root = _normalize_stage_root(path_value)
-        return str(root) if root is not None else ""
+        return root.as_posix() if root is not None else ""
 
     @staticmethod
     def stage_dir_for(path_value: str, stage: str) -> str:
@@ -110,7 +110,7 @@ class AppSettings:
         root = _normalize_stage_root(path_value)
         if root is None:
             return ""
-        return str(root / stage_name)
+        return (root / stage_name).as_posix()
 
     def default_match_values(self) -> dict[str, str]:
         return {

@@ -63,7 +63,7 @@ class _WorkflowNodePalette(QListWidget):
             state_text=visual["state_text"],
             state_color=visual["state_color"],
             progress_fill_color=visual["progress_fill_color"],
-            progress_fraction=visual["progress_fraction"],
+            progress_fraction=1.0,
             has_input=visual["has_input"],
             has_output=visual["has_output"],
             output_branches=visual["output_branches"],

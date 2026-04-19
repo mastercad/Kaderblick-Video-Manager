@@ -18,7 +18,7 @@ LAST_WORKFLOW_FILE = data_dir() / "last_workflow.json"
 
 def save_workflow(workflow: "Workflow", path: Path, *, include_runtime: bool = False) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(workflow.to_dict(include_runtime=include_runtime), indent=2, ensure_ascii=False))
+    path.write_text(json.dumps(workflow.to_dict(include_runtime=include_runtime), indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def load_workflow(path: Path, *, include_runtime: bool = False) -> "Workflow":

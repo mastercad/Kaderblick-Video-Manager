@@ -67,7 +67,7 @@ class _WorkflowGraphInteraction:
             source_id, target_id = selected_edge
             self._graph_view.selection_changed.emit({"kind": "edge", "source": source_id, "target": target_id})
             return
-        self._graph_view.selection_changed.emit(None)
+        self._graph_view.selection_changed.emit({})
 
     def remove_selected_item(self) -> None:
         selected_node = self.selected_node_id()

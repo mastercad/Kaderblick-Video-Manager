@@ -385,7 +385,7 @@ class TestRunYouTubeConvert:
 
         assert ok is True
         cmd = mock_ffmpeg.call_args[0][0]
-        assert cmd[0].endswith("ffmpeg")
+        assert Path(cmd[0]).stem == "ffmpeg"
         assert "-c:v" in cmd
         assert "h264_nvenc" in cmd
         assert "-fflags" in cmd
