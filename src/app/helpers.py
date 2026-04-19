@@ -307,6 +307,7 @@ def _workflow_step_progress(jobs: list[WorkflowJob], active_indices: set[int] | 
         done += sum(
             1 for step_key in planned_steps
             if _is_finished_step(str(job.step_statuses.get(step_key, "") or ""))
+            or str(job.step_statuses.get(step_key, "") or "") == "running"
         )
 
     return done, max(total, 1)

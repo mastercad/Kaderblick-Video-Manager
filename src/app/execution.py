@@ -357,7 +357,8 @@ def _on_job_progress(self, orig_idx: int, pct: int):
         job.progress_pct = pct
         overall_pct = _compute_job_overall_progress(job, job.resume_status or job.status, pct)
         job.overall_progress_pct = overall_pct
-        _touch_job_duration(self, orig_idx)
+        if _is_active_job_status(job.resume_status or job.status):
+            _touch_job_duration(self, orig_idx)
         if 0 <= orig_idx < self.table.rowCount():
             self._set_row_job_progress(orig_idx, overall_pct)
             self._set_row_duration(orig_idx, job.run_elapsed_seconds)

@@ -3,6 +3,8 @@
 import sys
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox
 
@@ -18,6 +20,7 @@ from src.app import (
     _repair_restored_workflow,
     _workflow_step_progress,
 )
+from src.app.helpers import _current_planned_job_steps, _is_finished_step
 from src.app.execution import (
     _build_source_move_conflict_warning,
     _job_effectively_moves_sources,
@@ -489,6 +492,338 @@ class TestWorkflowShutdown:
         job.resume_status = "YT-Version erstellen …"
 
         assert _workflow_step_progress([job], {0}) == (2, 5)
+
+    def test_workflow_step_progress_counts_running_step_as_in_progress(self):
+        """Schritt mit status 'running' zählt als laufender Schritt (3/16-Szenario)."""
+        job = WorkflowJob(
+            convert_enabled=True,
+            graph_nodes=[
+                {"id": "source-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+                {"id": "check-1", "type": "validate_surface"},
+                {"id": "repair-1", "type": "repair"},
+                {"id": "yt-1", "type": "yt_version"},
+                {"id": "upload-1", "type": "youtube_upload"},
+                {"id": "kb-1", "type": "kaderblick"},
+            ],
+            graph_edges=[
+                {"source": "source-1", "target": "conv-1"},
+                {"source": "conv-1", "target": "check-1"},
+                {"source": "check-1", "target": "repair-1", "branch": "repairable"},
+                {"source": "check-1", "target": "yt-1", "branch": "ok"},
+                {"source": "repair-1", "target": "yt-1"},
+                {"source": "yt-1", "target": "upload-1"},
+                {"source": "upload-1", "target": "kb-1"},
+            ],
+            upload_youtube=True,
+            upload_kaderblick=True,
+            create_youtube_version=True,
+        )
+        # transfer und convert waren vor dem Fortsetzen schon done;
+        # convert wurde aber vom Worker auf "running" zurückgesetzt (output-Datei fehlt).
+        # validate_surface ist der aktuelle laufende Schritt.
+        job.step_statuses = {
+            "transfer": "done",
+            "convert": "running",
+            "validate_surface": "running",
+        }
+        job.resume_status = "Kompatibilität prüfen …"
+
+        done, total = _workflow_step_progress([job], {0})
+        # Graph hat 7 geplante Schritte: transfer + convert + validate_surface + repair
+        # + yt_version + youtube_upload + kaderblick
+        assert total == 7
+        assert done == 3  # transfer(done) + convert(running) + validate_surface(running)
+
+
+class TestIsFinishedStep:
+    """Vollständige Branch-Abdeckung für _is_finished_step."""
+
+    @pytest.mark.parametrize("status", ["done", "reused-target", "skipped", "ok", "repairable", "irreparable"])
+    def test_finished_statuses_return_true(self, status):
+        assert _is_finished_step(status) is True
+
+    @pytest.mark.parametrize("status", ["running", "cancelled", "", "error: foo", "Fertig", "Wartend"])
+    def test_non_finished_statuses_return_false(self, status):
+        assert _is_finished_step(status) is False
+
+
+class TestCurrentPlannedJobSteps:
+    """Branch-Abdeckung für _current_planned_job_steps."""
+
+    def test_no_graph_flags_only_transfer_and_convert(self):
+        job = WorkflowJob(convert_enabled=True)
+        assert _current_planned_job_steps(job) == ["transfer", "convert"]
+
+    def test_no_graph_transfer_only_when_convert_disabled(self):
+        job = WorkflowJob(convert_enabled=False)
+        assert _current_planned_job_steps(job) == ["transfer"]
+
+    def test_no_graph_includes_youtube_upload(self):
+        job = WorkflowJob(convert_enabled=False, upload_youtube=True)
+        steps = _current_planned_job_steps(job)
+        assert "youtube_upload" in steps
+        assert steps[0] == "transfer"
+
+    def test_no_graph_includes_kaderblick_only_with_youtube_upload(self):
+        job = WorkflowJob(convert_enabled=False, upload_youtube=True, upload_kaderblick=True)
+        steps = _current_planned_job_steps(job)
+        assert "kaderblick" in steps
+        assert steps.index("youtube_upload") < steps.index("kaderblick")
+
+    def test_no_graph_kaderblick_absent_without_youtube(self):
+        job = WorkflowJob(convert_enabled=False, upload_youtube=False, upload_kaderblick=True)
+        steps = _current_planned_job_steps(job)
+        assert "kaderblick" not in steps
+
+    def test_graph_with_convert_and_kaderblick(self):
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "conv", "type": "convert"},
+                {"id": "up", "type": "youtube_upload"},
+                {"id": "kb", "type": "kaderblick"},
+            ],
+            graph_edges=[
+                {"source": "src", "target": "conv"},
+                {"source": "conv", "target": "up"},
+                {"source": "up", "target": "kb"},
+            ],
+        )
+        steps = _current_planned_job_steps(job)
+        assert steps == ["transfer", "convert", "youtube_upload", "kaderblick"]
+
+    def test_graph_with_validate_surface_ok_branch_excludes_repair(self):
+        """validate_surface=ok → repair unerreichbar (nur ok-Pfad zählt)."""
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "check", "type": "validate_surface"},
+                {"id": "rep", "type": "repair"},
+                {"id": "yt", "type": "yt_version"},
+            ],
+            graph_edges=[
+                {"source": "src", "target": "check"},
+                {"source": "check", "target": "rep", "branch": "repairable"},
+                {"source": "check", "target": "yt", "branch": "ok"},
+                {"source": "rep", "target": "yt"},
+            ],
+        )
+        job.step_statuses = {"validate_surface": "ok"}
+        steps = _current_planned_job_steps(job)
+        assert "validate_surface" in steps
+        assert "repair" not in steps
+        assert "yt_version" in steps
+
+    def test_graph_with_validate_surface_repairable_branch_includes_repair(self):
+        """validate_surface=repairable → repair erreichbar."""
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "check", "type": "validate_surface"},
+                {"id": "rep", "type": "repair"},
+                {"id": "yt", "type": "yt_version"},
+            ],
+            graph_edges=[
+                {"source": "src", "target": "check"},
+                {"source": "check", "target": "rep", "branch": "repairable"},
+                {"source": "check", "target": "yt", "branch": "ok"},
+                {"source": "rep", "target": "yt"},
+            ],
+        )
+        job.step_statuses = {"validate_surface": "repairable"}
+        steps = _current_planned_job_steps(job)
+        assert "validate_surface" in steps
+        assert "repair" in steps
+        assert "yt_version" in steps
+        assert steps.index("repair") < steps.index("yt_version")
+
+    def test_graph_without_branch_result_includes_all_reachable_types(self):
+        """Ohne Validierungs-Ergebnis → alle Branches als potenziell erreichbar."""
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "check", "type": "validate_surface"},
+                {"id": "rep", "type": "repair"},
+                {"id": "yt", "type": "yt_version"},
+            ],
+            graph_edges=[
+                {"source": "src", "target": "check"},
+                {"source": "check", "target": "rep", "branch": "repairable"},
+                {"source": "check", "target": "yt", "branch": "ok"},
+                {"source": "rep", "target": "yt"},
+            ],
+        )
+        job.step_statuses = {}  # kein Validierungs-Status gesetzt
+        steps = _current_planned_job_steps(job)
+        # Alle Branches sind potenziell erreichbar
+        assert "validate_surface" in steps
+        assert "repair" in steps
+        assert "yt_version" in steps
+
+
+class TestWorkflowStepProgressBranches:
+    """Vollständige Branch-Abdeckung für _workflow_step_progress."""
+
+    def _simple_job(self, **kwargs) -> WorkflowJob:
+        """Minimalster Job: transfer + convert = 2 Schritte."""
+        return WorkflowJob(convert_enabled=True, **kwargs)
+
+    def test_disabled_job_excluded_total_never_zero(self):
+        """Deaktivierter Job wird nicht gezählt; total ist mindestens 1."""
+        job = self._simple_job()
+        job.enabled = False
+        done, total = _workflow_step_progress([job])
+        assert done == 0
+        assert total == 1  # max(0, 1)
+
+    def test_job_not_in_active_indices_is_excluded(self):
+        job = self._simple_job()
+        done, total = _workflow_step_progress([job], active_indices={99})
+        assert done == 0
+        assert total == 1  # kein passender Index → total bleibt 0 → max(0,1)
+
+    def test_active_indices_none_includes_all_enabled_jobs(self):
+        j0 = self._simple_job()
+        j1 = self._simple_job()
+        j0.step_statuses = {"transfer": "done"}
+        j1.step_statuses = {"transfer": "done"}
+        done, total = _workflow_step_progress([j0, j1], active_indices=None)
+        assert total == 4   # 2 Jobs × 2 Schritte
+        assert done == 2    # beide Transfers fertig
+
+    def test_fertig_resume_status_counts_all_steps_as_done(self):
+        job = self._simple_job()
+        job.resume_status = "Fertig"
+        done, total = _workflow_step_progress([job], {0})
+        assert total == 2
+        assert done == 2
+
+    def test_fertig_resume_status_dominates_empty_step_statuses(self):
+        """'Fertig' zählt alle Schritte, auch wenn step_statuses leer ist."""
+        job = self._simple_job()
+        job.resume_status = "Fertig"
+        job.step_statuses = {}
+        done, total = _workflow_step_progress([job], {0})
+        assert done == total
+
+    def test_empty_step_statuses_counts_zero_done(self):
+        job = self._simple_job()
+        job.step_statuses = {}
+        done, total = _workflow_step_progress([job], {0})
+        assert total == 2
+        assert done == 0
+
+    def test_transfer_done_counts_one_of_two(self):
+        job = self._simple_job()
+        job.step_statuses = {"transfer": "done"}
+        done, total = _workflow_step_progress([job], {0})
+        assert total == 2
+        assert done == 1
+
+    def test_running_step_counts_as_in_progress(self):
+        """Laufender Schritt zählt bereits zum Fortschritt."""
+        job = self._simple_job()
+        job.step_statuses = {"transfer": "done", "convert": "running"}
+        done, total = _workflow_step_progress([job], {0})
+        assert total == 2
+        assert done == 2
+
+    def test_cancelled_step_is_not_counted(self):
+        job = self._simple_job()
+        job.step_statuses = {"transfer": "done", "convert": "cancelled"}
+        done, total = _workflow_step_progress([job], {0})
+        assert total == 2
+        assert done == 1  # nur transfer
+
+    def test_error_step_is_not_counted(self):
+        job = self._simple_job()
+        job.step_statuses = {"transfer": "done", "convert": "error: something"}
+        done, total = _workflow_step_progress([job], {0})
+        assert total == 2
+        assert done == 1  # nur transfer
+
+    @pytest.mark.parametrize("status", ["done", "reused-target", "skipped", "ok", "repairable", "irreparable"])
+    def test_all_finished_statuses_are_counted(self, status):
+        job = self._simple_job()
+        job.step_statuses = {"transfer": status}
+        done, total = _workflow_step_progress([job], {0})
+        assert done == 1
+
+    def test_resume_scenario_two_jobs_transfer_done_one_convert_running(self):
+        """
+        Kern-Szenario (analog zu 3/16): 2 Jobs, je 2 Schritte.
+        Beide Transfers wurden in der vorigen Sitzung abgeschlossen und gespeichert.
+        Job 0 konvertiert gerade. Erwartet: done=3, total=4.
+        """
+        j0 = self._simple_job()
+        j0.step_statuses = {"transfer": "done", "convert": "running"}
+        j0.resume_status = "Konvertiere …"
+
+        j1 = self._simple_job()
+        j1.step_statuses = {"transfer": "done"}
+        j1.resume_status = "Wartend"
+
+        done, total = _workflow_step_progress([j0, j1], {0, 1})
+        assert total == 4   # 2 Jobs × 2 Schritte
+        assert done == 3    # j0: transfer(done)+convert(running), j1: transfer(done)
+
+    def test_resume_scenario_both_transfers_done_before_any_convert_starts(self):
+        """
+        Zwischenstand: Beide Transfers abgeschlossen, kein Convert gestartet.
+        Gespeicherte 'done'-Status müssen sofort zählen (analog zu 2/16).
+        """
+        j0 = self._simple_job()
+        j0.step_statuses = {"transfer": "done"}
+
+        j1 = self._simple_job()
+        j1.step_statuses = {"transfer": "done"}
+
+        done, total = _workflow_step_progress([j0, j1], {0, 1})
+        assert total == 4
+        assert done == 2    # beide Transfers
+
+    def test_mixed_active_indices_filters_out_inactive_job(self):
+        """Nur Job 0 aktiv → Job 1 trotz 'done'-Steps ignoriert."""
+        j0 = self._simple_job()
+        j0.step_statuses = {"transfer": "done", "convert": "done"}
+        j1 = self._simple_job()
+        j1.step_statuses = {"transfer": "done", "convert": "done"}
+
+        done, total = _workflow_step_progress([j0, j1], active_indices={0})
+        assert total == 2   # nur Job 0
+        assert done == 2
+
+    def test_mixed_enabled_and_disabled_jobs_with_none_active_indices(self):
+        """Deaktivierter Job 1 wird nicht gezählt, auch wenn active_indices=None."""
+        j0 = self._simple_job()
+        j0.step_statuses = {"transfer": "done"}
+        j1 = self._simple_job()
+        j1.enabled = False
+        j1.step_statuses = {"transfer": "done", "convert": "done"}
+
+        done, total = _workflow_step_progress([j0, j1], active_indices=None)
+        assert total == 2   # nur Job 0
+        assert done == 1
+
+    def test_reused_target_step_counts_as_finished(self):
+        """'reused-target' ist ein gültiger Fertig-Status."""
+        job = self._simple_job()
+        job.step_statuses = {"transfer": "reused-target", "convert": "done"}
+        done, total = _workflow_step_progress([job], {0})
+        assert total == 2
+        assert done == 2
+
+    def test_extra_keys_in_step_statuses_not_in_planned_steps_are_ignored(self):
+        """Unbekannte Status-Keys die nicht zu geplanten Schritten gehören, werden ignoriert."""
+        job = self._simple_job()  # nur transfer + convert geplant
+        job.step_statuses = {
+            "transfer": "done",
+            "kaderblick": "done",   # nicht im Graphen dieser Job-Konfig
+        }
+        done, total = _workflow_step_progress([job], {0})
+        assert total == 2
+        assert done == 1  # nur transfer zählt
 
 
 class TestSelectedWorkflowStart:
@@ -1707,6 +2042,31 @@ class TestConverterAppResumeState:
             assert job.run_elapsed_seconds == 300
             assert job.run_finished_at == "2026-03-23T10:05:00"
             assert window.table.item(0, 6).text() == "5min 00s"
+        finally:
+            window.close()
+
+    def test_job_progress_does_not_start_timer_for_waiting_job(self):
+        """job_progress-Signal für einen wartenden Job darf den Timer nicht starten."""
+        window = _new_app()
+        try:
+            job = WorkflowJob(name="Job 2", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")])
+            window._workflow = Workflow(jobs=[job])
+            window._refresh_table()
+
+            with patch.object(window, "_ask_resume_behavior", return_value=QMessageBox.No), patch(
+                "src.app.QThread", _DummyThread
+            ), patch("src.app.WorkflowExecutor", _DummyExecutor), patch("src.app.execution.time.monotonic", return_value=5_000.0):
+                window._start_workflow(active_indices={0})
+
+            # Job ist noch "Wartend" – kein _on_job_status mit aktivem Status
+            with patch("src.app.execution.time.monotonic", return_value=5_200.0):
+                window._on_job_progress(0, 12)
+                window._refresh_runtime_durations()
+
+            assert job.run_elapsed_seconds == 0.0, (
+                "Timer darf nicht laufen, solange der Job wartet (nur job_progress, kein aktiver Status)"
+            )
+            assert window.table.item(0, 6).text() == "–"
         finally:
             window.close()
 

@@ -6,6 +6,10 @@ on:
     tags:
       - "v*"
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   qa:
     name: QA Gate
@@ -15,6 +19,7 @@ jobs:
     needs: qa
     name: Build ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     permissions:
       contents: read
     strategy:
@@ -66,6 +71,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     needs: build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
 
