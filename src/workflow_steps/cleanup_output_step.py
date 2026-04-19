@@ -28,7 +28,7 @@ class CleanupOutputStep:
         current_output = Path(current_output)
         executor._set_step_status(prepared.job, self.name, "running")
         executor._set_job_status(prepared.orig_idx, "Bereinige Altdateien …")
-        executor.job_progress.emit(prepared.orig_idx, 0)
+        executor.job_progress.emit(prepared.orig_idx, 0, self.name)
 
         removed: list[Path] = []
         for candidate in self._candidate_paths(prepared, current_output):
@@ -53,7 +53,7 @@ class CleanupOutputStep:
             executor._set_job_status(prepared.orig_idx, "Cleanup OK: keine Altdateien gefunden")
 
         executor._set_step_status(prepared.job, self.name, "done")
-        executor.job_progress.emit(prepared.orig_idx, 100)
+        executor.job_progress.emit(prepared.orig_idx, 100, self.name)
         return 0
 
     @classmethod

@@ -33,7 +33,7 @@ class RepairOutputStep:
                 executor._set_step_status(prepared.job, "repair", "reused-target")
                 executor._set_step_detail(prepared.job, "repair", format_media_artifact(repaired_path))
                 executor._set_job_status(prepared.orig_idx, f"Reparatur OK (vorhanden): {repaired_path.name}")
-                executor.job_progress.emit(prepared.orig_idx, 100)
+                executor.job_progress.emit(prepared.orig_idx, 100, self.name)
                 return 0
             executor.log_message.emit(
                 f"⚠ Vorhandene Reparaturdatei ist defekt – erstelle neu {repaired_path.name}"
@@ -47,14 +47,14 @@ class RepairOutputStep:
 
         executor._set_step_status(prepared.job, "repair", "running")
         executor._set_job_status(prepared.orig_idx, "Repariere Ausgabe …")
-        executor.job_progress.emit(prepared.orig_idx, 0)
+        executor.job_progress.emit(prepared.orig_idx, 0, self.name)
         cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, prepared.orig_idx)
         ok = run_repair_output(
             prepared.cv_job,
             prepared.per_settings,
             cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
-            progress_callback=lambda pct: executor.job_progress.emit(prepared.orig_idx, pct),
+            progress_callback=lambda pct: executor.job_progress.emit(prepared.orig_idx, pct, self.name),
         )
         if ExecutorSupport.is_job_cancelled(executor, prepared.orig_idx):
             executor._set_step_status(prepared.job, "repair", "cancelled")
@@ -68,7 +68,7 @@ class RepairOutputStep:
             return 1
         executor._set_step_status(prepared.job, "repair", "done")
         executor._set_step_detail(prepared.job, "repair", format_media_artifact(prepared.cv_job.output_path))
-        executor.job_progress.emit(prepared.orig_idx, 100)
+        executor.job_progress.emit(prepared.orig_idx, 100, self.name)
         return 0
 
     @staticmethod

@@ -21,7 +21,7 @@ class OutputValidationStep:
 
         executor._set_step_status(prepared.job, self.name, "running")
         executor._set_job_status(prepared.orig_idx, self._status_running)
-        executor.job_progress.emit(prepared.orig_idx, 0)
+        executor.job_progress.emit(prepared.orig_idx, 0, self.name)
         result = inspect_media_compatibility(
             Path(current_output),
             require_video=True,
@@ -37,7 +37,7 @@ class OutputValidationStep:
             detail += " | " + "; ".join(result.details[:4])
         executor._set_step_detail(prepared.job, self.name, detail)
         executor._set_job_status(prepared.orig_idx, result.summary)
-        executor.job_progress.emit(prepared.orig_idx, 100)
+        executor.job_progress.emit(prepared.orig_idx, 100, self.name)
 
         if result.status == "ok":
             return 0

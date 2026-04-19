@@ -178,7 +178,9 @@ def _refresh_table(self):
         pipeline_item = QTableWidgetItem(_summarize_pipeline(job))
         pipeline_item.setToolTip("Doppelklick für Workflow-Editor")
         self.table.setItem(row, 3, pipeline_item)
-        status_item = QTableWidgetItem(job.resume_status or "Wartend")
+        _resume = job.resume_status or ""
+        _status_text = "Ausstehend" if _resume.endswith("\u2026") else (_resume or "Wartend")
+        status_item = QTableWidgetItem(_status_text)
         status_item.setData(_ROLE_STEP_PROGRESS, job.progress_pct)
         status_item.setToolTip(_format_resume_tooltip(job))
         self.table.setItem(row, 4, status_item)

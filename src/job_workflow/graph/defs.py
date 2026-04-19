@@ -323,10 +323,21 @@ def _normalized_step_status(job: WorkflowJob, step_key: str) -> str:
     raw = job.step_statuses.get(step_key, "") if isinstance(job.step_statuses, dict) else ""
     if isinstance(raw, str) and raw.startswith("error"):
         return "error"
-    if raw in {"running", "done", "reused-target", "skipped", "ok", "repairable", "irreparable", "error"}:
+    if raw in {"done", "reused-target", "skipped", "ok", "repairable", "irreparable", "error"}:
         return raw
-    if step_key == _infer_current_step(job) and (job.resume_status or raw):
-        if raw not in {"done", "reused-target", "skipped"}:
+    # "running" is only valid if this is genuinely the current step; a stale "running"
+    # left by a previously interrupted run must not be displayed as in-progress.
+    if raw == "running" and step_key != _infer_current_step(job):
+        return "pending"
+    if raw == "running":
+        return "running"
+    # Only use the raw step status to infer "running" — not job.resume_status, which is a
+    # persisted hint and survives restarts. Using resume_status here would cause nodes to
+    # show "Läuft" immediately after app open even when nothing is executing.
+    # "cancelled" is explicitly excluded so that a step being cancelled mid-run does not
+    # briefly display as "Läuft" in the graph.
+    if step_key == _infer_current_step(job) and raw:
+        if raw not in {"done", "reused-target", "skipped", "cancelled"}:
             return "running"
     return "pending"
 

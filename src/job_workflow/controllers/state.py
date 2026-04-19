@@ -161,6 +161,8 @@ class WorkflowDialogStateController:
         if snapshot == self._dialog._last_runtime_snapshot:
             return
         self._dialog._last_runtime_snapshot = snapshot
+        from ...app.helpers import _compute_job_overall_progress
+        prev_step_key = self._dialog._draft.current_step_key
         self._dialog._draft.name = self._dialog._job.name
         self._dialog._draft.resume_status = self._dialog._job.resume_status
         self._dialog._draft.step_statuses = (
@@ -169,11 +171,26 @@ class WorkflowDialogStateController:
         self._dialog._draft.step_details = (
             dict(self._dialog._job.step_details) if isinstance(self._dialog._job.step_details, dict) else {}
         )
-        self._dialog._draft.progress_pct = self._dialog._job.progress_pct
-        self._dialog._draft.overall_progress_pct = self._dialog._job.overall_progress_pct
         self._dialog._draft.current_step_key = self._dialog._job.current_step_key
         self._dialog._draft.transfer_status = self._dialog._job.transfer_status
         self._dialog._draft.transfer_progress_pct = self._dialog._job.transfer_progress_pct
+        # When the active step changes (and was already set before), the signal-based
+        # progress_pct is stale (it still holds the last value emitted by the previous step).
+        # Reset to 0 so the new step starts visually clean and overall_progress_pct
+        # is not prematurely inflated to 100 %. Skip the reset on the initial sync
+        # (prev_step_key == "") so that a dialog opened mid-execution starts with
+        # the correct live progress value.
+        if prev_step_key and prev_step_key != self._dialog._draft.current_step_key:
+            self._dialog._draft.progress_pct = 0
+        else:
+            self._dialog._draft.progress_pct = self._dialog._job.progress_pct
+        # Recompute a coherent overall percentage from the fresh snapshot rather than
+        # copying the signal-delayed overall_progress_pct which can lag by several steps.
+        self._dialog._draft.overall_progress_pct = _compute_job_overall_progress(
+            self._dialog._draft,
+            self._dialog._draft.resume_status or self._dialog._draft.status,
+            self._dialog._draft.progress_pct,
+        )
         self.refresh_dynamic_sections()
 
     def on_editor_changed(self, text: str) -> None:

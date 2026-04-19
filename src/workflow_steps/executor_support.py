@@ -128,7 +128,11 @@ class ExecutorSupport:
 
     @staticmethod
     def _has_graph(job: WorkflowJob) -> bool:
-        return bool(getattr(job, "graph_nodes", []))
+        # Only treat the job as graph-based when at least one node has a valid "id".
+        # Nodes without IDs (e.g. saved by an old serialiser) must not trigger the
+        # graph execution path, because graph_node_map() would return {} and
+        # _execute_graph_processing would silently skip all output steps.
+        return bool(graph_node_map(job))
 
     @staticmethod
     def _fallback_step_enabled(job: WorkflowJob, target_type: str) -> bool:

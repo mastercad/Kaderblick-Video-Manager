@@ -784,7 +784,9 @@ class TestJobWorkflowDialog:
         convert_node = _node_by_type(dlg._graph_view, "convert")
         assert "37%" in convert_node._state.toPlainText()
         assert dlg._current_label.text() == "Aktiver Step: Konvertierung"
-        assert dlg._overall_label.text() == "Gesamtfortschritt: 42%"
+        # overall is recomputed from the fresh snapshot:
+        # planned=[transfer,convert,youtube_upload], transfer done(1/3), convert at 37% → 45%
+        assert dlg._overall_label.text() == "Gesamtfortschritt: 45%"
 
     def test_runtime_sync_updates_source_node_transfer_progress(self):
         job = _make_job(convert_enabled=True, upload_youtube=True)
@@ -1957,3 +1959,178 @@ class TestJobWorkflowDialog:
         assert dlg._draft.files[0].source_size_bytes == 1_073_741_824
         assert dlg._draft.files[0].youtube_title == ""
         assert dlg._pi_file_list._table.item(0, dlg._pi_file_list._COL_SIZE).text() == "1.0 GB"
+
+    # --- Bug-Regression: stale "running" im Canvas-Node und Fortschritts-Sprung ---
+
+    def test_normalized_step_status_stale_running_returns_pending(self):
+        """Bug 1: step_statuses["convert"]="running" von einem unterbrochenen Vorlauf bleibt
+        stale, wenn der aktuelle Schritt bereits "yt_version" ist.
+        _normalized_step_status muss "pending" zurückgeben, nicht "running"."""
+        from src.job_workflow.graph.defs import _normalized_step_status
+
+        job = _make_job(convert_enabled=True, create_youtube_version=True)
+        job.step_statuses = {"transfer": "done", "convert": "running"}
+        job.current_step_key = "yt_version"
+
+        assert _normalized_step_status(job, "convert") == "pending"
+
+    def test_normalized_step_status_running_for_current_step_stays_running(self):
+        """Wenn convert der aktuelle Schritt ist, muss 'running' erhalten bleiben."""
+        from src.job_workflow.graph.defs import _normalized_step_status
+
+        job = _make_job(convert_enabled=True)
+        job.step_statuses = {"transfer": "done", "convert": "running"}
+        job.current_step_key = "convert"
+
+        assert _normalized_step_status(job, "convert") == "running"
+
+    def test_runtime_sync_stale_running_convert_shows_ausstehend_not_laueft(self):
+        """Bug 1 (end-to-end): Canvas-Node 'Konvertierung' zeigt während yt_version nicht
+        'Läuft', obwohl step_statuses["convert"]="running" noch stale ist."""
+        job = _make_job(convert_enabled=True, create_youtube_version=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=False, settings=_settings())
+
+        # Stale "running" von einem abgebrochenen Vorlauf; aktueller Schritt ist "yt_version"
+        job.step_statuses = {"transfer": "done", "convert": "running"}
+        job.current_step_key = "yt_version"
+        job.progress_pct = 50
+
+        dlg._sync_runtime_state_from_job()
+
+        convert_node = _node_by_type(dlg._graph_view, "convert")
+        state_text = convert_node._state.toPlainText()
+        assert "Läuft" not in state_text, (
+            f"Konvertierung-Node zeigt fälschlicherweise 'Läuft' obwohl yt_version der aktive Step ist: {state_text!r}"
+        )
+        assert "Ausstehend" in state_text, (
+            f"Konvertierung-Node sollte 'Ausstehend' zeigen, zeigt aber: {state_text!r}"
+        )
+
+    def test_runtime_sync_overall_progress_not_inflated_by_stale_pct(self):
+        """Bug 2: Wenn step_statuses bereits mehrere abgeschlossene Steps enthält (durch
+        direkte Worker-Schreibzugriffe), aber progress_pct noch den alten Wert (100) vom
+        vorherigen Step hat, darf overall_progress_pct nicht auf ~100% springen.
+        Nach dem Step-Wechsel muss pct auf 0 zurückgesetzt werden."""
+        job = _make_job(convert_enabled=True, upload_youtube=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=False, settings=_settings())
+
+        # Erster Tick: Nur Transfer fertig, current_step="transfer", pct=100
+        job.step_statuses = {"transfer": "done"}
+        job.current_step_key = "transfer"
+        job.progress_pct = 100
+        job.overall_progress_pct = 33
+        dlg._sync_runtime_state_from_job()
+
+        # Race-Condition-Snapshot: Worker hat convert schon abgeschlossen (direkte Schreibzugriffe),
+        # aber progress_pct ist noch 100 (stale vom Transfer).
+        # current_step_key ist bereits "youtube_upload" (gerade gestartet).
+        job.step_statuses = {"transfer": "done", "convert": "reused-target"}
+        job.current_step_key = "youtube_upload"
+        job.progress_pct = 100  # stale! vom Transfer-Abschluss
+        job.overall_progress_pct = 33  # ebenfalls stale
+        dlg._sync_runtime_state_from_job()
+
+        overall_text = dlg._overall_label.text()
+        # planned_steps = [transfer, convert, youtube_upload] → 3 Steps
+        # transfer+convert done = 2/3 fertig; youtube_upload gerade gestartet (pct=0 nach Reset)
+        # Erwartet: ~67% (2/3), keinesfalls 100% (was stale pct=100 liefern würde)
+        pct_shown = int(overall_text.split(":")[1].strip().rstrip("%"))
+        assert pct_shown < 100, (
+            f"Gesamtfortschritt darf nicht 100% zeigen wenn youtube_upload gerade gestartet hat; "
+            f"got: {overall_text!r}"
+        )
+        assert pct_shown <= 67, (
+            f"Gesamtfortschritt darf durch stale pct=100 nicht überhöht sein; "
+            f"got: {overall_text!r}"
+        )
+
+    def test_stale_yt_version_progress_not_shown_on_convert_node(self):
+        """Bug: Während yt_version läuft, emittiert der Worker job_progress mit step_key="yt_version".
+        _on_job_progress verwirft Events, deren step_key nicht mit current_step_key übereinstimmt.
+        Daher darf job.progress_pct bei einem laufenden convert-Step niemals einen YT-Version-Wert
+        enthalten – die Konvertierungs-Node zeigt 0 %."""
+        job = _make_job(convert_enabled=True, create_youtube_version=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=False, settings=_settings())
+
+        # convert ist aktiv; job.progress_pct = 0 (korrekter Wert)
+        job.step_statuses = {"transfer": "done", "convert": "running"}
+        job.current_step_key = "convert"
+        job.progress_pct = 0
+        dlg._sync_runtime_state_from_job()
+
+        convert_node = _node_by_type(dlg._graph_view, "convert")
+        state_text = convert_node._state.toPlainText()
+        assert "60%" not in state_text, (
+            f"Konvertierungs-Node darf keinen YT-Version-Fortschritt anzeigen: {state_text!r}"
+        )
+        assert "Läuft · 0%" in state_text, (
+            f"Konvertierungs-Node sollte 'Läuft · 0%' zeigen, zeigt aber: {state_text!r}"
+        )
+
+    def test_convert_node_shows_correct_progress_once_guard_clears(self):
+        """Positiv-Test: Wenn ein job_progress-Event mit passendem step_key="convert" eintrifft
+        und _on_job_progress job.progress_pct setzt, zeigt die Konvertierungs-Node den Wert."""
+        job = _make_job(convert_enabled=True, create_youtube_version=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=False, settings=_settings())
+
+        # Echter Convert-Fortschritt: step_key stimmt überein, _on_job_progress schreibt pct
+        job.step_statuses = {"transfer": "done", "convert": "running"}
+        job.current_step_key = "convert"
+        job.progress_pct = 30  # legitimer Wert, den _on_job_progress geschrieben hätte
+        dlg._sync_runtime_state_from_job()
+
+        convert_node = _node_by_type(dlg._graph_view, "convert")
+        state_text = convert_node._state.toPlainText()
+        assert "30%" in state_text, (
+            f"Konvertierungs-Node sollte '30%' zeigen, zeigt aber: {state_text!r}"
+        )
+
+    def test_normalized_step_status_cancelled_returns_pending_not_running(self):
+        """Bug-Regression: Wenn der Executor einen Step auf 'cancelled' setzt (Abbruch
+        mitten in der Ausführung), darf _normalized_step_status NICHT 'running' zurückgeben.
+        Der Step-Status 'cancelled' muss als 'pending' dargestellt werden."""
+        from src.job_workflow.graph.defs import _normalized_step_status
+
+        job = _make_job(convert_enabled=True)
+        job.step_statuses = {"transfer": "done", "convert": "cancelled"}
+        job.current_step_key = "convert"
+        job.resume_status = "Konvertierung abgebrochen"
+
+        assert _normalized_step_status(job, "convert") == "pending"
+
+    def test_normalized_step_status_crash_stale_running_same_step_returns_pending(self):
+        """Bug-Regression: Nach einem App-Crash ist step_statuses["convert"]="running" UND
+        current_step_key="convert" beide persistiert. Die alte stale-Guard prüft nur ob
+        step_key != _infer_current_step(job) – da beide gleich sind, feuert sie nicht.
+        _normalize_cancelled_resume_state löscht 'running' beim Restore. Danach darf
+        _normalized_step_status für diesen Step NICHT 'running' zurückgeben."""
+        from src.job_workflow.graph.defs import _normalized_step_status
+
+        job = _make_job(convert_enabled=True)
+        # Zustand nach _normalize_cancelled_resume_state: "running" wurde gelöscht,
+        # current_step_key bleibt auf "convert" gesetzt, resume_status ist ein Hint
+        job.step_statuses = {"transfer": "done"}
+        job.current_step_key = "convert"
+        job.resume_status = "Konvertiere \u2026"
+
+        assert _normalized_step_status(job, "convert") == "pending"
+
+    def test_runtime_sync_cancelled_step_shows_ausstehend_not_laeuft(self):
+        """Bug-Regression: Wenn der Executor 'convert' auf 'cancelled' setzt (Abbruch),
+        darf der Node im Graph NICHT 'Läuft' anzeigen."""
+        job = _make_job(convert_enabled=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=False, settings=_settings())
+
+        job.step_statuses = {"transfer": "done", "convert": "cancelled"}
+        job.current_step_key = "convert"
+        job.resume_status = "Konvertierung abgebrochen"
+        dlg._sync_runtime_state_from_job()
+
+        convert_node = _node_by_type(dlg._graph_view, "convert")
+        state_text = convert_node._state.toPlainText()
+        assert "Läuft" not in state_text, (
+            f"Convert-Node darf bei 'cancelled' nicht 'Läuft' zeigen: {state_text!r}"
+        )
+        assert "Ausstehend" in state_text, (
+            f"Convert-Node sollte 'Ausstehend' zeigen, zeigt aber: {state_text!r}"
+        )

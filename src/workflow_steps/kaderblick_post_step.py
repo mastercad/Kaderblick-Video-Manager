@@ -56,11 +56,11 @@ class KaderblickPostStep:
                 self._build_summary(executor, prepared, existing_video_id, existing_kaderblick_id, kb_sort_index),
             )
             executor._set_job_status(prepared.orig_idx, f"Kaderblick OK (vorhanden): {existing_kaderblick_id}")
-            executor.job_progress.emit(prepared.orig_idx, 100)
+            executor.job_progress.emit(prepared.orig_idx, 100, "kaderblick")
             return 0
         executor._set_step_status(prepared.job, "kaderblick", "running")
         executor._set_job_status(prepared.orig_idx, "Kaderblick senden …")
-        executor.job_progress.emit(prepared.orig_idx, 0)
+        executor.job_progress.emit(prepared.orig_idx, 0, "kaderblick")
         if ExecutorSupport.is_job_cancelled(executor, prepared.orig_idx):
             executor._set_step_status(prepared.job, "kaderblick", "cancelled")
             executor._set_step_detail(prepared.job, "kaderblick", self._build_cancelled_summary(executor, prepared, kb_sort_index))
@@ -92,7 +92,7 @@ class KaderblickPostStep:
             "kaderblick",
             self._build_summary(executor, prepared, current_video_id, current_kaderblick_id, kb_sort_index),
         )
-        executor.job_progress.emit(prepared.orig_idx, 100)
+        executor.job_progress.emit(prepared.orig_idx, 100, "kaderblick")
         return 0
 
     @staticmethod

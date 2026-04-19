@@ -27,13 +27,13 @@ class TitleCardStep:
             executor._set_step_status(prepared.job, "titlecard", "reused-target")
             executor._set_step_detail(prepared.job, "titlecard", format_media_artifact(reused_path))
             executor._set_job_status(prepared.orig_idx, f"Titelkarte OK (vorhanden): {reused_path.name}")
-            executor.job_progress.emit(prepared.orig_idx, 100)
+            executor.job_progress.emit(prepared.orig_idx, 100, "titlecard")
             return 0
         if not prepared.cv_job.output_path.exists():
             return 0
         executor._set_step_status(prepared.job, "titlecard", "running")
         executor._set_job_status(prepared.orig_idx, "Titelkarte erstellen …")
-        executor.job_progress.emit(prepared.orig_idx, 0)
+        executor.job_progress.emit(prepared.orig_idx, 0, "titlecard")
         prepared.cv_job.output_path, success = self._prepend_title_card(
             executor,
             prepared.orig_idx,
@@ -53,7 +53,7 @@ class TitleCardStep:
             return 0
         executor._set_step_status(prepared.job, "titlecard", "done")
         executor._set_step_detail(prepared.job, "titlecard", format_media_artifact(prepared.cv_job.output_path))
-        executor.job_progress.emit(prepared.orig_idx, 100)
+        executor.job_progress.emit(prepared.orig_idx, 100, "titlecard")
         return 0
 
     def _prepend_title_card(self, executor: Any, orig_idx: int, cv_job, job, per_settings) -> tuple[Path, bool]:
@@ -102,7 +102,7 @@ class TitleCardStep:
             encoder=per_settings.video.encoder,
             cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
-            progress_callback=lambda pct: executor.job_progress.emit(orig_idx, min(50, int(pct * 0.5))),
+            progress_callback=lambda pct: executor.job_progress.emit(orig_idx, min(50, int(pct * 0.5)), "titlecard"),
             work_dir=tmpdir,
         )
         if not ok or cancel_flag.is_set():
@@ -111,7 +111,7 @@ class TitleCardStep:
             return video_path, False
 
         executor._set_job_status(orig_idx, "Titelkarte zusammenführen …")
-        executor.job_progress.emit(orig_idx, 50)
+        executor.job_progress.emit(orig_idx, 50, "titlecard")
         if preserve_original:
             with_intro_path = ExecutorSupport.derived_output_path(
                 cv_job,
@@ -128,7 +128,7 @@ class TitleCardStep:
             cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
             encoder=per_settings.video.encoder,
-            progress_callback=lambda pct: executor.job_progress.emit(orig_idx, 50 + int(pct * 0.5)),
+            progress_callback=lambda pct: executor.job_progress.emit(orig_idx, 50 + int(pct * 0.5), "titlecard"),
             overwrite=per_settings.video.overwrite,
         )
 

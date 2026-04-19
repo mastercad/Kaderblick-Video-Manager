@@ -61,7 +61,7 @@ class WorkflowExecutorPipelineMixin:
                 job_completed_outputs[orig_idx] += 1
                 done = job_completed_outputs[orig_idx]
             if done >= total:
-                event_queue.put(("job_progress", (orig_idx, 100)))
+                event_queue.put(("job_progress", (orig_idx, 100, "")))
                 event_queue.put(("job_status", (orig_idx, "Fertig")))
             else:
                 event_queue.put(("job_status", (orig_idx, f"Fertig {done}/{total}")))
@@ -225,7 +225,7 @@ class WorkflowExecutorPipelineMixin:
             self._enqueue_ready_merge_groups(process_queue, merge_groups, merge_lock, orig_idx=orig_idx)
 
             if int(job_expected_outputs.get(orig_idx, 0) or 0) == 0:
-                self.job_progress.emit(orig_idx, 100)
+                self.job_progress.emit(orig_idx, 100, "")
                 self._set_job_status(orig_idx, "Fertig")
 
             if not skip_transfer:
@@ -444,7 +444,7 @@ class WorkflowExecutorPipelineMixin:
             return 0, 1, 0
         if result not in {"ok", "ready"}:
             self._set_job_status(item.orig_idx, f"Fehler: {item.cv_job.error_msg[:60]}")
-            self.job_progress.emit(item.orig_idx, 0)
+            self.job_progress.emit(item.orig_idx, 0, "convert")
             return 0, 0, 1
 
         if merge_group_id:

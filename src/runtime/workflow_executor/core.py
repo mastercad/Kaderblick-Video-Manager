@@ -53,7 +53,7 @@ class WorkflowExecutor(WorkflowExecutorPipelineMixin, WorkflowExecutorSupportMix
 
     log_message = Signal(str)
     job_status = Signal(int, str)
-    job_progress = Signal(int, int)
+    job_progress = Signal(int, int, str)
     overall_progress = Signal(int, int)
     file_progress = Signal(str, str, float, float, float)
     phase_changed = Signal(str)
@@ -126,14 +126,29 @@ class WorkflowExecutor(WorkflowExecutorPipelineMixin, WorkflowExecutorSupportMix
         if not (0 <= orig_idx < len(self._workflow.jobs)):
             return
         job = self._workflow.jobs[orig_idx]
+
+        # Nicht beeinflussen wenn der Job bereits in einem terminalen Zustand ist
+        # (Fertig, Fehler, Übersprungen, bereits abgebrochen) oder noch nie gestartet wurde.
+        resume = str(getattr(job, "resume_status", "") or "")
+        step_statuses = job.step_statuses if isinstance(job.step_statuses, dict) else {}
+        has_started = bool(step_statuses) or bool(resume)
+        is_terminal = (
+            resume.startswith("Fertig")
+            or resume.startswith("Fehler")
+            or resume == "Übersprungen"
+            or resume.lower().endswith("abgebrochen")
+        )
+        if not has_started or is_terminal:
+            return
+
         step_key = str(getattr(job, "current_step_key", "") or "")
-        if step_key and str(job.step_statuses.get(step_key, "") or "") == "running":
+        if step_key and str(step_statuses.get(step_key, "") or "") == "running":
             self._set_step_status(job, step_key, "cancelled")
             self._set_step_detail(job, step_key, "Durch Benutzer abgebrochen")
             self._set_job_status(orig_idx, f"{_step_label(step_key)} abgebrochen")
         else:
             self._set_job_status(orig_idx, "Job abgebrochen")
-        self.job_progress.emit(orig_idx, 0)
+        self.job_progress.emit(orig_idx, 0, step_key)
 
     def _handle_direct_files(self, job):
         return self._transfer_step._files_step.execute(self, 0, job)

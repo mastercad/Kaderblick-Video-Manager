@@ -16,6 +16,7 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from src.media.converter import ConvertJob, build_embedded_metadata_args, run_concat, run_convert, run_repair_output, run_youtube_convert
+from src.media.encoder import HwAccelConfig
 from src.media.merge import merge_halves
 from src.settings import AppSettings
 
@@ -757,3 +758,504 @@ class TestMergeHalvesStandardFiles:
             if "-f" in c.args[0] and "concat" in c.args[0]
         ]
         assert concat_calls == []
+
+
+# ─── GPU-Dekodierung: -hwaccel cuda + -hwaccel_output_format cuda ────────────
+
+class TestHwaccelDecoding:
+    """
+    Aller hwaccel-Code läuft über den zentralen Service get_hwaccel_config()
+    (in encoder.py, via Import in converter.py).  Jeder Test mockt ihn explizit.
+
+    run_youtube_convert Zero-Copy (kein Skalierungsfilter, NVDEC verfügbar):
+      - NVDEC dekodiert → Frames bleiben im VRAM (-hwaccel_output_format cuda)
+      - NVENC liest direkt aus VRAM → kein CPU-Memcpy
+      - -pix_fmt yuv420p wird entfernt (würde hwdownload erzwingen)
+        1.  -hwaccel cuda vorhanden
+        2.  -hwaccel_output_format cuda vorhanden
+        3.  -hwaccel_output_format cuda vor -i
+        4.  -pix_fmt NICHT im finalen Kommando
+        5.  Beide Faststart-Versuche haben Flags und kein pix_fmt
+
+    run_youtube_convert Partiell (Skalierungsfilter aktiv, NVDEC verfügbar):
+      - Nur -hwaccel cuda; Frames für CPU-Filter in System-RAM
+      - -pix_fmt bleibt erhalten
+        6+7+8.  -hwaccel cuda, KEIN output_format, pix_fmt bleibt
+
+    run_youtube_convert kein hwaccel:
+        9.   libx264 → kein -hwaccel
+        9b.  h264_nvenc + NVDEC nicht verfügbar → kein -hwaccel
+
+    run_concat NVDEC-Assist (concat-Filter ist immer CPU → NIEMALS output_format):
+        10.  h264_nvenc + NVDEC: -hwaccel cuda pro Input, kein output_format
+        11.  h264_nvenc + NVDEC n=3: 3× -hwaccel cuda, kein output_format
+        11b. h264_nvenc + NVDEC nicht verfügbar → kein -hwaccel
+
+    run_concat mit target_resolution:
+        12.  gleich wie 10, nur mit Skalierungsfilter (kein output_format)
+
+    run_concat libx264:
+        13.  kein -hwaccel
+    """
+
+    _NVENC_ARGS_WITH_PIX_FMT = ("h264_nvenc",
+                                 ["-c:v", "h264_nvenc", "-preset", "p6",
+                                  "-pix_fmt", "yuv420p"])
+    _NVENC_ARGS_NO_PIX_FMT   = ("h264_nvenc",
+                                 ["-c:v", "h264_nvenc", "-preset", "p6"])
+    _X264_ARGS               = ("libx264",
+                                 ["-c:v", "libx264", "-preset", "slow",
+                                  "-pix_fmt", "yuv420p"])
+
+    _HWACCEL_ZERO_COPY = HwAccelConfig(
+        input_flags=["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+        strip_pix_fmt=True,
+    )
+    _HWACCEL_ASSIST = HwAccelConfig(input_flags=["-hwaccel", "cuda"])
+    _HWACCEL_NONE   = HwAccelConfig()
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _yt_job(self, tmp: str):
+        mp4 = Path(tmp) / "video.mp4"
+        yt  = Path(tmp) / "video_youtube.mp4"
+        mp4.touch(); yt.touch()
+        settings = AppSettings()
+        settings.video.overwrite = True
+        job = ConvertJob(source_path=mp4, output_path=mp4)
+        return mp4, yt, settings, job
+
+    # ── run_youtube_convert: Zero-Copy ────────────────────────────────────────
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=10.0)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_ZERO_COPY)
+    def test_yt_zero_copy_hwaccel_cuda_present(
+        self, _hwaccel, _dur, _info, _build, mock_ffmpeg, _validate
+    ):
+        """1. Zero-Copy: -hwaccel cuda im Kommando."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, settings, job = self._yt_job(tmp)
+            run_youtube_convert(job, settings)
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-hwaccel" in cmd and cmd[cmd.index("-hwaccel") + 1] == "cuda"
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=10.0)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_ZERO_COPY)
+    def test_yt_zero_copy_hwaccel_output_format_present(
+        self, _hwaccel, _dur, _info, _build, mock_ffmpeg, _validate
+    ):
+        """2. Zero-Copy: -hwaccel_output_format cuda im Kommando."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, settings, job = self._yt_job(tmp)
+            run_youtube_convert(job, settings)
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-hwaccel_output_format" in cmd
+        assert cmd[cmd.index("-hwaccel_output_format") + 1] == "cuda"
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=10.0)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_ZERO_COPY)
+    def test_yt_zero_copy_hwaccel_output_format_before_i(
+        self, _hwaccel, _dur, _info, _build, mock_ffmpeg, _validate
+    ):
+        """3. Zero-Copy: -hwaccel_output_format steht vor -i."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, settings, job = self._yt_job(tmp)
+            run_youtube_convert(job, settings)
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert cmd.index("-hwaccel_output_format") < cmd.index("-i")
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=10.0)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_ZERO_COPY)
+    def test_yt_zero_copy_pix_fmt_removed(
+        self, _hwaccel, _dur, _info, _build, mock_ffmpeg, _validate
+    ):
+        """4. Zero-Copy: -pix_fmt darf NICHT im Kommando stehen (würde hwdownload triggern)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, settings, job = self._yt_job(tmp)
+            run_youtube_convert(job, settings)
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-pix_fmt" not in cmd
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=10.0)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_ZERO_COPY)
+    def test_yt_zero_copy_both_faststart_attempts(
+        self, _hwaccel, _dur, _info, _build, _validate
+    ):
+        """5. Zero-Copy: Beide Faststart-Versuche haben -hwaccel_output_format cuda
+        und kein -pix_fmt."""
+        with tempfile.TemporaryDirectory() as tmp:
+            mp4 = Path(tmp) / "video.mp4"
+            yt  = Path(tmp) / "video_youtube.mp4"
+            mp4.touch()
+            settings = AppSettings()
+            settings.video.overwrite = True
+            job = ConvertJob(source_path=mp4, output_path=mp4)
+            captured: list[list[str]] = []
+
+            def fake_ffmpeg(cmd, **_kwargs):
+                captured.append(list(cmd))
+                if len(captured) == 1:
+                    return -6
+                yt.touch()
+                return 0
+
+            with patch("src.media.converter.run_ffmpeg", side_effect=fake_ffmpeg):
+                run_youtube_convert(job, settings)
+
+        assert len(captured) == 2
+        for idx, cmd in enumerate(captured):
+            assert "-hwaccel_output_format" in cmd, \
+                f"-hwaccel_output_format fehlt in Versuch {idx + 1}"
+            assert cmd[cmd.index("-hwaccel_output_format") + 1] == "cuda"
+            assert "-pix_fmt" not in cmd, \
+                f"-pix_fmt in Versuch {idx + 1} vorhanden – darf nicht sein"
+
+    # ── run_youtube_convert: Partiell (CPU-Filter) ────────────────────────────
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=10.0)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_ASSIST)
+    def test_yt_partial_gpu_path_when_filter_active(
+        self, _hwaccel, _dur, _info, _build, mock_ffmpeg, _validate
+    ):
+        """6+7+8. output_resolution gesetzt → partieller GPU-Pfad:
+        -hwaccel cuda vorhanden, KEIN -hwaccel_output_format, -pix_fmt erhalten."""
+        with tempfile.TemporaryDirectory() as tmp:
+            mp4 = Path(tmp) / "video.mp4"
+            yt  = Path(tmp) / "video_youtube.mp4"
+            mp4.touch(); yt.touch()
+            settings = AppSettings()
+            settings.video.overwrite = True
+            job = ConvertJob(source_path=mp4, output_path=mp4)
+            run_youtube_convert(job, settings, output_resolution="1080p")
+
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-hwaccel" in cmd and cmd[cmd.index("-hwaccel") + 1] == "cuda"
+        assert "-hwaccel_output_format" not in cmd
+        assert "-pix_fmt" in cmd and cmd[cmd.index("-pix_fmt") + 1] == "yuv420p"
+
+    # ── run_youtube_convert: libx264 ──────────────────────────────────────────
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_X264_ARGS)
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=10.0)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_NONE)
+    def test_yt_no_hwaccel_for_libx264(
+        self, _hwaccel, _dur, _info, _build, mock_ffmpeg, _validate
+    ):
+        """9. libx264 → kein -hwaccel."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, settings, job = self._yt_job(tmp)
+            run_youtube_convert(job, settings)
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-hwaccel" not in cmd
+
+    @patch("src.media.converter.validate_media_output", return_value=True)
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0})
+    @patch("src.media.converter.get_duration", return_value=10.0)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_NONE)
+    def test_yt_no_hwaccel_when_nvdec_unavailable(
+        self, _hwaccel, _dur, _info, _build, mock_ffmpeg, _validate
+    ):
+        """9b. h264_nvenc aber NVDEC nicht verfügbar → kein -hwaccel (Service gibt HwAccelConfig())."""
+        with tempfile.TemporaryDirectory() as tmp:
+            _, _, settings, job = self._yt_job(tmp)
+            run_youtube_convert(job, settings)
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-hwaccel" not in cmd
+
+    # ── run_concat: NVDEC-Assist (concat-Filter ist immer CPU → nie output_format) ──
+
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_ASSIST)
+    def test_concat_nvdec_assist_hwaccel_present_no_output_format(self, _hwaccel, _build, mock_ffmpeg):
+        """10. concat h264_nvenc + NVDEC verfügbar:
+        -hwaccel cuda pro Input, NIEMALS -hwaccel_output_format
+        (concat-Filter ist CPU-basiert)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            srcs = [Path(tmp) / f"p{i}.mp4" for i in range(2)]
+            for s in srcs: s.touch()
+            out = Path(tmp) / "merged.mp4"; out.touch()
+            run_concat(srcs, out, overwrite=True, encoder="h264_nvenc")
+
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-hwaccel" in cmd and cmd[cmd.index("-hwaccel") + 1] == "cuda"
+        assert "-hwaccel_output_format" not in cmd
+
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_ASSIST)
+    def test_concat_nvdec_assist_order_and_count_n3(self, _hwaccel, _build, mock_ffmpeg):
+        """11. concat NVDEC-Assist (n=3): je -hwaccel cuda vor -i,
+        kein -hwaccel_output_format."""
+        with tempfile.TemporaryDirectory() as tmp:
+            srcs = [Path(tmp) / f"p{i}.mp4" for i in range(3)]
+            for s in srcs: s.touch()
+            out = Path(tmp) / "merged.mp4"; out.touch()
+            run_concat(srcs, out, overwrite=True, encoder="h264_nvenc")
+
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert cmd.count("-hwaccel") == 3
+        assert "-hwaccel_output_format" not in cmd
+        assert cmd.count("-i") == 3
+        # Reihenfolge: -hwaccel cuda -fflags +genpts -i für jede Quelle
+        relevant = [(i, t) for i, t in enumerate(cmd)
+                    if t in ("-hwaccel", "-i")]
+        state = 0  # 0=expect_hwaccel, 1=expect_i
+        for _, tok in relevant:
+            if state == 0:
+                assert tok == "-hwaccel", f"Erwartet -hwaccel, got {tok}"
+                state = 1
+            else:
+                assert tok == "-i", f"Erwartet -i, got {tok}"
+                state = 0
+
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_NONE)
+    def test_concat_no_hwaccel_when_nvdec_unavailable(self, _hwaccel, _build, mock_ffmpeg):
+        """11b. h264_nvenc aber NVDEC nicht verfügbar → kein -hwaccel in concat."""
+        with tempfile.TemporaryDirectory() as tmp:
+            srcs = [Path(tmp) / f"p{i}.mp4" for i in range(2)]
+            for s in srcs: s.touch()
+            out = Path(tmp) / "merged.mp4"; out.touch()
+            run_concat(srcs, out, overwrite=True, encoder="h264_nvenc")
+
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-hwaccel" not in cmd
+
+    # ── run_concat: mit target_resolution (Skalierungsfilter + concat-Filter) ─
+
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_NVENC_ARGS_WITH_PIX_FMT)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_ASSIST)
+    def test_concat_nvdec_assist_with_resolution(self, _hwaccel, _build, mock_ffmpeg):
+        """12. concat mit target_resolution → NVDEC-Assist:
+        -hwaccel cuda vorhanden, KEIN -hwaccel_output_format."""
+        with tempfile.TemporaryDirectory() as tmp:
+            srcs = [Path(tmp) / f"p{i}.mp4" for i in range(2)]
+            for s in srcs: s.touch()
+            out = Path(tmp) / "merged.mp4"; out.touch()
+            run_concat(srcs, out, overwrite=True, encoder="h264_nvenc",
+                       target_resolution="1080p")
+
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-hwaccel" in cmd
+        assert "-hwaccel_output_format" not in cmd
+
+    # ── run_concat: libx264 ───────────────────────────────────────────────────
+
+    @patch("src.media.converter.run_ffmpeg", return_value=0)
+    @patch("src.media.converter.build_video_encoder_args",
+           return_value=_X264_ARGS)
+    @patch("src.media.converter.get_hwaccel_config",
+           return_value=_HWACCEL_NONE)
+    def test_concat_no_hwaccel_for_libx264(self, _hwaccel, _build, mock_ffmpeg):
+        """13. libx264 → kein -hwaccel."""
+        with tempfile.TemporaryDirectory() as tmp:
+            srcs = [Path(tmp) / f"p{i}.mp4" for i in range(2)]
+            for s in srcs: s.touch()
+            out = Path(tmp) / "merged.mp4"; out.touch()
+            run_concat(srcs, out, overwrite=True, encoder="libx264")
+
+        cmd = mock_ffmpeg.call_args[0][0]
+        assert "-hwaccel" not in cmd
+
+
+# ─── merge_halves – hwaccel via get_hwaccel_config ───────────────────────────
+
+class TestMergeHalvesHwaccel:
+    """merge_halves leitet die hwaccel-Konfiguration für den internen
+    concat-Befehl über get_hwaccel_config() (has_cpu_filter=True).
+
+    Alle Tests mocken get_hwaccel_config in src.media.merge damit
+    kein echter ffmpeg gestartet wird und die Entscheidungslogik
+    ausschließlich im Service getestet wird.
+
+    14. h264_nvenc + NVDEC verfügbar → -hwaccel cuda pro Input, kein output_format
+    15. h264_nvenc + NVDEC verfügbar, n=3 → 3× -hwaccel cuda, alle vor -i
+    16. h264_nvenc + NVDEC nicht verfügbar → kein -hwaccel
+    17. libx264 → kein -hwaccel
+    """
+
+    _HWACCEL_ASSIST = HwAccelConfig(input_flags=["-hwaccel", "cuda"])
+    _HWACCEL_NONE   = HwAccelConfig()
+
+    def _make_settings(self):
+        s = AppSettings()
+        s.video.merge_title_duration = 1
+        return s
+
+    def _make_finished_job(self, tmp: Path, stem: str) -> ConvertJob:
+        src = tmp / f"{stem}_src.mjpeg"
+        out = tmp / f"{stem}.mp4"
+        src.touch()
+        out.touch()
+        return ConvertJob(source_path=src, output_path=out, status="Fertig")
+
+    @patch("src.media.merge.run_ffmpeg", return_value=0)
+    @patch("src.media.merge.get_duration", return_value=5.0)
+    @patch("src.media.merge.get_resolution", return_value=(1920, 1080))
+    @patch("src.media.merge.get_hwaccel_config", return_value=_HWACCEL_ASSIST)
+    def test_merge_nvdec_assist_flag_present(self, _hwaccel, _res, _dur, mock_ffmpeg):
+        """14. h264_nvenc + NVDEC: -hwaccel cuda vor jedem -i im concat-Kommando."""
+        captured: list[list[str]] = []
+
+        def cap(cmd, **kw):
+            if "-filter_complex" in cmd:
+                captured.append(list(cmd))
+            return 0
+
+        mock_ffmpeg.side_effect = cap
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            j1 = self._make_finished_job(p, "halb1")
+            j2 = self._make_finished_job(p, "halb2")
+            merge_halves([j1, j2], self._make_settings())
+
+        assert captured, "Kein concat-ffmpeg-Aufruf"
+        cmd = captured[-1]
+        assert "-hwaccel" in cmd and cmd[cmd.index("-hwaccel") + 1] == "cuda"
+        assert "-hwaccel_output_format" not in cmd
+
+    @patch("src.media.merge.run_ffmpeg", return_value=0)
+    @patch("src.media.merge.get_duration", return_value=5.0)
+    @patch("src.media.merge.get_resolution", return_value=(1920, 1080))
+    @patch("src.media.merge.get_hwaccel_config", return_value=_HWACCEL_ASSIST)
+    def test_merge_nvdec_assist_count_n3(self, _hwaccel, _res, _dur, mock_ffmpeg):
+        """15. n=3 Quellen → 3× -hwaccel cuda, alle je vor dem zugehörigen -i."""
+        captured: list[list[str]] = []
+
+        def cap(cmd, **kw):
+            if "-filter_complex" in cmd:
+                captured.append(list(cmd))
+            return 0
+
+        mock_ffmpeg.side_effect = cap
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            jobs = [self._make_finished_job(p, f"halb{i}") for i in range(3)]
+            s = self._make_settings()
+            merge_halves(jobs, s)
+
+        assert captured, "Kein concat-ffmpeg-Aufruf"
+        cmd = captured[-1]
+        # 3 Quellen + mindestens 3 Titelkarten → mehrere -i
+        # Wichtig: für jede tatsächliche Quelle muss -hwaccel cuda davor stehen
+        assert cmd.count("-hwaccel") >= 3
+        assert "-hwaccel_output_format" not in cmd
+        # Reihenfolge: jedes -hwaccel muss vor dem nächsten -i kommen
+        relevant = [(i, t) for i, t in enumerate(cmd) if t in ("-hwaccel", "-i")]
+        state = 0  # 0=erwarte hwaccel, 1=erwarte -i
+        for _, tok in relevant:
+            if state == 0:
+                assert tok == "-hwaccel", f"Erwartet -hwaccel, got {tok}"
+                state = 1
+            else:
+                assert tok == "-i", f"Erwartet -i, got {tok}"
+                state = 0
+
+    @patch("src.media.merge.run_ffmpeg", return_value=0)
+    @patch("src.media.merge.get_duration", return_value=5.0)
+    @patch("src.media.merge.get_resolution", return_value=(1920, 1080))
+    @patch("src.media.merge.get_hwaccel_config", return_value=_HWACCEL_NONE)
+    def test_merge_no_hwaccel_when_nvdec_unavailable(self, _hwaccel, _res, _dur, mock_ffmpeg):
+        """16. NVDEC nicht verfügbar → kein -hwaccel im concat-Kommando."""
+        captured: list[list[str]] = []
+
+        def cap(cmd, **kw):
+            if "-filter_complex" in cmd:
+                captured.append(list(cmd))
+            return 0
+
+        mock_ffmpeg.side_effect = cap
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            j1 = self._make_finished_job(p, "halb1")
+            j2 = self._make_finished_job(p, "halb2")
+            merge_halves([j1, j2], self._make_settings())
+
+        assert captured, "Kein concat-ffmpeg-Aufruf"
+        cmd = captured[-1]
+        assert "-hwaccel" not in cmd
+
+    @patch("src.media.merge.run_ffmpeg", return_value=0)
+    @patch("src.media.merge.get_duration", return_value=5.0)
+    @patch("src.media.merge.get_resolution", return_value=(1920, 1080))
+    @patch("src.media.merge.get_hwaccel_config", return_value=_HWACCEL_NONE)
+    def test_merge_no_hwaccel_for_libx264(self, _hwaccel, _res, _dur, mock_ffmpeg):
+        """17. libx264 → kein -hwaccel."""
+        captured: list[list[str]] = []
+
+        def cap(cmd, **kw):
+            if "-filter_complex" in cmd:
+                captured.append(list(cmd))
+            return 0
+
+        mock_ffmpeg.side_effect = cap
+
+        with tempfile.TemporaryDirectory() as tmp:
+            p = Path(tmp)
+            j1 = self._make_finished_job(p, "halb1")
+            j2 = self._make_finished_job(p, "halb2")
+            s = self._make_settings()
+            s.video.encoder = "libx264"
+            merge_halves([j1, j2], s)
+
+        assert captured, "Kein concat-ffmpeg-Aufruf"
+        cmd = captured[-1]
+        assert "-hwaccel" not in cmd

@@ -163,7 +163,7 @@ class ProcessingPhase:
             else:
                 fail += 1
                 executor._set_job_status(item.orig_idx, f"Fehler: {item.cv_job.error_msg[:60]}")
-                executor.job_progress.emit(item.orig_idx, 0)
+                executor.job_progress.emit(item.orig_idx, 0, "convert")
 
             executor.overall_progress.emit(conv_pos + 1, len(to_convert))
 
@@ -184,7 +184,7 @@ class ProcessingPhase:
         remaining = total - done
         if remaining == 0:
             executor._set_job_status(orig_idx, "Fertig")
-            executor.job_progress.emit(orig_idx, 100)
+            executor.job_progress.emit(orig_idx, 100, "convert")
         else:
             executor._set_job_status(orig_idx, f"Fertig {done}/{total}")
 
@@ -211,7 +211,7 @@ class ProcessingPhase:
             if prepared is None:
                 continue
             fail += executor._run_output_steps(prepared, yt_service, kb_sort_index)
-            executor.job_progress.emit(prepared.orig_idx, 100)
+            executor.job_progress.emit(prepared.orig_idx, 100, "")
         return fail
 
     def _run_upload_only(
@@ -266,7 +266,7 @@ class ProcessingPhase:
             upload_totals[item.orig_idx][0] += 1
             done_count = upload_totals[item.orig_idx][0]
             pct = int(done_count / total_count * 100) if total_count else 100
-            executor.job_progress.emit(item.orig_idx, pct)
+            executor.job_progress.emit(item.orig_idx, pct, "")
             if done_count >= total_count:
                 executor._set_job_status(item.orig_idx, "Fertig")
             else:

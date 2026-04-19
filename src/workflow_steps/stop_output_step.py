@@ -27,7 +27,7 @@ class StopOutputStep:
         executor._set_step_status(prepared.job, self.name, "done")
         executor._set_step_detail(prepared.job, self.name, message)
         executor._set_job_status(prepared.orig_idx, message)
-        executor.job_progress.emit(prepared.orig_idx, 100)
+        executor.job_progress.emit(prepared.orig_idx, 100, self.name)
         return 0
 
     @staticmethod

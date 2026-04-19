@@ -407,14 +407,14 @@ def test_output_steps_emit_progress_and_status_for_titlecard_and_ytversion(tmp_p
 
     assert failures == 0
     assert executor.job_progress.values == [
-        (0, 0),
+        (0, 0, "titlecard"),
         (0, 25),
         (0, 75),
-        (0, 100),
-        (0, 0),
-        (0, 40),
-        (0, 100),
-        (0, 100),
+        (0, 100, "titlecard"),
+        (0, 0, "yt_version"),
+        (0, 40, "yt_version"),
+        (0, 100, "yt_version"),
+        (0, 100, "yt_version"),
     ]
     assert executor.status_updates == [
         (0, "Titelkarte erstellen …"),
@@ -455,10 +455,10 @@ def test_kaderblick_step_emits_progress_and_status(tmp_path):
         (0, "Fertig"),
     ]
     assert executor.job_progress.values == [
-        (0, 0),
-        (0, 100),
-        (0, 0),
-        (0, 100),
+        (0, 0, "youtube_upload"),
+        (0, 100, "youtube_upload"),
+        (0, 0, "kaderblick"),
+        (0, 100, "kaderblick"),
     ]
     assert prepared.job.step_statuses["youtube_upload"] == "done"
     assert prepared.job.step_statuses["kaderblick"] == "done"

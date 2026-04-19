@@ -17,6 +17,7 @@ from .encoder import (
     build_video_encoder_args,
     build_aac_audio_args,
     build_mp4_output_args,
+    get_hwaccel_config,
 )
 from .ffmpeg_runner import (
     find_audio, get_duration, estimate_duration_from_filesize,
@@ -30,6 +31,21 @@ from ..integrations.youtube_title_editor import build_output_filename_from_title
 # Alles andere ist ein regulärer Container.
 _MJPEG_EXTS = {".mjpg", ".mjpeg"}
 _EMBEDDED_METADATA_SOFTWARE = "Kaderblick — Video Manager"
+
+
+def _strip_arg(args: list[str], flag: str) -> list[str]:
+    """Entfernt ein Flag und seinen Wert aus einer ffmpeg-Argument-Liste."""
+    result = []
+    skip_next = False
+    for arg in args:
+        if skip_next:
+            skip_next = False
+            continue
+        if arg == flag:
+            skip_next = True
+            continue
+        result.append(arg)
+    return result
 
 
 def _build_scale_pad_filter(width: int, height: int) -> str:
@@ -676,12 +692,14 @@ def run_youtube_convert(job: ConvertJob, settings: AppSettings,
     )
     log(f"YouTube-Encoder: {encoder}")
 
+    hwaccel = get_hwaccel_config(encoder, has_cpu_filter=target_dimensions is not None)
+    if hwaccel.strip_pix_fmt:
+        encoder_args = _strip_arg(encoder_args, "-pix_fmt")
+
     def build_cmd(*, faststart: bool) -> list[str]:
-        cmd = ffmpeg_cmd(
-            "-hide_banner", "-y",
-            "-fflags", "+genpts",
-            "-i", str(mp4),
-        )
+        cmd = ffmpeg_cmd("-hide_banner", "-y")
+        cmd += hwaccel.input_flags
+        cmd += ["-fflags", "+genpts", "-i", str(mp4)]
         cmd += encoder_args
         cmd += [
             "-map", "0:v:0",
@@ -824,8 +842,12 @@ def run_concat(
         log_callback=log_callback,
     )
 
+    # concat-Filter ist immer CPU → has_cpu_filter=True (kein Zero-Copy).
+    hwaccel = get_hwaccel_config(resolved, has_cpu_filter=True)
+
     cmd = ffmpeg_cmd("-hide_banner", "-y")
     for src in source_files:
+        cmd += hwaccel.input_flags
         cmd += ["-fflags", "+genpts", "-i", str(src)]
     cmd += [
         "-filter_complex", filter_complex,

@@ -14,6 +14,7 @@ from .encoder import (
     build_video_encoder_args,
     build_aac_audio_args,
     build_mp4_output_args,
+    get_hwaccel_config,
 )
 from .ffmpeg_runner import (
     run_ffmpeg, get_duration, get_resolution,
@@ -439,8 +440,12 @@ def merge_halves(jobs: list, settings: AppSettings,
         filter_inputs = "".join(f"[{i}:v][{i}:a]" for i in range(n_parts))
         filter_complex = f"{filter_inputs}concat=n={n_parts}:v=1:a=1[outv][outa]"
 
+        # concat-Filter ist immer CPU → has_cpu_filter=True (kein Zero-Copy).
+        hwaccel = get_hwaccel_config(encoder, has_cpu_filter=True)
+
         cmd = ffmpeg_cmd("-hide_banner", "-y")
         for part in concat_parts:
+            cmd += hwaccel.input_flags
             cmd += ["-fflags", "+genpts", "-i", str(part)]
         cmd += [
             "-filter_complex", filter_complex,

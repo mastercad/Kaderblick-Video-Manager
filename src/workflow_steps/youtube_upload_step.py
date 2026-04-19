@@ -30,12 +30,12 @@ class YoutubeUploadStep:
                 self._build_summary(prepared, existing_video_id, 0.0, yt_service, existing=True),
             )
             executor._set_job_status(prepared.orig_idx, f"YouTube-Upload OK (vorhanden): {existing_video_id}")
-            executor.job_progress.emit(prepared.orig_idx, 100)
+            executor.job_progress.emit(prepared.orig_idx, 100, "youtube_upload")
             return 0
         executor.phase_changed.emit("YouTube-Upload …")
         executor._set_step_status(prepared.job, "youtube_upload", "running")
         executor._set_job_status(prepared.orig_idx, prepared.status_prefix or "YouTube-Upload …")
-        executor.job_progress.emit(prepared.orig_idx, 0)
+        executor.job_progress.emit(prepared.orig_idx, 0, "youtube_upload")
         started_at = time.monotonic()
         yt_ok = self._upload_to_youtube(
             executor,
@@ -61,7 +61,7 @@ class YoutubeUploadStep:
             "youtube_upload",
             self._build_summary(prepared, video_id, time.monotonic() - started_at, yt_service, existing=False),
         )
-        executor.job_progress.emit(prepared.orig_idx, 100)
+        executor.job_progress.emit(prepared.orig_idx, 100, "youtube_upload")
         return 0
 
     @staticmethod
@@ -73,7 +73,7 @@ class YoutubeUploadStep:
             log_callback=executor.log_message.emit,
             cancel_flag=ExecutorSupport.cancel_flag_for_job(executor, orig_idx),
             allow_reuse_existing=ExecutorSupport.allow_reuse_existing(executor),
-            progress_callback=lambda pct: executor.job_progress.emit(orig_idx, pct),
+            progress_callback=lambda pct: executor.job_progress.emit(orig_idx, pct, "youtube_upload"),
         )
 
     @staticmethod

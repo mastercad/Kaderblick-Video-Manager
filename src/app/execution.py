@@ -348,8 +348,11 @@ def _on_job_status(self, orig_idx: int, status: str):
         self._save_last_workflow()
 
 
-@Slot(int, int)
-def _on_job_progress(self, orig_idx: int, pct: int):
+@Slot(int, int, str)
+def _on_job_progress(self, orig_idx: int, pct: int, step_key: str = ""):
+    if step_key and 0 <= orig_idx < len(self._workflow.jobs):
+        if step_key != (self._workflow.jobs[orig_idx].current_step_key or ""):
+            return
     if 0 <= orig_idx < self.table.rowCount():
         self._set_row_progress(orig_idx, pct)
     if 0 <= orig_idx < len(self._workflow.jobs):

@@ -19,32 +19,7 @@ class YoutubeVersionStep:
             youtube_version_enabled = prepared.job.create_youtube_version
         if not (youtube_version_enabled and prepared.cv_job.output_path):
             return 0
-        existing = self._existing_youtube_version(prepared)
-        if existing is not None and existing.exists() and not prepared.per_settings.video.overwrite:
-            if validate_media_output(existing, require_video=True, decode_probe=True, log_callback=executor.log_message.emit):
-                executor._set_step_status(prepared.job, "yt_version", "reused-target")
-                executor._set_step_detail(
-                    prepared.job,
-                    "yt_version",
-                    f"{format_source_target_summary(prepared.cv_job.output_path, existing)} | {format_encoder_summary(prepared.per_settings.video.encoder)}",
-                )
-                executor._set_job_status(prepared.orig_idx, f"YT-Version OK (vorhanden): {existing.name}")
-                executor.job_progress.emit(prepared.orig_idx, 100)
-                return 0
-            executor.log_message.emit(
-                f"⚠ Vorhandene YT-Version ist defekt – erstelle neu {existing.name}"
-            )
-            try:
-                existing.unlink()
-            except OSError:
-                executor._set_step_status(prepared.job, "yt_version", "error")
-                executor._set_job_status(prepared.orig_idx, "YT-Version defekt und nicht loeschbar")
-                return 1
-        if not prepared.cv_job.output_path.exists():
-            return 0
-        executor._set_step_status(prepared.job, "yt_version", "running")
-        executor._set_job_status(prepared.orig_idx, "YT-Version erstellen …")
-        executor.job_progress.emit(prepared.orig_idx, 0)
+
         has_graph = bool(getattr(prepared.job, "graph_nodes", None))
         merge_before_yt = graph_path_exists_between_types(prepared.job, {"merge"}, "yt_version") if has_graph else False
         convert_before_yt = graph_path_exists_between_types(prepared.job, {"convert"}, "yt_version") if has_graph else bool(prepared.job.convert_enabled)
@@ -60,14 +35,46 @@ class YoutubeVersionStep:
         elif convert_before_yt:
             inherited_encoder = prepared.per_settings.video.encoder
             inherited_crf = prepared.per_settings.video.crf
+        effective_encoder = (
+            prepared.job.yt_version_encoder
+            if prepared.job.yt_version_encoder not in {"", "inherit"}
+            else inherited_encoder
+        )
+
+        existing = self._existing_youtube_version(prepared)
+        if existing is not None and existing.exists() and not prepared.per_settings.video.overwrite:
+            if validate_media_output(existing, require_video=True, decode_probe=True, log_callback=executor.log_message.emit):
+                executor._set_step_status(prepared.job, "yt_version", "reused-target")
+                executor._set_step_detail(
+                    prepared.job,
+                    "yt_version",
+                    f"{format_source_target_summary(prepared.cv_job.output_path, existing)} | {format_encoder_summary(effective_encoder)}",
+                )
+                executor._set_job_status(prepared.orig_idx, f"YT-Version OK (vorhanden): {existing.name}")
+                executor.job_progress.emit(prepared.orig_idx, 100, "yt_version")
+                return 0
+            executor.log_message.emit(
+                f"⚠ Vorhandene YT-Version ist defekt – erstelle neu {existing.name}"
+            )
+            try:
+                existing.unlink()
+            except OSError:
+                executor._set_step_status(prepared.job, "yt_version", "error")
+                executor._set_job_status(prepared.orig_idx, "YT-Version defekt und nicht loeschbar")
+                return 1
+        if not prepared.cv_job.output_path.exists():
+            return 0
+        executor._set_step_status(prepared.job, "yt_version", "running")
+        executor._set_job_status(prepared.orig_idx, "YT-Version erstellen …")
+        executor.job_progress.emit(prepared.orig_idx, 0, "yt_version")
         cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, prepared.orig_idx)
         ok = executor._youtube_convert_func(
             prepared.cv_job,
             prepared.per_settings,
             cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
-            progress_callback=lambda pct: executor.job_progress.emit(prepared.orig_idx, pct),
-            encoder=(prepared.job.yt_version_encoder if prepared.job.yt_version_encoder not in {"", "inherit"} else inherited_encoder),
+            progress_callback=lambda pct: executor.job_progress.emit(prepared.orig_idx, pct, "yt_version"),
+            encoder=effective_encoder,
             crf=prepared.job.yt_version_crf if prepared.job.yt_version_crf > 0 else inherited_crf,
             preset=prepared.job.yt_version_preset or prepared.per_settings.video.preset,
             fps=prepared.job.yt_version_fps if prepared.job.yt_version_fps > 0 else None,
@@ -92,9 +99,9 @@ class YoutubeVersionStep:
         executor._set_step_detail(
             prepared.job,
             "yt_version",
-            f"{format_source_target_summary(prepared.cv_job.output_path, self._existing_youtube_version(prepared))} | {format_encoder_summary(prepared.per_settings.video.encoder)}",
+            f"{format_source_target_summary(prepared.cv_job.output_path, self._existing_youtube_version(prepared))} | {format_encoder_summary(effective_encoder)}",
         )
-        executor.job_progress.emit(prepared.orig_idx, 100)
+        executor.job_progress.emit(prepared.orig_idx, 100, "yt_version")
         return 0
 
     @staticmethod

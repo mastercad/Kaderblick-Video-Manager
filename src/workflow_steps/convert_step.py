@@ -35,19 +35,19 @@ class ConvertStep:
                 f"{format_source_target_summary(cv_job.source_path, existing_output)} | {format_encoder_summary(per_settings.video.encoder)}",
             )
             executor._set_job_status(orig_idx, f"Konvertierung OK (vorhanden): {existing_output.name}")
-            executor.job_progress.emit(orig_idx, 100)
+            executor.job_progress.emit(orig_idx, 100, "convert")
             return "ready"
 
         cv_job.status = "Läuft"
         cv_job.progress_pct = 0
         executor._set_step_status(job, "convert", "running")
         executor._set_job_status(orig_idx, "Konvertiere …")
-        executor.job_progress.emit(orig_idx, 0)
+        executor.job_progress.emit(orig_idx, 0, "convert")
 
         def _progress(pct: int, _oi=orig_idx, _done=done_count, _tot=total_count, _cv=cv_job):
             _cv.progress_pct = pct
             composite = int((_done + pct / 100.0) / _tot * 100) if _tot else pct
-            executor.job_progress.emit(_oi, composite)
+            executor.job_progress.emit(_oi, composite, "convert")
             executor.convert_progress.emit(_done, pct)
 
         if cv_job.output_path is not None:
@@ -82,7 +82,7 @@ class ConvertStep:
                 "convert",
                 f"{format_source_target_summary(cv_job.source_path, cv_job.output_path)} | {format_encoder_summary(per_settings.video.encoder)}",
             )
-            executor.job_progress.emit(orig_idx, 100)
+            executor.job_progress.emit(orig_idx, 100, "convert")
             return "ready"
         executor._set_step_status(job, "convert", "error")
         executor._set_step_detail(job, "convert", f"Quelle: {cv_job.source_path.name} | Fehler bei Konvertierung")

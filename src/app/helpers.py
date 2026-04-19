@@ -328,6 +328,19 @@ def _normalize_cancelled_resume_state(job: WorkflowJob) -> bool:
         step_details.pop(step_key, None)
         changed = True
 
+    # "running" entries are never valid on restore — the app was not running when the
+    # workflow was persisted (or it crashed mid-step). Clear them so that nodes do not
+    # display as "Läuft" immediately after the application is opened.
+    running_steps = [
+        step_key
+        for step_key, status in step_statuses.items()
+        if str(status or "") == "running"
+    ]
+    for step_key in running_steps:
+        step_statuses.pop(step_key, None)
+        step_details.pop(step_key, None)
+        changed = True
+
     if not isinstance(job.step_statuses, dict) or job.step_statuses != step_statuses:
         job.step_statuses = step_statuses
         changed = True
@@ -336,7 +349,7 @@ def _normalize_cancelled_resume_state(job: WorkflowJob) -> bool:
         changed = True
 
     had_cancelled_status = "abgebrochen" in str(job.resume_status or "").strip().lower()
-    if not cancelled_steps and not had_cancelled_status:
+    if not cancelled_steps and not running_steps and not had_cancelled_status:
         return changed
 
     resume_step = None

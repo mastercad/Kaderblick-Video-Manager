@@ -1288,6 +1288,48 @@ class TestConverterAppResumeState:
         assert job.step_statuses == {"transfer": "done"}
         assert job.step_details == {}
 
+    def test_normalize_cancelled_resume_state_clears_stale_running_after_crash(self):
+        """Bug-Regression: Nach einem App-Crash ist step_statuses["convert"]="running" persistiert.
+        _normalize_cancelled_resume_state muss 'running' beim Restore löschen, damit der Node
+        nicht als 'Läuft' dargestellt wird obwohl nichts ausgeführt wird."""
+        job = WorkflowJob(
+            name="Job 1",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            resume_status="Konvertiere …",
+            current_step_key="convert",
+            step_statuses={"transfer": "done", "convert": "running"},
+            step_details={"convert": "3/5 Dateien"},
+        )
+
+        changed = _normalize_cancelled_resume_state(job)
+
+        assert changed is True
+        assert "running" not in job.step_statuses.values()
+        assert "convert" not in job.step_statuses
+        assert job.step_statuses == {"transfer": "done"}
+        assert job.step_details == {}
+        # current_step_key und resume_status müssen auf den ersten nicht-fertigen Schritt zeigen
+        assert job.current_step_key == "convert"
+        assert "Konvertiere" in job.resume_status
+
+    def test_normalize_cancelled_resume_state_no_change_when_all_clean(self):
+        """Ohne 'cancelled'/'running' Einträge sollte die Funktion nichts ändern."""
+        job = WorkflowJob(
+            name="Job 1",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            resume_status="",
+            current_step_key="",
+            step_statuses={"transfer": "done"},
+            step_details={},
+        )
+
+        changed = _normalize_cancelled_resume_state(job)
+
+        assert changed is False
+        assert job.step_statuses == {"transfer": "done"}
+
     def test_save_last_workflow_persists_complete_workflow_configuration(self, tmp_path):
         last_workflow_file = tmp_path / "last_workflow.json"
         workflow = Workflow(name="Spieltag 23", job=_rich_job(), shutdown_after=True)
@@ -1365,7 +1407,7 @@ class TestConverterAppResumeState:
             assert window._workflow.job is not None
             assert window._workflow.job.to_dict() == expected.job.to_dict()
             assert window.table.item(0, 1).text() == "Gespeicherter Workflow"
-            assert window.table.item(0, 4).text() == "YT-Version erstellen …"
+            assert window.table.item(0, 4).text() == "Ausstehend"
             assert window.table.item(0, 5).text() == "78%"
         finally:
             window.close()
@@ -1428,7 +1470,7 @@ class TestConverterAppResumeState:
             assert window._workflow.job.resume_status == "Konvertiere …"
             assert window._workflow.job.step_statuses == {"transfer": "done"}
             assert window._workflow.job.step_details == {}
-            assert window.table.item(0, 4).text() == "Konvertiere …"
+            assert window.table.item(0, 4).text() == "Ausstehend"
         finally:
             window.close()
 
@@ -1481,8 +1523,48 @@ class TestConverterAppResumeState:
                 "convert": "done",
                 "yt_version": "done",
             }
-            assert window.table.item(0, 4).text() == "Konvertiere …"
-            assert window.table.item(1, 4).text() == "YouTube-Upload …"
+            assert window.table.item(0, 4).text() == "Ausstehend"
+            assert window.table.item(1, 4).text() == "Ausstehend"
+        finally:
+            window.close()
+
+    def test_app_start_crash_recovery_shows_ausstehend_in_table(self, tmp_path):
+        """Bug-Regression: Nach einem Crash ist step_statuses["convert"]="running" persistiert.
+        Nach dem App-Start soll die Tabellenspalte 'Ausstehend' zeigen, nicht 'Konvertiere …'."""
+        settings = AppSettings()
+        settings.restore_last_workflow = True
+        last_workflow_file = tmp_path / "last_workflow.json"
+        crashed = Workflow(
+            jobs=[
+                WorkflowJob(
+                    name="Crash-Job",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/a.mp4")],
+                    resume_status="Konvertiere \u2026",
+                    current_step_key="convert",
+                    step_statuses={"transfer": "done", "convert": "running"},
+                    step_details={"convert": "2/5 Dateien"},
+                    run_started_at="2026-04-19T10:00:00",
+                    run_finished_at="",
+                )
+            ]
+        )
+        save_workflow(crashed, last_workflow_file, include_runtime=True)
+
+        with patch("src.app.AppSettings.load", return_value=settings), \
+             patch("src.workflow.storage.LAST_WORKFLOW_FILE", last_workflow_file):
+            window = ConverterApp()
+
+        try:
+            assert window.table.rowCount() == 1
+            assert window._workflow.job is not None
+            # "running" muss entfernt worden sein
+            assert "running" not in window._workflow.job.step_statuses.values()
+            # Tabellenspalte darf nicht "Läuft" oder "Konvertiere …" zeigen
+            cell = window.table.item(0, 4).text()
+            assert cell == "Ausstehend", (
+                f"Tabelle soll nach Crash-Restore 'Ausstehend' zeigen, zeigt aber: {cell!r}"
+            )
         finally:
             window.close()
 

@@ -57,7 +57,7 @@ class MergeGroupStep:
                     f"{format_list_summary('Quellen', group_source_names)} | {format_media_artifact(merged_path)} | {format_encoder_summary(per_settings.video.encoder)}",
                 )
                 executor._set_job_status(first_orig_idx, "Zusammenführen OK")
-                executor.job_progress.emit(first_orig_idx, 100)
+                executor.job_progress.emit(first_orig_idx, 100, "merge")
                 first_cv.output_path = merged_path
                 return PreparedOutput(first_orig_idx, first_job, first_cv, per_settings, graph_origin_kind="merge"), 0
 
@@ -84,7 +84,7 @@ class MergeGroupStep:
                     f"{format_list_summary('Quellen', [path.name for path in source_paths])} | {format_media_artifact(source_paths[0])} | Einzeldatei, kein Concat",
                 )
                 executor._set_job_status(first_orig_idx, "Zusammenführen OK")
-                executor.job_progress.emit(first_orig_idx, 100)
+                executor.job_progress.emit(first_orig_idx, 100, "merge")
                 first_cv.output_path = source_paths[0]
                 return PreparedOutput(first_orig_idx, first_job, first_cv, per_settings, graph_origin_kind="merge"), 0
             return None, 0
@@ -99,7 +99,7 @@ class MergeGroupStep:
                     f"{format_list_summary('Quellen', [path.name for path in source_paths])} | Inkompatible Merge-Eingänge",
                 )
                 executor._set_job_status(first_orig_idx, "Fehler: Merge-Eingänge inkompatibel")
-                executor.job_progress.emit(first_orig_idx, 0)
+                executor.job_progress.emit(first_orig_idx, 0, "merge")
                 executor.log_message.emit(f"❌ Merge-Gruppe {gid} ist nicht direkt mergebar")
                 for reason in report.reasons:
                     executor.log_message.emit(f"   • {reason}")
@@ -107,7 +107,7 @@ class MergeGroupStep:
 
         executor._set_step_status(first_job, "merge", "running")
         executor._set_job_status(first_orig_idx, "Zusammenführen …")
-        executor.job_progress.emit(first_orig_idx, 0)
+        executor.job_progress.emit(first_orig_idx, 0, "merge")
         cancel_flag = ExecutorSupport.cancel_flag_for_job(executor, first_orig_idx)
         merged_path.parent.mkdir(parents=True, exist_ok=True)
         concat_ok = executor._concat_func(
@@ -115,7 +115,7 @@ class MergeGroupStep:
             merged_path,
             cancel_flag=cancel_flag,
             log_callback=executor.log_message.emit,
-            progress_callback=lambda pct: executor.job_progress.emit(first_orig_idx, pct),
+            progress_callback=lambda pct: executor.job_progress.emit(first_orig_idx, pct, "merge"),
             overwrite=per_settings.video.overwrite,
             no_bframes=first_job.merge_no_bframes,
             keyframe_interval=per_settings.video.keyframe_interval,
@@ -134,7 +134,7 @@ class MergeGroupStep:
                 f"{format_list_summary('Quellen', [path.name for path in source_paths])} | Durch Benutzer abgebrochen",
             )
             executor._set_job_status(first_orig_idx, "Zusammenführen abgebrochen")
-            executor.job_progress.emit(first_orig_idx, 0)
+            executor.job_progress.emit(first_orig_idx, 0, "merge")
             return None, 0
         if not concat_ok:
             executor._set_step_status(first_job, "merge", "error")
@@ -144,7 +144,7 @@ class MergeGroupStep:
                 f"{format_list_summary('Quellen', [path.name for path in source_paths])} | Fehler beim Zusammenführen nach {merged_path.name}",
             )
             executor._set_job_status(first_orig_idx, "Fehler: Merge fehlgeschlagen")
-            executor.job_progress.emit(first_orig_idx, 0)
+            executor.job_progress.emit(first_orig_idx, 0, "merge")
             executor.log_message.emit(f"❌ Merge fehlgeschlagen für Gruppe {gid}")
             return None, 1
 

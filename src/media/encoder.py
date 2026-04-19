@@ -7,6 +7,7 @@ Unterstützte Encoder:
 Zuständigkeit dieses Moduls:
   - Welcher Encoder soll benutzt werden? (``resolve_encoder``)
   - Welche ffmpeg-Argumente braucht er? (``build_encoder_args``)
+  - Zentralisierte hwaccel-Konfiguration:  (``get_hwaccel_config``)
   - Welche Auswahl bietet die GUI an? (``available_encoder_choices``)
 
 Die eigentliche Diagnose (GPU vorhanden? Treiber okay? Test-Encode?)
@@ -14,6 +15,7 @@ liegt in ``diagnostics.py``.
 """
 
 import subprocess
+from dataclasses import dataclass, field
 from functools import lru_cache
 
 from .diagnostics import encoder_test_encode, gpu_diagnostics
@@ -41,6 +43,24 @@ _H264_PROFILE = "high"
 # ═════════════════════════════════════════════════════════════════
 
 @lru_cache(maxsize=1)
+def detect_cuda_hwdec() -> bool:
+    """Gibt True zurück wenn NVDEC (CUDA-Hardware-Dekodierung) verfügbar ist.
+
+    Prueft via ``ffmpeg -hwaccels`` ob 'cuda' aufgelistet wird. Das garantiert
+    dass der ffmpeg-Build NVDEC-Support hat UND der Treiber ihn bereitstellt.
+    Ergebnis wird gecacht – Hardware ändert sich zur Laufzeit nicht.
+    """
+    try:
+        result = subprocess.run(
+            ffmpeg_cmd("-hide_banner", "-hwaccels"),
+            capture_output=True, text=True, timeout=10,
+        )
+        return "cuda" in result.stdout.splitlines()[1:]  # erste Zeile ist Header
+    except Exception:
+        return False
+
+
+@lru_cache(maxsize=1)
 def detect_hw_encoders() -> list[str]:
     """Erkennt verfügbare Hardware-Encoder über ``ffmpeg -encoders``
     und verifiziert jeden per Mini-Encode.
@@ -65,6 +85,55 @@ def detect_hw_encoders() -> list[str]:
                 if works:
                     hw_encoders.append(name)
     return hw_encoders
+
+
+# ═════════════════════════════════════════════════════════════════
+#  Zentraler hwaccel-Service
+# ═════════════════════════════════════════════════════════════════
+
+@dataclass
+class HwAccelConfig:
+    """Zentralisierte hwaccel-Konfiguration für einen ffmpeg-Befehl.
+
+    Alle Stellen die ffmpeg aufrufen holen sich ihre hwaccel-Flags
+    ausschließlich über ``get_hwaccel_config()`` – nirgendwo sonst
+    wird hwaccel konfiguriert oder ``detect_cuda_hwdec`` direkt aufgerufen.
+    """
+    input_flags: list[str] = field(default_factory=list)
+    """Flags die unmittelbar vor ``-i`` stehen (Decoder-Seite)."""
+    strip_pix_fmt: bool = False
+    """True im Zero-Copy-Modus: ``-pix_fmt`` muss aus den Encoder-Args
+    entfernt werden, weil CUDA-Surfaces kein explizites Pixel-Format kennen."""
+
+
+def get_hwaccel_config(encoder: str, *, has_cpu_filter: bool = False) -> HwAccelConfig:
+    """Liefert die hwaccel-Flags für einen ffmpeg-Befehl.
+
+    GPU wird **nur** aktiviert wenn **alle** Voraussetzungen erfüllt sind:
+    - ``encoder`` ist ``"h264_nvenc"``  (NVENC kodiert)
+    - NVDEC (CUDA-Dekodierung) ist verfügbar  (``detect_cuda_hwdec()``)
+
+    ``has_cpu_filter=True``  → Assist-Modus
+        NVDEC dekodiert in System-RAM, CPU-Filter (z.B. concat, scale)
+        läuft normal, h264_nvenc enkodiert.  Flag: ``-hwaccel cuda``
+
+    ``has_cpu_filter=False`` → Zero-Copy-Modus
+        NVDEC dekodiert in VRAM, Frames bleiben als CUDA-Surface,
+        h264_nvenc liest direkt daraus.
+        Flags: ``-hwaccel cuda -hwaccel_output_format cuda``
+        ``-pix_fmt`` muss aus Encoder-Args entfernt werden.
+
+    Liefert ``HwAccelConfig(input_flags=[], strip_pix_fmt=False)``
+    wenn GPU nicht genutzt werden kann oder darf.
+    """
+    if encoder != "h264_nvenc" or not detect_cuda_hwdec():
+        return HwAccelConfig()
+    if has_cpu_filter:
+        return HwAccelConfig(input_flags=["-hwaccel", "cuda"])
+    return HwAccelConfig(
+        input_flags=["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+        strip_pix_fmt=True,
+    )
 
 
 # ═════════════════════════════════════════════════════════════════

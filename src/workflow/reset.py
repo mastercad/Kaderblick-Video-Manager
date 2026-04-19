@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -173,12 +174,20 @@ def _clear_artifacts(job: WorkflowJob, settings: AppSettings, cleared_steps: set
     deleted_paths: set[Path] = set()
     cleared_upload_ids: set[str] = set()
 
+    t0 = time.perf_counter()
+
     if "transfer" in cleared_steps:
         for path in _transfer_targets_for_reset(job, settings):
             if _delete_file(path):
                 deleted_paths.add(path)
 
+    t1 = time.perf_counter()
+    print(f"[PROFIL] transfer_targets_for_reset: {t1 - t0:.3f}s")
+
     bundles = _artifact_bundles(job, settings)
+    t2 = time.perf_counter()
+    print(f"[PROFIL] _artifact_bundles: {t2 - t1:.3f}s")
+
     paths_to_delete: set[Path] = set()
     registry_roots: set[Path] = set()
 
@@ -197,16 +206,33 @@ def _clear_artifacts(job: WorkflowJob, settings: AppSettings, cleared_steps: set
         if cleared_steps & {"youtube_upload", "kaderblick", "yt_version", "repair", "validate_surface", "validate_deep", "cleanup", "merge", "convert", "titlecard"}:
             registry_roots.update(bundle.registry_roots)
 
+    t3 = time.perf_counter()
+    print(f"[PROFIL] bundle-Iteration: {t3 - t2:.3f}s")
+    print(f"[PROFIL] registry_roots ({len(registry_roots)}): {sorted(str(p) for p in registry_roots)}")
+
     for output_path in sorted(registry_roots):
+        _t = time.perf_counter()
         video_id = get_video_id_for_output(output_path)
+        _t2 = time.perf_counter()
+        print(f"[PROFIL] get_video_id_for_output({output_path.name}): {_t2 - _t:.3f}s")
         if video_id:
             clear_recorded_kaderblick_id(video_id)
             cleared_upload_ids.add(video_id)
+        _t3 = time.perf_counter()
         clear_registry_entry_for_output(output_path)
+        _t4 = time.perf_counter()
+        print(f"[PROFIL] clear_registry_entry_for_output({output_path.name}): {_t4 - _t3:.3f}s")
+
+    t4 = time.perf_counter()
+    print(f"[PROFIL] registry-Loop gesamt: {t4 - t3:.3f}s")
 
     for path in sorted(paths_to_delete):
         if _delete_file(path):
             deleted_paths.add(path)
+
+    t5 = time.perf_counter()
+    print(f"[PROFIL] _delete_file-Loop: {t5 - t4:.3f}s")
+    print(f"[PROFIL] _clear_artifacts gesamt: {t5 - t0:.3f}s")
 
     return deleted_paths, cleared_upload_ids
 

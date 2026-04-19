@@ -365,7 +365,7 @@ class TestLivePipelineProgress:
         worker_executor = _PipelineWorkerView(ex, event_queue)
         received_progress: list[int] = []
 
-        def _on_progress(_orig_idx: int, pct: int) -> None:
+        def _on_progress(_orig_idx: int, pct: int, _step_key: str = "") -> None:
             received_progress.append(pct)
 
         ex.job_progress.connect(_on_progress)
@@ -411,13 +411,13 @@ class TestLivePipelineProgress:
         worker_executor = _PipelineWorkerView(ex, event_queue)
         received_progress: list[int] = []
 
-        def _on_progress(_orig_idx: int, pct: int) -> None:
+        def _on_progress(_orig_idx: int, pct: int, _step_key: str = "") -> None:
             received_progress.append(pct)
 
         ex.job_progress.connect(_on_progress)
 
         ex._pipeline_owner_thread_id = -1
-        worker_executor.job_progress.emit(0, 42)
+        worker_executor.job_progress.emit(0, 42, "")
 
         assert received_progress == []
         assert not event_queue.empty()
@@ -447,6 +447,82 @@ class TestJobCancelFlag:
         ex.cancel(active_indices={0})
 
         assert flag.wait(timeout=0.01) is True
+
+
+class TestMarkJobCancelled:
+    def _make_executor_with_captured_statuses(self, jobs):
+        ex = WorkflowExecutor(Workflow(jobs=jobs), _make_settings())
+        emitted = []
+        ex.job_status.connect(lambda idx, s: emitted.append((idx, s)))
+        return ex, emitted
+
+    def test_running_step_gets_cancelled_status(self):
+        """Ein laufender Job (step_statuses hat 'running') wird korrekt abgebrochen."""
+        job = WorkflowJob(
+            name="A",
+            current_step_key="convert",
+            step_statuses={"transfer": "done", "convert": "running"},
+            resume_status="Konvertiere \u2026",
+        )
+        ex, emitted = self._make_executor_with_captured_statuses([job])
+        ex.cancel(active_indices={0})
+        assert any("abgebrochen" in s.lower() for _, s in emitted)
+
+    def test_not_started_job_is_skipped(self):
+        """Ein Job ohne step_statuses und ohne resume_status wurde noch nie gestartet —
+        er darf NICHT auf 'Job abgebrochen' gesetzt werden."""
+        job = WorkflowJob(name="A")
+        ex, emitted = self._make_executor_with_captured_statuses([job])
+        ex.cancel(active_indices={0})
+        assert emitted == [], f"Nicht gestarteter Job soll keinen Status bekommen, got: {emitted}"
+
+    def test_finished_job_is_skipped(self):
+        """Ein bereits fertiger Job darf NICHT auf 'Job abgebrochen' gesetzt werden."""
+        job = WorkflowJob(
+            name="A",
+            resume_status="Fertig",
+            step_statuses={"transfer": "done", "convert": "done"},
+        )
+        ex, emitted = self._make_executor_with_captured_statuses([job])
+        ex.cancel(active_indices={0})
+        assert emitted == [], f"Fertiger Job soll keinen Status bekommen, got: {emitted}"
+
+    def test_already_cancelled_job_is_skipped(self):
+        """Ein bereits abgebrochener Job darf nicht erneut auf 'Job abgebrochen' gesetzt werden."""
+        job = WorkflowJob(
+            name="A",
+            resume_status="Konvertierung abgebrochen",
+            step_statuses={"transfer": "done"},
+        )
+        ex, emitted = self._make_executor_with_captured_statuses([job])
+        ex.cancel(active_indices={0})
+        assert emitted == [], f"Bereits abgebrochener Job soll keinen Status bekommen, got: {emitted}"
+
+    def test_error_job_is_skipped(self):
+        """Ein Job mit Fehlerstatus darf nicht auf 'Job abgebrochen' gesetzt werden."""
+        job = WorkflowJob(
+            name="A",
+            resume_status="Fehler: ffmpeg exit 1",
+            step_statuses={"transfer": "done", "convert": "done"},
+        )
+        ex, emitted = self._make_executor_with_captured_statuses([job])
+        ex.cancel(active_indices={0})
+        assert emitted == [], f"Fehler-Job soll keinen Status bekommen, got: {emitted}"
+
+    def test_in_progress_job_without_running_step_gets_job_abgebrochen(self):
+        """Ein Job der gestartet wurde (hat step_statuses), aber aktuell keinen 'running'
+        Step hat (z.B. zwischen zwei Steps), bekommt 'Job abgebrochen'."""
+        job = WorkflowJob(
+            name="A",
+            resume_status="Konvertiere \u2026",
+            current_step_key="convert",
+            step_statuses={"transfer": "done"},
+        )
+        ex, emitted = self._make_executor_with_captured_statuses([job])
+        ex.cancel(active_indices={0})
+        assert any(s == "Job abgebrochen" for _, s in emitted), (
+            f"Job zwischen Steps soll 'Job abgebrochen' bekommen, got: {emitted}"
+        )
 
 
 class TestYouTubeUploadRequest:
@@ -812,6 +888,119 @@ class TestGraphDrivenExecution:
         assert captured["encoder"] == "libx264"
         assert captured["crf"] == 17
         assert captured["fps"] == 60
+
+    def test_yt_version_step_detail_uses_explicit_yt_encoder(self, tmp_path):
+        """step_details['yt_version'] zeigt den tatsächlich gesetzten yt_version_encoder."""
+        source = tmp_path / "clip.mp4"
+        source.write_text("video", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="YT Detail Encoder",
+            source_mode="files",
+            encoder="auto",
+            yt_version_encoder="libx264",
+            files=[FileEntry(source_path=str(source), graph_source_id="src-1")],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "yt-1", "type": "yt_version"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "yt-1"}],
+        )
+
+        ex = WorkflowExecutor(Workflow(job=job), _make_settings())
+
+        def _fake(cv_job, settings, **kwargs):
+            yt_path = _derived_path(cv_job.output_path, "_youtube")
+            yt_path.parent.mkdir(parents=True, exist_ok=True)
+            yt_path.write_text("yt", encoding="utf-8")
+            return True
+
+        with patch.object(ex, "_youtube_convert_func", side_effect=_fake):
+            ex.run()
+
+        detail = job.step_details.get("yt_version", "")
+        assert "libx264" in detail, f"Erwartet 'libx264' im step_detail, bekommen: {detail!r}"
+        assert "auto" not in detail, f"'auto' darf nicht im step_detail stehen: {detail!r}"
+
+    def test_yt_version_step_detail_inherits_merge_encoder(self, tmp_path):
+        """step_details['yt_version'] übernimmt merge_encoder wenn yt_version_encoder='inherit'."""
+        source = tmp_path / "clip.mp4"
+        source.write_text("video", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="YT Inherits Merge",
+            source_mode="files",
+            encoder="auto",
+            merge_encoder="libx264",
+            yt_version_encoder="inherit",
+            files=[FileEntry(source_path=str(source), graph_source_id="src-1", merge_group_id="g1")],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "merge-1", "type": "merge"},
+                {"id": "yt-1", "type": "yt_version"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "merge-1"},
+                {"source": "merge-1", "target": "yt-1"},
+            ],
+        )
+
+        ex = WorkflowExecutor(Workflow(job=job), _make_settings())
+        merged = _derived_path(source, "_merged")
+
+        def _fake_concat(sources, output, **kwargs):
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.write_text("merged", encoding="utf-8")
+            return True
+
+        def _fake_yt(cv_job, settings, **kwargs):
+            yt_path = _derived_path(cv_job.output_path, "_youtube")
+            yt_path.parent.mkdir(parents=True, exist_ok=True)
+            yt_path.write_text("yt", encoding="utf-8")
+            return True
+
+        with patch.object(ex, "_concat_func", side_effect=_fake_concat), \
+             patch.object(ex, "_youtube_convert_func", side_effect=_fake_yt), \
+             patch("src.workflow_steps.merge_group_step.validate_media_output", return_value=MediaValidationResult(True, True, "")), \
+             patch("src.workflow_steps.output_step_stack.OutputValidationStep.execute", return_value=0):
+            ex.run()
+
+        detail = job.step_details.get("yt_version", "")
+        assert "libx264" in detail, f"Erwartet 'libx264' (merge_encoder) im step_detail, bekommen: {detail!r}"
+
+    def test_yt_version_reused_step_detail_uses_effective_encoder(self, tmp_path):
+        """step_details['yt_version'] zeigt yt_version_encoder auch bei reused-target."""
+        source = tmp_path / "clip.mp4"
+        source.write_text("video", encoding="utf-8")
+        # YT-Datei schon vorhanden → reused-target
+        yt_file = _derived_path(source, "_youtube")
+        yt_file.parent.mkdir(parents=True, exist_ok=True)
+        yt_file.write_text("existing_yt", encoding="utf-8")
+
+        job = WorkflowJob(
+            name="YT Reused Detail",
+            source_mode="files",
+            encoder="auto",
+            yt_version_encoder="libx264",
+            overwrite=False,
+            files=[FileEntry(source_path=str(source), graph_source_id="src-1")],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "yt-1", "type": "yt_version"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "yt-1"}],
+        )
+
+        ex = WorkflowExecutor(Workflow(job=job), _make_settings())
+
+        with patch("src.workflow_steps.youtube_version_step.validate_media_output",
+                   return_value=MediaValidationResult(True, True, "")):
+            ex.run()
+
+        assert job.step_statuses.get("yt_version") == "reused-target"
+        detail = job.step_details.get("yt_version", "")
+        assert "libx264" in detail, f"Erwartet 'libx264' im reused step_detail, bekommen: {detail!r}"
+        assert "auto" not in detail, f"'auto' darf nicht im reused step_detail stehen: {detail!r}"
 
     def test_does_not_mutate_original_settings(self):
         """_build_job_settings darf die globalen Settings nicht verändern."""
