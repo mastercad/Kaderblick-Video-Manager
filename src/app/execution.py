@@ -200,7 +200,7 @@ def _start_workflow(self, *, active_indices: set[int] | None = None):
         resume_existing = choice == QMessageBox.StandardButton.Yes
 
     if not resume_existing:
-        self._reset_status_column()
+        self._reset_status_column(rows={index for index, _job in active_job_entries})
         for job in active_jobs:
             job.resume_status = ""
             job.step_statuses = {}
@@ -256,6 +256,10 @@ def _start_workflow(self, *, active_indices: set[int] | None = None):
         for index, job in enumerate(self._workflow.jobs)
         if job.enabled and (active_indices is None or index in active_indices)
     }
+    # Maps orig_idx (baked into the executor's active list at start) to the
+    # current position in self._workflow.jobs.  Updated in _clear_workflow when
+    # the user removes a job while the workflow is still running.
+    self._job_orig_to_cur: dict[int, int] = {idx: idx for idx in range(len(self._workflow.jobs))}
     self._wf_start_time = now_monotonic
     self._workflow_run_elapsed_base_seconds = float(self._workflow.last_run_elapsed_seconds or 0.0) if resume_existing else 0.0
     self._workflow_run_started_monotonic = now_monotonic
@@ -327,66 +331,72 @@ def _cancel_workflow(self):
 
 @Slot(int, str)
 def _on_job_status(self, orig_idx: int, status: str):
-    if 0 <= orig_idx < self.table.rowCount():
-        self._set_row_status(orig_idx, status)
-    if 0 <= orig_idx < len(self._workflow.jobs):
-        job = self._workflow.jobs[orig_idx]
+    cur_idx = getattr(self, '_job_orig_to_cur', {}).get(orig_idx, orig_idx)
+    if 0 <= cur_idx < self.table.rowCount():
+        self._set_row_status(cur_idx, status)
+    if 0 <= cur_idx < len(self._workflow.jobs):
+        job = self._workflow.jobs[cur_idx]
         job.resume_status = status
         overall_pct = _compute_job_overall_progress(job, status, job.progress_pct)
         job.overall_progress_pct = overall_pct
         if _is_terminal_job_status(status, overall_pct):
-            _freeze_job_duration(self, orig_idx)
+            _freeze_job_duration(self, cur_idx)
         elif _is_active_job_status(status):
-            _touch_job_duration(self, orig_idx)
+            _touch_job_duration(self, cur_idx)
         else:
-            _pause_job_duration(self, orig_idx)
-        item = self.table.item(orig_idx, 4)
+            _pause_job_duration(self, cur_idx)
+        item = self.table.item(cur_idx, 4)
         if item is not None:
             item.setToolTip(_format_resume_tooltip(job))
-        self._set_row_job_progress(orig_idx, overall_pct)
-        self._set_row_duration(orig_idx, job.run_elapsed_seconds)
+        self._set_row_job_progress(cur_idx, overall_pct)
+        self._set_row_duration(cur_idx, job.run_elapsed_seconds)
         self._save_last_workflow()
 
 
 @Slot(int, int, str)
 def _on_job_progress(self, orig_idx: int, pct: int, step_key: str = ""):
-    if step_key and 0 <= orig_idx < len(self._workflow.jobs):
-        if step_key != (self._workflow.jobs[orig_idx].current_step_key or ""):
+    cur_idx = getattr(self, '_job_orig_to_cur', {}).get(orig_idx, orig_idx)
+    if step_key and 0 <= cur_idx < len(self._workflow.jobs):
+        step_statuses = self._workflow.jobs[cur_idx].step_statuses or {}
+
+        if step_statuses.get(step_key) != "running":
             return
-    if 0 <= orig_idx < self.table.rowCount():
-        self._set_row_progress(orig_idx, pct)
-    if 0 <= orig_idx < len(self._workflow.jobs):
-        job = self._workflow.jobs[orig_idx]
+    if 0 <= cur_idx < self.table.rowCount():
+        self._set_row_progress(cur_idx, pct)
+    if 0 <= cur_idx < len(self._workflow.jobs):
+        job = self._workflow.jobs[cur_idx]
         job.progress_pct = pct
         overall_pct = _compute_job_overall_progress(job, job.resume_status or job.status, pct)
         job.overall_progress_pct = overall_pct
         if _is_active_job_status(job.resume_status or job.status):
-            _touch_job_duration(self, orig_idx)
-        if 0 <= orig_idx < self.table.rowCount():
-            self._set_row_job_progress(orig_idx, overall_pct)
-            self._set_row_duration(orig_idx, job.run_elapsed_seconds)
+            _touch_job_duration(self, cur_idx)
+        if 0 <= cur_idx < self.table.rowCount():
+            self._set_row_job_progress(cur_idx, overall_pct)
+            self._set_row_duration(cur_idx, job.run_elapsed_seconds)
 
 
 @Slot(int, str)
 def _on_source_status(self, orig_idx: int, status: str):
-    if 0 <= orig_idx < len(self._workflow.jobs):
-        self._workflow.jobs[orig_idx].transfer_status = status
+    cur_idx = getattr(self, '_job_orig_to_cur', {}).get(orig_idx, orig_idx)
+    if 0 <= cur_idx < len(self._workflow.jobs):
+        self._workflow.jobs[cur_idx].transfer_status = status
 
 
 @Slot(int, int)
 def _on_source_progress(self, orig_idx: int, pct: int):
-    if 0 <= orig_idx < len(self._workflow.jobs):
-        job = self._workflow.jobs[orig_idx]
+    cur_idx = getattr(self, '_job_orig_to_cur', {}).get(orig_idx, orig_idx)
+    if 0 <= cur_idx < len(self._workflow.jobs):
+        job = self._workflow.jobs[cur_idx]
         job.transfer_progress_pct = pct
         current_step = job.current_step_key or "transfer"
         if current_step in {"", "transfer"}:
-            _touch_job_duration(self, orig_idx)
+            _touch_job_duration(self, cur_idx)
             job.progress_pct = pct
             overall_pct = _compute_job_overall_progress(job, job.resume_status or job.status, pct)
             job.overall_progress_pct = overall_pct
-            if 0 <= orig_idx < self.table.rowCount():
-                self._set_row_progress(orig_idx, pct)
-                self._set_row_job_progress(orig_idx, overall_pct)
+            if 0 <= cur_idx < self.table.rowCount():
+                self._set_row_progress(cur_idx, pct)
+                self._set_row_job_progress(cur_idx, overall_pct)
 
 
 @Slot(str, str, float, float, float)
@@ -440,6 +450,7 @@ def _on_workflow_done(self, ok: int, skip: int, fail: int):
         self._wf_thread.wait()
         self._wf_thread = None
         self._wf_executor = None
+    self._job_orig_to_cur = {}
     if hasattr(self, "_duration_timer"):
         self._duration_timer.stop()
 

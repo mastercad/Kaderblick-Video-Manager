@@ -29,6 +29,7 @@ from ..workflow import (
     increment_workflow_name,
     normalize_workflow_name,
 )
+from ..workflow.graph import graph_reachable_types
 from .job_editor import JobEditorDialog
 
 
@@ -48,7 +49,8 @@ def _summarize_source(job: WorkflowJob) -> str:
 
 
 def _summarize_processing(job: WorkflowJob) -> str:
-    if not job.convert_enabled:
+    reachable = graph_reachable_types(job)
+    if not reachable or "convert" not in reachable:
         return "keine Konvertierung"
     from ..media.encoder import encoder_display_name
     enc = encoder_display_name(job.encoder)
@@ -67,10 +69,11 @@ def _summarize_audio(job: WorkflowJob) -> str:
 
 
 def _summarize_youtube(job: WorkflowJob) -> str:
+    reachable = graph_reachable_types(job)
     parts = []
-    if job.create_youtube_version:
+    if "yt_version" in reachable:
         parts.append("YT-Version")
-    if job.upload_youtube:
+    if "youtube_upload" in reachable:
         parts.append("Upload")
     return " + ".join(parts) if parts else "—"
 
@@ -386,9 +389,10 @@ class WorkflowDialog(QDialog):
         for job in active_jobs:
             parts = [f"<b>{job.name}</b>"]
             parts.append(_summarize_source(job))
-            if not job.convert_enabled:
+            reachable = graph_reachable_types(job)
+            if "convert" not in reachable:
                 parts.append("ohne Konvertierung")
-            if job.upload_youtube:
+            if "youtube_upload" in reachable:
                 parts.append("→ YouTube")
             summary_lines.append(f"<li>{'  ·  '.join(parts)}</li>")
         summary_lines.append("</ul>")

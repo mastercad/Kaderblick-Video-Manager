@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QApplication
 
 from src import settings as settings_module
 from src.settings import DeviceSettings
+from src.settings.model import VideoSettings
 from src.workflow import WorkflowJob
 from src.workflow_steps.executor_support import ExecutorSupport
 from src.ui.dialogs import CameraSettingsDialog, GeneralSettingsDialog, KaderblickSettingsDialog
@@ -496,3 +497,31 @@ class TestGeneralSettingsDialog:
         assert metadata["playlist"] == "22.03.2026 | Pokal | FC Heim vs FC Gast"
         assert "Sportplatz Mitte" in metadata["description"]
         assert ExecutorSupport.resolve_kaderblick_game_id(settings, job) == "4711"
+
+
+class TestVideoSettingsApplyProfile:
+    def test_apply_known_profile_changes_video_fields(self):
+        vs = VideoSettings()
+        vs.apply_profile("Schnell")
+
+        assert vs.preset == "veryfast"
+        assert vs.profile == "Schnell"
+
+    def test_apply_known_profile_sets_all_profile_values(self):
+        vs = VideoSettings()
+        vs.apply_profile("Ausgewogen")
+
+        assert vs.preset == "medium"
+        assert vs.crf == 20
+        assert vs.profile == "Ausgewogen"
+
+    def test_apply_unknown_profile_leaves_settings_unchanged(self):
+        vs = VideoSettings()
+        original_preset = vs.preset
+        original_crf = vs.crf
+
+        vs.apply_profile("DoesNotExist")
+
+        assert vs.preset == original_preset
+        assert vs.crf == original_crf
+        assert vs.profile == "Benutzerdefiniert"

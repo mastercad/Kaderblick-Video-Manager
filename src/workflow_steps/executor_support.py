@@ -135,28 +135,6 @@ class ExecutorSupport:
         return bool(graph_node_map(job))
 
     @staticmethod
-    def _fallback_step_enabled(job: WorkflowJob, target_type: str) -> bool:
-        if target_type == "convert":
-            return bool(job.convert_enabled)
-        if target_type == "titlecard":
-            return bool(job.title_card_enabled)
-        if target_type == "cleanup":
-            return False
-        if target_type == "repair":
-            return False
-        if target_type == "yt_version":
-            return bool(job.create_youtube_version)
-        if target_type == "stop":
-            return False
-        if target_type == "youtube_upload":
-            return bool(job.upload_youtube)
-        if target_type == "kaderblick":
-            return bool(job.upload_youtube and job.upload_kaderblick)
-        if target_type == "merge":
-            return any(getattr(entry, "merge_group_id", "") for entry in job.files)
-        return False
-
-    @staticmethod
     def files_for_source(job: WorkflowJob, source_node_id: str) -> list[FileEntry]:
         matching = [entry for entry in job.files if entry.graph_source_id == source_node_id]
         if matching:
@@ -363,8 +341,6 @@ class ExecutorSupport:
 
     @classmethod
     def source_reaches_type(cls, job: WorkflowJob, file_path: str, target_type: str) -> bool:
-        if not cls._has_graph(job):
-            return cls._fallback_step_enabled(job, target_type)
         source_node_id = cls.source_node_id_for_file(job, file_path)
         if source_node_id:
             return graph_node_reaches_type(job, source_node_id, target_type)
@@ -382,8 +358,6 @@ class ExecutorSupport:
         target_type: str,
         branch_results: dict[str, str] | None = None,
     ) -> bool:
-        if not cls._has_graph(job):
-            return cls._fallback_step_enabled(job, target_type)
         if not start_node_id:
             return target_type in graph_reachable_types(job)
         if cls.node_type(job, start_node_id) == target_type:
@@ -397,20 +371,16 @@ class ExecutorSupport:
         node_id: str,
         branch_results: dict[str, str] | None = None,
     ) -> list[str]:
-        if not cls._has_graph(job) or not node_id:
+        if not node_id:
             return []
         return graph_direct_targets(job, node_id, branch_results)
 
     @staticmethod
     def merge_reaches_type(job: WorkflowJob, target_type: str) -> bool:
-        if not ExecutorSupport._has_graph(job):
-            return ExecutorSupport._fallback_step_enabled(job, target_type)
         return graph_merge_reaches_type(job, target_type)
 
     @classmethod
     def source_reaches_type_before_merge(cls, job: WorkflowJob, file_path: str, target_type: str) -> bool:
-        if not cls._has_graph(job):
-            return False
         source_node_id = cls.source_node_id_for_file(job, file_path)
         if not source_node_id:
             return False
@@ -418,8 +388,6 @@ class ExecutorSupport:
 
     @staticmethod
     def job_reaches_type(job: WorkflowJob, target_type: str) -> bool:
-        if not ExecutorSupport._has_graph(job):
-            return ExecutorSupport._fallback_step_enabled(job, target_type)
         return target_type in graph_reachable_types(job)
 
     @staticmethod
@@ -465,8 +433,6 @@ class ExecutorSupport:
     @classmethod
     def prepared_output_reaches_type(cls, prepared: Any, target_type: str) -> bool:
         job = prepared.job
-        if not cls._has_graph(job):
-            return cls._fallback_step_enabled(job, target_type)
         branch_results = getattr(prepared, "validation_results", {}) or {}
         start_node_id = cls._prepared_output_start_node_id(prepared)
         if start_node_id:
@@ -478,8 +444,6 @@ class ExecutorSupport:
     @classmethod
     def advance_prepared_output_cursor(cls, prepared: Any, step_name: str) -> None:
         job = prepared.job
-        if not cls._has_graph(job):
-            return
         start_node_id = cls._prepared_output_start_node_id(prepared)
         if not start_node_id:
             return

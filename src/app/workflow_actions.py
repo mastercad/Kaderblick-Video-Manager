@@ -93,6 +93,21 @@ def _clear_workflow(self):
             QMessageBox.Yes | QMessageBox.No,
         ) == QMessageBox.Yes:
             del self._workflow.jobs[row]
+            # Keep the executor's orig_idx → current-index mapping in sync so
+            # that status/progress signals still reach the correct row/job after
+            # the deletion shifts higher indices down by one.
+            if hasattr(self, "_job_orig_to_cur") and self._job_orig_to_cur:
+                self._job_orig_to_cur = {
+                    orig: (cur - 1 if cur > row else cur)
+                    for orig, cur in self._job_orig_to_cur.items()
+                    if cur != row
+                }
+            if hasattr(self, "_active_run_indices"):
+                self._active_run_indices = {
+                    idx - (1 if idx > row else 0)
+                    for idx in self._active_run_indices
+                    if idx != row
+                }
             if not self._workflow.jobs:
                 self._workflow.name = ""
             self._refresh_table()

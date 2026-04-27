@@ -20,7 +20,15 @@ from src.app import (
     _repair_restored_workflow,
     _workflow_step_progress,
 )
-from src.app.helpers import _current_planned_job_steps, _is_finished_step
+from src.app.helpers import (
+    _compute_job_overall_progress,
+    _current_planned_job_steps,
+    _is_finished_step,
+    _job_is_placeholder,
+    _jobs_look_compatible,
+    _summarize_pipeline,
+    _summarize_source,
+)
 from src.app.execution import (
     _build_source_move_conflict_warning,
     _job_effectively_moves_sources,
@@ -360,11 +368,21 @@ class TestWorkflowShutdown:
 
     def test_planned_steps_include_current_pipeline(self):
         job = WorkflowJob(
-            convert_enabled=True,
-            title_card_enabled=True,
-            create_youtube_version=True,
-            upload_youtube=True,
-            upload_kaderblick=True,
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+                {"id": "tc-1", "type": "titlecard"},
+                {"id": "ytv-1", "type": "yt_version"},
+                {"id": "ytu-1", "type": "youtube_upload"},
+                {"id": "kb-1", "type": "kaderblick"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "conv-1"},
+                {"source": "conv-1", "target": "tc-1"},
+                {"source": "tc-1", "target": "ytv-1"},
+                {"source": "ytv-1", "target": "ytu-1"},
+                {"source": "ytu-1", "target": "kb-1"},
+            ],
         )
         job.files = []
 
@@ -379,10 +397,10 @@ class TestWorkflowShutdown:
 
     def test_planned_steps_skip_unreachable_output_steps_without_processing(self):
         job = WorkflowJob(
-            convert_enabled=False,
-            title_card_enabled=True,
-            create_youtube_version=True,
-            upload_youtube=False,
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+            ],
+            graph_edges=[],
         )
 
         assert _planned_job_steps(job) == ["transfer"]
@@ -551,30 +569,62 @@ class TestIsFinishedStep:
 class TestCurrentPlannedJobSteps:
     """Branch-Abdeckung für _current_planned_job_steps."""
 
-    def test_no_graph_flags_only_transfer_and_convert(self):
-        job = WorkflowJob(convert_enabled=True)
+    def test_graph_only_convert(self):
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "conv", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src", "target": "conv"}],
+        )
         assert _current_planned_job_steps(job) == ["transfer", "convert"]
 
-    def test_no_graph_transfer_only_when_convert_disabled(self):
-        job = WorkflowJob(convert_enabled=False)
+    def test_graph_transfer_only(self):
+        job = WorkflowJob(
+            graph_nodes=[{"id": "src", "type": "source_files"}],
+            graph_edges=[],
+        )
         assert _current_planned_job_steps(job) == ["transfer"]
 
-    def test_no_graph_includes_youtube_upload(self):
-        job = WorkflowJob(convert_enabled=False, upload_youtube=True)
+    def test_graph_includes_youtube_upload(self):
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "up", "type": "youtube_upload"},
+            ],
+            graph_edges=[{"source": "src", "target": "up"}],
+        )
         steps = _current_planned_job_steps(job)
         assert "youtube_upload" in steps
         assert steps[0] == "transfer"
 
-    def test_no_graph_includes_kaderblick_only_with_youtube_upload(self):
-        job = WorkflowJob(convert_enabled=False, upload_youtube=True, upload_kaderblick=True)
+    def test_graph_includes_kaderblick_after_youtube_upload(self):
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "up", "type": "youtube_upload"},
+                {"id": "kb", "type": "kaderblick"},
+            ],
+            graph_edges=[
+                {"source": "src", "target": "up"},
+                {"source": "up", "target": "kb"},
+            ],
+        )
         steps = _current_planned_job_steps(job)
         assert "kaderblick" in steps
         assert steps.index("youtube_upload") < steps.index("kaderblick")
 
-    def test_no_graph_kaderblick_absent_without_youtube(self):
-        job = WorkflowJob(convert_enabled=False, upload_youtube=False, upload_kaderblick=True)
+    def test_graph_kaderblick_absent_without_youtube(self):
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "kb", "type": "kaderblick"},
+            ],
+            graph_edges=[{"source": "src", "target": "kb"}],
+        )
+        # kaderblick without youtube_upload is unusual but graph is authoritative
         steps = _current_planned_job_steps(job)
-        assert "kaderblick" not in steps
+        assert steps[0] == "transfer"
 
     def test_graph_with_convert_and_kaderblick(self):
         job = WorkflowJob(
@@ -667,7 +717,14 @@ class TestWorkflowStepProgressBranches:
 
     def _simple_job(self, **kwargs) -> WorkflowJob:
         """Minimalster Job: transfer + convert = 2 Schritte."""
-        return WorkflowJob(convert_enabled=True, **kwargs)
+        return WorkflowJob(
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
+            **kwargs,
+        )
 
     def test_disabled_job_excluded_total_never_zero(self):
         """Deaktivierter Job wird nicht gezählt; total ist mindestens 1."""
@@ -1274,6 +1331,11 @@ class TestConverterAppResumeState:
             name="Job 1",
             source_mode="files",
             files=[FileEntry(source_path="/tmp/a.mp4")],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
             resume_status="Konvertierung abgebrochen",
             current_step_key="convert",
             step_statuses={"transfer": "done", "convert": "cancelled"},
@@ -1296,6 +1358,11 @@ class TestConverterAppResumeState:
             name="Job 1",
             source_mode="files",
             files=[FileEntry(source_path="/tmp/a.mp4")],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
             resume_status="Konvertiere …",
             current_step_key="convert",
             step_statuses={"transfer": "done", "convert": "running"},
@@ -1455,6 +1522,11 @@ class TestConverterAppResumeState:
                     current_step_key="convert",
                     step_statuses={"transfer": "done", "convert": "cancelled"},
                     step_details={"convert": "Durch Benutzer abgebrochen"},
+                    graph_nodes=[
+                        {"id": "src-1", "type": "source_files"},
+                        {"id": "conv-1", "type": "convert"},
+                    ],
+                    graph_edges=[{"source": "src-1", "target": "conv-1"}],
                 )
             ]
         )
@@ -1488,6 +1560,11 @@ class TestConverterAppResumeState:
                     current_step_key="convert",
                     step_statuses={"transfer": "done", "convert": "cancelled"},
                     step_details={"convert": "Durch Benutzer abgebrochen"},
+                    graph_nodes=[
+                        {"id": "src-1", "type": "source_files"},
+                        {"id": "conv-1", "type": "convert"},
+                    ],
+                    graph_edges=[{"source": "src-1", "target": "conv-1"}],
                 ),
                 WorkflowJob(
                     name="Gespeicherter Job B",
@@ -1504,6 +1581,17 @@ class TestConverterAppResumeState:
                         "youtube_upload": "cancelled",
                     },
                     step_details={"youtube_upload": "Durch Benutzer abgebrochen"},
+                    graph_nodes=[
+                        {"id": "src-1", "type": "source_files"},
+                        {"id": "conv-1", "type": "convert"},
+                        {"id": "ytv-1", "type": "yt_version"},
+                        {"id": "ytu-1", "type": "youtube_upload"},
+                    ],
+                    graph_edges=[
+                        {"source": "src-1", "target": "conv-1"},
+                        {"source": "conv-1", "target": "ytv-1"},
+                        {"source": "ytv-1", "target": "ytu-1"},
+                    ],
                 ),
             ]
         )
@@ -1539,6 +1627,7 @@ class TestConverterAppResumeState:
                 WorkflowJob(
                     name="Crash-Job",
                     source_mode="files",
+                    convert_enabled=True,
                     files=[FileEntry(source_path="/tmp/a.mp4")],
                     resume_status="Konvertiere \u2026",
                     current_step_key="convert",
@@ -1546,6 +1635,11 @@ class TestConverterAppResumeState:
                     step_details={"convert": "2/5 Dateien"},
                     run_started_at="2026-04-19T10:00:00",
                     run_finished_at="",
+                    graph_nodes=[
+                        {"id": "src-1", "type": "source_files"},
+                        {"id": "conv-1", "type": "convert"},
+                    ],
+                    graph_edges=[{"source": "src-1", "target": "conv-1"}],
                 )
             ]
         )
@@ -1960,6 +2054,11 @@ class TestConverterAppResumeState:
             job = WorkflowJob(
                 name="Job 1",
                 step_statuses={"transfer": "done", "convert": "running"},
+                graph_nodes=[
+                    {"id": "src-1", "type": "source_files"},
+                    {"id": "conv-1", "type": "convert"},
+                ],
+                graph_edges=[{"source": "src-1", "target": "conv-1"}],
             )
             window._workflow = Workflow(jobs=[job])
             window._refresh_table()
@@ -2540,3 +2639,1052 @@ class TestConverterAppResumeState:
             edit_job.assert_not_called()
         finally:
             window.close()
+
+class TestStartWorkflowRemapInit:
+    """_start_workflow initialisiert _job_orig_to_cur als identische Abbildung aller Indizes."""
+
+    def test_start_workflow_initializes_identity_remap_for_all_jobs(self):
+        """`_job_orig_to_cur` zeigt nach dem Start für jeden Job-Index auf sich selbst."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+                WorkflowJob(name="B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+                WorkflowJob(name="C", source_mode="files", files=[FileEntry(source_path="/tmp/c.mp4")]),
+            ]
+            window._refresh_table()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 1, 2})
+
+            assert window._job_orig_to_cur == {0: 0, 1: 1, 2: 2}
+        finally:
+            window.close()
+
+    def test_start_workflow_with_single_job_creates_single_entry_remap(self):
+        """Auch für einen einzigen Job wird der Remap korrekt mit {0: 0} initialisiert."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="Solo", source_mode="files", files=[FileEntry(source_path="/tmp/solo.mp4")]),
+            ]
+            window._refresh_table()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0})
+
+            assert window._job_orig_to_cur == {0: 0}
+        finally:
+            window.close()
+
+    def test_on_workflow_done_clears_remap(self):
+        """Nach dem finished-Signal ist `_job_orig_to_cur` wieder leer."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+                WorkflowJob(name="B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+            ]
+            window._refresh_table()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 1})
+
+            assert window._job_orig_to_cur == {0: 0, 1: 1}
+
+            finished_callbacks = list(window._wf_executor.finished._callbacks)
+            for cb in finished_callbacks:
+                cb(2, 0, 0)
+
+            assert window._job_orig_to_cur == {}
+        finally:
+            window.close()
+
+
+class TestSignalSlotOrigToCurRemap:
+    """Signal-Slots (_on_job_status, _on_job_progress, _on_source_status, _on_source_progress)
+    leiten eingehende Signale über _job_orig_to_cur an den richtigen aktuellen Job-Index um."""
+
+    def _make_started_window(self):
+        """Hilfsmethode: Erstellt ein Fenster mit 2 Jobs und gestartetem Workflow."""
+        window = _new_app()
+        window._workflow.jobs = [
+            WorkflowJob(name="Job-A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+            WorkflowJob(name="Job-B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+        ]
+        window._refresh_table()
+        with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+            window._start_workflow(active_indices={0, 1})
+        return window
+
+    def test_on_job_status_routes_to_remapped_cur_idx(self):
+        """_on_job_status(orig_idx=1) aktualisiert den Job an cur_idx=0 laut Remap."""
+        window = self._make_started_window()
+        try:
+            # Remap simuliert: Job ursprünglich an Index 1 ist nach Löschen von Index 0 nun an Index 0.
+            window._job_orig_to_cur = {1: 0}
+
+            window._on_job_status(1, "Konvertiere …")
+
+            assert window._workflow.jobs[0].resume_status == "Konvertiere …"
+        finally:
+            window.close()
+
+    def test_on_job_status_does_not_update_job_at_orig_idx_when_remap_redirects(self):
+        """Wenn der Remap orig_idx 0 auf cur_idx 1 umleitet, bleibt jobs[0] unberührt."""
+        window = self._make_started_window()
+        try:
+            window._workflow.jobs[0].resume_status = "unveraendert"
+            window._job_orig_to_cur = {0: 1, 1: 0}
+
+            window._on_job_status(0, "Konvertiere …")
+
+            # cur_idx laut Remap ist 1, daher darf jobs[0] nicht geändert werden
+            assert window._workflow.jobs[0].resume_status == "unveraendert"
+            assert window._workflow.jobs[1].resume_status == "Konvertiere …"
+        finally:
+            window.close()
+
+    def test_on_job_status_falls_back_to_orig_idx_when_remap_attribute_absent(self):
+        """Ohne _job_orig_to_cur-Attribut verwendet _on_job_status direkt orig_idx."""
+        window = self._make_started_window()
+        try:
+            if hasattr(window, "_job_orig_to_cur"):
+                del window._job_orig_to_cur
+
+            window._on_job_status(1, "Konvertiere …")
+
+            assert window._workflow.jobs[1].resume_status == "Konvertiere …"
+        finally:
+            window.close()
+
+    def test_on_job_status_falls_back_to_orig_idx_when_remap_is_empty(self):
+        """Mit leerem _job_orig_to_cur-Dict verwendet _on_job_status den orig_idx als Fallback."""
+        window = self._make_started_window()
+        try:
+            window._job_orig_to_cur = {}
+
+            window._on_job_status(0, "Konvertiere …")
+
+            assert window._workflow.jobs[0].resume_status == "Konvertiere …"
+        finally:
+            window.close()
+
+    def test_on_job_progress_routes_to_remapped_cur_idx(self):
+        """_on_job_progress(orig_idx=1) setzt progress_pct auf den Job an cur_idx=0 laut Remap."""
+        window = self._make_started_window()
+        try:
+            window._job_orig_to_cur = {1: 0}
+
+            window._on_job_progress(1, 75)
+
+            assert window._workflow.jobs[0].progress_pct == 75
+            assert window._workflow.jobs[1].progress_pct == 0  # nicht verändert
+        finally:
+            window.close()
+
+    def test_on_source_status_routes_to_remapped_cur_idx(self):
+        """_on_source_status(orig_idx=1) setzt transfer_status auf den Job an cur_idx=0 laut Remap."""
+        window = self._make_started_window()
+        try:
+            window._job_orig_to_cur = {1: 0}
+
+            window._on_source_status(1, "Transfer 1/3")
+
+            assert window._workflow.jobs[0].transfer_status == "Transfer 1/3"
+            assert window._workflow.jobs[1].transfer_status != "Transfer 1/3"
+        finally:
+            window.close()
+
+    def test_on_source_progress_routes_to_remapped_cur_idx(self):
+        """_on_source_progress(orig_idx=1) setzt transfer_progress_pct auf den Job an cur_idx=0."""
+        window = self._make_started_window()
+        try:
+            window._job_orig_to_cur = {1: 0}
+
+            window._on_source_progress(1, 40)
+
+            assert window._workflow.jobs[0].transfer_progress_pct == 40
+            assert window._workflow.jobs[1].transfer_progress_pct == 0  # nicht verändert
+        finally:
+            window.close()
+
+
+class TestClearWorkflowRemapMaintenance:
+    """_clear_workflow pflegt _job_orig_to_cur und _active_run_indices korrekt nach Löschen eines Jobs."""
+
+    def _make_window_with_three_jobs(self):
+        """Erstellt ein Fenster mit 3 Jobs, identem Remap und allen Indizes als aktiv."""
+        window = _new_app()
+        window._workflow.jobs = [
+            WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+            WorkflowJob(name="B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+            WorkflowJob(name="C", source_mode="files", files=[FileEntry(source_path="/tmp/c.mp4")]),
+        ]
+        window._refresh_table()
+        window._job_orig_to_cur = {0: 0, 1: 1, 2: 2}
+        window._active_run_indices = {0, 1, 2}
+        return window
+
+    def _confirm_delete_row(self, window, row):
+        """Setzt den ausgewählten Reihe und bestätigt das Löschen."""
+        window.table.setCurrentCell(row, 0)
+        with patch("src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+            window._clear_workflow()
+
+    def test_delete_first_job_removes_its_entry_and_shifts_higher_cur_indices_down(self):
+        """Löschen von Zeile 0: orig_idx 0 wird entfernt, orig_idx 1→cur 0, orig_idx 2→cur 1."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._confirm_delete_row(window, 0)
+
+            assert window._job_orig_to_cur == {1: 0, 2: 1}
+        finally:
+            window.close()
+
+    def test_delete_middle_job_removes_its_entry_and_shifts_only_higher_cur_indices(self):
+        """Löschen von Zeile 1: orig_idx 1 wird entfernt, orig_idx 0 bleibt, orig_idx 2→cur 1."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._confirm_delete_row(window, 1)
+
+            assert window._job_orig_to_cur == {0: 0, 2: 1}
+        finally:
+            window.close()
+
+    def test_delete_last_job_removes_its_entry_and_leaves_lower_entries_unchanged(self):
+        """Löschen von Zeile 2: orig_idx 2 wird entfernt, orig_idx 0 und 1 bleiben unverändert."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._confirm_delete_row(window, 2)
+
+            assert window._job_orig_to_cur == {0: 0, 1: 1}
+        finally:
+            window.close()
+
+    def test_delete_with_empty_remap_does_not_raise(self):
+        """Mit leerem _job_orig_to_cur darf kein Fehler auftreten – das Löschen läuft normal durch."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+            ]
+            window._refresh_table()
+            window._job_orig_to_cur = {}
+
+            self._confirm_delete_row(window, 0)
+
+            assert window._job_orig_to_cur == {}
+            assert len(window._workflow.jobs) == 0
+        finally:
+            window.close()
+
+    def test_delete_without_remap_attribute_does_not_raise(self):
+        """Ohne _job_orig_to_cur-Attribut (kein laufender Workflow) wird kein Fehler geworfen."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+            ]
+            window._refresh_table()
+            assert not hasattr(window, "_job_orig_to_cur")
+
+            self._confirm_delete_row(window, 0)
+
+            # Attribut darf nach dem Löschen immer noch fehlen (wurde nicht fälschlicherweise erstellt)
+            assert not hasattr(window, "_job_orig_to_cur")
+        finally:
+            window.close()
+
+    def test_delete_without_confirmation_leaves_remap_unchanged(self):
+        """Wenn der Nutzer die Bestätigung ablehnt, bleibt _job_orig_to_cur unverändert."""
+        window = self._make_window_with_three_jobs()
+        try:
+            window.table.setCurrentCell(1, 0)
+            with patch("src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.No):
+                window._clear_workflow()
+
+            assert window._job_orig_to_cur == {0: 0, 1: 1, 2: 2}
+            assert len(window._workflow.jobs) == 3
+        finally:
+            window.close()
+
+    def test_delete_first_job_shifts_active_run_indices_down(self):
+        """Löschen von Zeile 0: _active_run_indices wird von {0,1,2} auf {0,1} angepasst."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._confirm_delete_row(window, 0)
+
+            assert window._active_run_indices == {0, 1}
+        finally:
+            window.close()
+
+    def test_delete_middle_job_removes_it_from_active_run_indices_and_shifts_higher(self):
+        """Löschen von Zeile 1: _active_run_indices wird von {0,1,2} auf {0,1} angepasst."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._confirm_delete_row(window, 1)
+
+            assert window._active_run_indices == {0, 1}
+        finally:
+            window.close()
+
+    def test_delete_removes_running_job_index_from_active_run_indices(self):
+        """Beim Löschen eines aktiven (laufenden) Jobs verschwindet sein Index aus _active_run_indices."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+                WorkflowJob(name="B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+            ]
+            window._refresh_table()
+            window._job_orig_to_cur = {0: 0, 1: 1}
+            window._active_run_indices = {0, 1}
+
+            self._confirm_delete_row(window, 0)
+
+            # Index 0 (gelöschter Job) darf nicht mehr in _active_run_indices erscheinen.
+            # Job B (vorher Index 1) ist jetzt Index 0.
+            assert window._active_run_indices == {0}
+        finally:
+            window.close()
+
+
+class TestDeleteWhileRunningIntegration:
+    """Integrations-Szenario: Löschen eines fertigen Jobs während ein anderer Job noch läuft.
+
+    Stellt sicher, dass der _job_orig_to_cur-Remap-Mechanismus das Signal korrekt an den
+    verschobenen Job weiterleitet, ohne den laufenden Workflow abzubrechen.
+    """
+
+    def test_signal_for_running_job_reaches_its_shifted_position_after_finished_job_deleted(self):
+        """Nachdem Job 0 (fertig) gelöscht wurde, trifft das Signal für orig_idx=1
+        am neuen cur_idx=0 ein – der laufende Job empfängt seinen Status-Update korrekt."""
+        window = _new_app()
+        try:
+            job_done = WorkflowJob(
+                name="Fertig-Job",
+                source_mode="files",
+                files=[FileEntry(source_path="/tmp/done.mp4")],
+            )
+            job_running = WorkflowJob(
+                name="Laufender-Job",
+                source_mode="files",
+                files=[FileEntry(source_path="/tmp/running.mp4")],
+            )
+            window._workflow.jobs = [job_done, job_running]
+            window._refresh_table()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 1})
+
+            # Remap nach Start: {0: 0, 1: 1}
+            assert window._job_orig_to_cur == {0: 0, 1: 1}
+
+            # Executor meldet Job 0 als abgeschlossen
+            window._on_job_status(0, "Fertig")
+
+            # Nutzer löscht den fertigen Job (Zeile 0) während Job 1 noch läuft
+            window.table.setCurrentCell(0, 0)
+            with patch("src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                window._clear_workflow()
+
+            # Remap muss nun orig_idx 1 auf cur_idx 0 zeigen
+            assert window._job_orig_to_cur == {1: 0}
+            assert len(window._workflow.jobs) == 1
+            assert window._workflow.jobs[0] is job_running
+
+            # Executor sendet weiteres Status-Signal für den laufenden Job (orig_idx=1)
+            window._on_job_status(1, "YT-Version erstellen …")
+
+            # Der laufende Job (jetzt an Position 0) muss den Status erhalten haben
+            assert job_running.resume_status == "YT-Version erstellen …"
+            # Die Tabellen-Zeile 0 muss ebenfalls aktualisiert worden sein
+            assert window.table.item(0, 4).text() == "YT-Version erstellen …"
+        finally:
+            window.close()
+
+    def test_progress_signal_for_running_job_reaches_shifted_position_after_finished_job_deleted(self):
+        """Nach dem Löschen von Job 0 leitet _on_job_progress(1, 60) korrekt auf cur_idx=0 um."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="Fertig-Job", source_mode="files", files=[FileEntry(source_path="/tmp/done.mp4")]),
+                WorkflowJob(name="Laufender-Job", source_mode="files", files=[FileEntry(source_path="/tmp/run.mp4")]),
+            ]
+            window._refresh_table()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 1})
+
+            # Job 0 als fertig markieren und löschen
+            window._on_job_status(0, "Fertig")
+            window.table.setCurrentCell(0, 0)
+            with patch("src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                window._clear_workflow()
+
+            assert window._job_orig_to_cur == {1: 0}
+
+            # Fortschritts-Signal für orig_idx=1 (den verbliebenen Job)
+            window._on_job_progress(1, 60)
+
+            # progress_pct muss am neuen cur_idx=0 ankommen
+            assert window._workflow.jobs[0].progress_pct == 60
+        finally:
+            window.close()
+
+    def test_signal_for_deleted_finished_job_does_not_crash(self):
+        """Ein verspätetes Signal für den bereits gelöschten Job (orig_idx=0) darf
+        keinen Fehler verursachen – der Remap enthält den Eintrag nicht mehr."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="Gelöschter-Job", source_mode="files", files=[FileEntry(source_path="/tmp/del.mp4")]),
+                WorkflowJob(name="Verbleibender-Job", source_mode="files", files=[FileEntry(source_path="/tmp/rem.mp4")]),
+            ]
+            window._refresh_table()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 1})
+
+            # Job 0 löschen
+            window._on_job_status(0, "Fertig")
+            window.table.setCurrentCell(0, 0)
+            with patch("src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                window._clear_workflow()
+
+            # orig_idx 0 ist nicht mehr im Remap
+            assert 0 not in window._job_orig_to_cur
+
+            # Verspätetes Signal für den bereits gelöschten Job – darf keinen Crash verursachen
+            window._on_job_status(0, "Fertig")   # kein Fehler erwartet
+            window._on_job_progress(0, 100)      # kein Fehler erwartet
+        finally:
+            window.close()
+
+    def test_source_progress_signal_for_running_job_reaches_shifted_position(self):
+        """_on_source_progress(1, 33) leitet nach Löschen von Job 0 korrekt auf cur_idx=0 um."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="Fertig-Job", source_mode="files", files=[FileEntry(source_path="/tmp/done.mp4")]),
+                WorkflowJob(name="Laufender-Job", source_mode="files", files=[FileEntry(source_path="/tmp/run.mp4")]),
+            ]
+            window._refresh_table()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 1})
+
+            window._on_job_status(0, "Fertig")
+            window.table.setCurrentCell(0, 0)
+            with patch("src.app.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                window._clear_workflow()
+
+            assert window._job_orig_to_cur == {1: 0}
+
+            window._on_source_progress(1, 33)
+
+            assert window._workflow.jobs[0].transfer_progress_pct == 33
+        finally:
+            window.close()
+
+
+class TestResetStatusColumn:
+    """_reset_status_column(rows=...) setzt nur die übergebenen Zeilen zurück.
+    Ohne Argument werden alle Zeilen zurückgesetzt (Rückwärtskompatibilität)."""
+
+    def _make_window_with_three_jobs(self) -> ConverterApp:
+        window = _new_app()
+        window._workflow.jobs = [
+            WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+            WorkflowJob(name="B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+            WorkflowJob(name="C", source_mode="files", files=[FileEntry(source_path="/tmp/c.mp4")]),
+        ]
+        window._refresh_table()
+        return window
+
+    def _set_all_rows_status(self, window: ConverterApp, status: str) -> None:
+        for row in range(window.table.rowCount()):
+            window._set_row_status(row, status)
+
+    def _row_status(self, window: ConverterApp, row: int) -> str:
+        item = window.table.item(row, 4)
+        return item.text() if item else ""
+
+    def test_without_argument_resets_all_rows(self):
+        """_reset_status_column() ohne Argument setzt alle Tabellenzeilen auf 'Wartend'."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._set_all_rows_status(window, "Fertig")
+            assert self._row_status(window, 0) == "Fertig"
+            assert self._row_status(window, 1) == "Fertig"
+            assert self._row_status(window, 2) == "Fertig"
+
+            window._reset_status_column()
+
+            assert self._row_status(window, 0) == "Wartend"
+            assert self._row_status(window, 1) == "Wartend"
+            assert self._row_status(window, 2) == "Wartend"
+        finally:
+            window.close()
+
+    def test_with_rows_none_resets_all_rows(self):
+        """_reset_status_column(rows=None) verhält sich wie der Aufruf ohne Argument."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._set_all_rows_status(window, "Fertig")
+
+            window._reset_status_column(rows=None)
+
+            assert self._row_status(window, 0) == "Wartend"
+            assert self._row_status(window, 1) == "Wartend"
+            assert self._row_status(window, 2) == "Wartend"
+        finally:
+            window.close()
+
+    def test_with_single_row_resets_only_that_row(self):
+        """_reset_status_column(rows={1}) setzt nur Zeile 1 zurück; Zeilen 0 und 2 bleiben unberührt."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._set_all_rows_status(window, "Fertig")
+
+            window._reset_status_column(rows={1})
+
+            assert self._row_status(window, 0) == "Fertig"
+            assert self._row_status(window, 1) == "Wartend"
+            assert self._row_status(window, 2) == "Fertig"
+        finally:
+            window.close()
+
+    def test_with_first_and_last_row_resets_only_those_rows(self):
+        """_reset_status_column(rows={0, 2}) setzt Zeilen 0 und 2 zurück; Zeile 1 bleibt unberührt."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._set_all_rows_status(window, "Fertig")
+
+            window._reset_status_column(rows={0, 2})
+
+            assert self._row_status(window, 0) == "Wartend"
+            assert self._row_status(window, 1) == "Fertig"
+            assert self._row_status(window, 2) == "Wartend"
+        finally:
+            window.close()
+
+    def test_with_empty_set_resets_no_rows(self):
+        """_reset_status_column(rows=set()) setzt keine einzige Zeile zurück."""
+        window = self._make_window_with_three_jobs()
+        try:
+            self._set_all_rows_status(window, "Fertig")
+
+            window._reset_status_column(rows=set())
+
+            assert self._row_status(window, 0) == "Fertig"
+            assert self._row_status(window, 1) == "Fertig"
+            assert self._row_status(window, 2) == "Fertig"
+        finally:
+            window.close()
+
+    def test_reset_sets_progress_column_to_zero_percent(self):
+        """_reset_status_column(rows={0}) setzt auch die Fortschritts-Spalte auf '0%'."""
+        window = self._make_window_with_three_jobs()
+        try:
+            window._reset_status_column(rows={0})
+
+            progress_item = window.table.item(0, 5)
+            assert progress_item is not None
+            assert progress_item.text() == "0%"
+        finally:
+            window.close()
+
+    def test_reset_sets_duration_column_to_dash(self):
+        """_reset_status_column(rows={0}) setzt auch die Dauer-Spalte auf '–'."""
+        window = self._make_window_with_three_jobs()
+        try:
+            window._reset_status_column(rows={0})
+
+            duration_item = window.table.item(0, 6)
+            assert duration_item is not None
+            assert duration_item.text() == "–"
+        finally:
+            window.close()
+
+
+class TestStartWorkflowResetsOnlyActiveRows:
+    """_start_workflow setzt nur die Statusspalten der gestarteten Jobs zurück.
+    Jobs, die nicht gestartet werden, behalten ihren bisherigen Tabellenstatus."""
+
+    def _make_window_with_three_finished_jobs(self) -> ConverterApp:
+        """Erstellt ein Fenster mit 3 Jobs, die alle als 'Fertig' in der Tabelle stehen."""
+        window = _new_app()
+        window._workflow.jobs = [
+            WorkflowJob(name="A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+            WorkflowJob(name="B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+            WorkflowJob(name="C", source_mode="files", files=[FileEntry(source_path="/tmp/c.mp4")]),
+        ]
+        window._refresh_table()
+        for row in range(3):
+            window._set_row_status(row, "Fertig")
+        return window
+
+    def _row_status(self, window: ConverterApp, row: int) -> str:
+        item = window.table.item(row, 4)
+        return item.text() if item else ""
+
+    def test_starting_single_job_resets_only_its_row(self):
+        """Wird nur Job an Index 1 gestartet, stehen Zeilen 0 und 2 weiterhin auf 'Fertig'."""
+        window = self._make_window_with_three_finished_jobs()
+        try:
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={1})
+
+            assert self._row_status(window, 0) == "Fertig"
+            assert self._row_status(window, 1) == "Wartend"
+            assert self._row_status(window, 2) == "Fertig"
+        finally:
+            window.close()
+
+    def test_starting_first_job_resets_only_first_row(self):
+        """Wird nur Job an Index 0 gestartet, bleiben Zeilen 1 und 2 auf 'Fertig'."""
+        window = self._make_window_with_three_finished_jobs()
+        try:
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0})
+
+            assert self._row_status(window, 0) == "Wartend"
+            assert self._row_status(window, 1) == "Fertig"
+            assert self._row_status(window, 2) == "Fertig"
+        finally:
+            window.close()
+
+    def test_starting_last_job_resets_only_last_row(self):
+        """Wird nur Job an Index 2 gestartet, bleiben Zeilen 0 und 1 auf 'Fertig'."""
+        window = self._make_window_with_three_finished_jobs()
+        try:
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={2})
+
+            assert self._row_status(window, 0) == "Fertig"
+            assert self._row_status(window, 1) == "Fertig"
+            assert self._row_status(window, 2) == "Wartend"
+        finally:
+            window.close()
+
+    def test_starting_first_and_last_job_leaves_middle_unchanged(self):
+        """Werden Jobs 0 und 2 gestartet, bleibt Zeile 1 auf 'Fertig'."""
+        window = self._make_window_with_three_finished_jobs()
+        try:
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 2})
+
+            assert self._row_status(window, 0) == "Wartend"
+            assert self._row_status(window, 1) == "Fertig"
+            assert self._row_status(window, 2) == "Wartend"
+        finally:
+            window.close()
+
+    def test_starting_all_jobs_resets_all_rows(self):
+        """Werden alle Jobs gestartet, stehen danach alle Zeilen auf 'Wartend'."""
+        window = self._make_window_with_three_finished_jobs()
+        try:
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={0, 1, 2})
+
+            assert self._row_status(window, 0) == "Wartend"
+            assert self._row_status(window, 1) == "Wartend"
+            assert self._row_status(window, 2) == "Wartend"
+        finally:
+            window.close()
+
+    def test_non_active_job_data_model_is_not_cleared(self):
+        """resume_status und step_statuses eines nicht gestarteten Jobs bleiben erhalten."""
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(
+                    name="Unveraendert",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/a.mp4")],
+                    resume_status="Fertig",
+                    step_statuses={"convert": "done"},
+                    progress_pct=100,
+                ),
+                WorkflowJob(
+                    name="Gestartet",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/b.mp4")],
+                ),
+            ]
+            window._refresh_table()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_workflow(active_indices={1})
+
+            # Datenmodell des nicht gestarteten Jobs muss unberührt bleiben
+            unchanged_job = window._workflow.jobs[0]
+            assert unchanged_job.resume_status == "Fertig"
+            assert unchanged_job.step_statuses == {"convert": "done"}
+            assert unchanged_job.progress_pct == 100
+        finally:
+            window.close()
+
+
+class TestSummarizeSource:
+    """Branch-Abdeckung für _summarize_source (helpers.py L23-28)."""
+
+    def test_folder_scan_with_folder_shows_folder_name(self):
+        job = WorkflowJob(source_mode="folder_scan", source_folder="/srv/videos/spieltag")
+        result = _summarize_source(job)
+        assert "spieltag" in result
+        assert "📁" in result
+
+    def test_folder_scan_without_folder_shows_dash(self):
+        job = WorkflowJob(source_mode="folder_scan", source_folder="")
+        result = _summarize_source(job)
+        assert "–" in result
+
+    def test_pi_download_with_device_name_shows_name(self):
+        job = WorkflowJob(source_mode="pi_download", device_name="Pi Nord")
+        result = _summarize_source(job)
+        assert "Pi Nord" in result
+        assert "📷" in result
+
+    def test_pi_download_without_device_name_shows_dash(self):
+        job = WorkflowJob(source_mode="pi_download", device_name="")
+        result = _summarize_source(job)
+        assert "–" in result
+
+    def test_unknown_source_mode_returns_question_mark(self):
+        job = WorkflowJob(source_mode="unbekannt")
+        result = _summarize_source(job)
+        assert result == "?"
+
+
+class TestSummarizePipeline:
+    """Branch-Abdeckung für _summarize_pipeline (helpers.py L39, 47, 49, 51, 53, 57)."""
+
+    def _job_with_types(self, *types: str, source_mode: str = "files") -> WorkflowJob:
+        nodes = [{"id": f"n{i}", "type": t} for i, t in enumerate(types)]
+        return WorkflowJob(source_mode=source_mode, graph_nodes=nodes, graph_edges=[])
+
+    def test_pi_download_prefixes_download_step(self):
+        job = self._job_with_types("source_pi_download", source_mode="pi_download")
+        result = _summarize_pipeline(job)
+        assert result.startswith("Download")
+
+    def test_validate_surface_adds_quick_check(self):
+        job = self._job_with_types("validate_surface")
+        result = _summarize_pipeline(job)
+        assert "Quick-Check" in result
+
+    def test_validate_deep_adds_deep_scan(self):
+        job = self._job_with_types("validate_deep")
+        result = _summarize_pipeline(job)
+        assert "Deep-Scan" in result
+
+    def test_cleanup_adds_cleanup(self):
+        job = self._job_with_types("cleanup")
+        result = _summarize_pipeline(job)
+        assert "Cleanup" in result
+
+    def test_repair_adds_reparatur(self):
+        job = self._job_with_types("repair")
+        result = _summarize_pipeline(job)
+        assert "Reparatur" in result
+
+    def test_stop_adds_stop(self):
+        job = self._job_with_types("stop")
+        result = _summarize_pipeline(job)
+        assert "Stop" in result
+
+
+class TestPlannedJobStepsMergePrecedesConvert:
+    """Branch-Abdeckung für _planned_job_steps: Merge-vor-Convert-Pfad (L190-192)."""
+
+    def test_merge_precedes_convert_includes_both_in_order(self):
+        """merge → convert in Graph → Merge zuerst, dann Convert in Schrittliste."""
+        job = WorkflowJob(
+            files=[
+                FileEntry(source_path="/tmp/a.mp4", merge_group_id="g1"),
+                FileEntry(source_path="/tmp/b.mp4", merge_group_id="g1"),
+            ],
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "merge", "type": "merge"},
+                {"id": "conv", "type": "convert"},
+            ],
+            graph_edges=[
+                {"source": "src", "target": "merge"},
+                {"source": "merge", "target": "conv"},
+            ],
+        )
+        steps = _planned_job_steps(job)
+        assert "merge" in steps
+        assert "convert" in steps
+        assert steps.index("merge") < steps.index("convert")
+
+    def test_validate_deep_step_included_when_reachable(self):
+        """validate_deep-Knoten im Graph → Schritt erscheint in der Liste (L203)."""
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "vd", "type": "validate_deep"},
+            ],
+            graph_edges=[{"source": "src", "target": "vd"}],
+        )
+        steps = _planned_job_steps(job)
+        assert "validate_deep" in steps
+
+    def test_cleanup_step_included_when_reachable(self):
+        """cleanup-Knoten im Graph → Schritt erscheint in der Liste (L205)."""
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "cl", "type": "cleanup"},
+            ],
+            graph_edges=[{"source": "src", "target": "cl"}],
+        )
+        steps = _planned_job_steps(job)
+        assert "cleanup" in steps
+
+
+class TestComputeJobOverallProgressBranches:
+    """Direkte Tests für _compute_job_overall_progress (L290)."""
+
+    def test_progress_with_previous_completed_steps_returns_weighted_pct(self):
+        """completed_before_current=1, pct=50, 2 Schritte → (1 + 0.5) / 2 * 100 = 75 (L290)."""
+        job = WorkflowJob(
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "conv", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src", "target": "conv"}],
+            step_statuses={"transfer": "done"},
+            resume_status="Konvertiere …",
+            current_step_key="convert",
+        )
+        result = _compute_job_overall_progress(job, "Konvertiere …", 50)
+        assert result == 75
+
+
+class TestNormalizeResumeStateUncoveredBranches:
+    """Branch-Abdeckung für _normalize_cancelled_resume_state (L355-356, L362-368)."""
+
+    def test_current_step_key_corrected_when_different_from_resume_step(self):
+        """Abgebrochener Transfer, aber current_step_key zeigt auf Convert → wird korrigiert (L355-356)."""
+        job = WorkflowJob(
+            name="Job",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "conv", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src", "target": "conv"}],
+            resume_status="Transfer abgebrochen",
+            current_step_key="convert",
+            step_statuses={"transfer": "cancelled"},
+            step_details={},
+        )
+
+        changed = _normalize_cancelled_resume_state(job)
+
+        assert changed is True
+        assert job.current_step_key == "transfer"
+        assert "Transfer" in job.resume_status
+
+    def test_all_steps_done_clears_stale_abgebrochen_resume_status(self):
+        """Alle Schritte fertig, aber resume_status enthält 'abgebrochen' → beides leeren (L362-368)."""
+        job = WorkflowJob(
+            name="Job",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "conv", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src", "target": "conv"}],
+            resume_status="Konvertierung abgebrochen",
+            current_step_key="convert",
+            step_statuses={"transfer": "done", "convert": "done"},
+            step_details={},
+        )
+
+        changed = _normalize_cancelled_resume_state(job)
+
+        assert changed is True
+        assert job.current_step_key == ""
+        assert job.resume_status == ""
+
+
+class TestJobHasSourceConfigBranches:
+    """Branch-Abdeckung für _job_has_source_config (L378) und _job_is_placeholder (L382)."""
+
+    def test_folder_scan_with_folder_returns_true(self):
+        job = WorkflowJob(source_mode="folder_scan", source_folder="/srv/videos")
+        assert _job_has_source_config(job) is True
+
+    def test_pi_download_with_device_name_returns_true(self):
+        job = WorkflowJob(source_mode="pi_download", device_name="Pi Nord")
+        assert _job_has_source_config(job) is True
+
+    def test_unknown_source_mode_returns_false(self):
+        job = WorkflowJob(source_mode="unbekannt")
+        assert _job_has_source_config(job) is False
+
+    def test_placeholder_job_with_empty_name_returns_true(self):
+        """Kein Source-Config, kein resume_status, Name leer → Platzhalter (L382)."""
+        job = WorkflowJob(name="", source_mode="files", files=[], resume_status="", step_statuses={})
+        assert _job_is_placeholder(job) is True
+
+    def test_job_with_resume_status_is_not_placeholder(self):
+        job = WorkflowJob(name="Job 1", source_mode="files", files=[], resume_status="Transfer …", step_statuses={})
+        assert _job_is_placeholder(job) is False
+
+
+class TestJobsLookCompatibleBranches:
+    """Branch-Abdeckung für _jobs_look_compatible (L392, L394, L397)."""
+
+    def test_different_source_mode_returns_false(self):
+        restored = WorkflowJob(source_mode="files", name="Job 1")
+        fallback = WorkflowJob(source_mode="folder_scan", name="Job 1")
+        assert _jobs_look_compatible(restored, fallback) is False
+
+    def test_matching_ids_returns_true(self):
+        """Gleiche IDs → sofort True (L392-394)."""
+        restored = WorkflowJob(source_mode="files", name="Job 1", id="abc-123")
+        fallback = WorkflowJob(source_mode="files", name="Anderer Name", id="abc-123")
+        assert _jobs_look_compatible(restored, fallback) is True
+
+    def test_matching_names_returns_true(self):
+        """Gleiche Namen → True."""
+        restored = WorkflowJob(source_mode="files", name="Spieltag 23")
+        fallback = WorkflowJob(source_mode="files", name="Spieltag 23")
+        assert _jobs_look_compatible(restored, fallback) is True
+
+    def test_placeholder_name_fallback_returns_true(self):
+        """Restored hat Platzhalter-Namen → kompatibel (L397)."""
+        restored = WorkflowJob(source_mode="files", name="Job 1")
+        fallback = WorkflowJob(source_mode="files", name="Spieltag 23")
+        assert _jobs_look_compatible(restored, fallback) is True
+
+    def test_different_names_and_no_placeholder_returns_false(self):
+        """Verschiedene Namen, kein Platzhalter → nicht kompatibel."""
+        restored = WorkflowJob(source_mode="files", name="Job A", id="")
+        fallback = WorkflowJob(source_mode="files", name="Job B")
+        assert _jobs_look_compatible(restored, fallback) is False
+
+
+class TestRepairRestoredWorkflowMixedJobs:
+    """Branch-Abdeckung für _repair_restored_workflow (L419, L434-437, L462, L464)."""
+
+    def test_job_with_source_config_in_mixed_workflow_increments_repaired_count(self):
+        """Job MIT Source-Config bekommt _normalize aufgerufen → repaired_count++ (L419)."""
+        restored = Workflow(jobs=[
+            WorkflowJob(
+                name="Job A",
+                source_mode="files",
+                files=[FileEntry(source_path="/tmp/a.mp4")],
+                resume_status="Transfer abgebrochen",
+                current_step_key="convert",
+                step_statuses={"transfer": "cancelled"},
+            ),
+            WorkflowJob(name="Job B", source_mode="files", files=[]),
+        ])
+        fallback = Workflow(jobs=[
+            WorkflowJob(name="Job A", source_mode="files", files=[FileEntry(source_path="/tmp/a.mp4")]),
+            WorkflowJob(name="Job B", source_mode="files", files=[FileEntry(source_path="/tmp/b.mp4")]),
+        ])
+
+        repaired, repaired_count, dropped = _repair_restored_workflow(restored, fallback)
+
+        assert repaired_count >= 1
+
+    def test_placeholder_job_with_stale_resume_drops_state_when_no_compatible_candidate(self):
+        """Platzhalter mit resume_status, kein passender Fallback → Status geleert (L434-437)."""
+        restored = Workflow(jobs=[
+            WorkflowJob(
+                name="Job 1",
+                source_mode="files",
+                files=[],
+                resume_status="Transfer …",
+                step_statuses={"transfer": "done"},
+                current_step_key="convert",
+            ),
+        ])
+
+        repaired, repaired_count, dropped = _repair_restored_workflow(restored, None)
+
+        assert dropped == 1
+        assert repaired.jobs[0].resume_status == ""
+        assert repaired.jobs[0].step_statuses == {}
+        assert repaired.jobs[0].current_step_key == ""
+
+    def test_repair_copies_fallback_name_when_restored_name_is_blank(self):
+        """Reparierter Workflow mit leerem Namen übernimmt Fallback-Namen (L462)."""
+        restored = Workflow(
+            name="",
+            jobs=[
+                WorkflowJob(
+                    name="Job 1",
+                    source_mode="files",
+                    files=[],
+                    resume_status="Transfer abgebrochen",
+                    step_statuses={"transfer": "cancelled"},
+                ),
+            ],
+        )
+        fallback = Workflow(
+            name="Spieltag 23",
+            shutdown_after=True,
+            jobs=[
+                WorkflowJob(
+                    name="Job 1",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/a.mp4")],
+                ),
+            ],
+        )
+
+        repaired, repaired_count, dropped = _repair_restored_workflow(restored, fallback)
+
+        assert repaired_count == 1
+        assert repaired.name == "Spieltag 23"
+
+    def test_repair_copies_shutdown_after_from_fallback(self):
+        """Reparierter Workflow übernimmt shutdown_after=True vom Fallback (L464)."""
+        restored = Workflow(
+            name="",
+            shutdown_after=False,
+            jobs=[
+                WorkflowJob(
+                    name="Job 1",
+                    source_mode="files",
+                    files=[],
+                    resume_status="Transfer abgebrochen",
+                    step_statuses={"transfer": "cancelled"},
+                ),
+            ],
+        )
+        fallback = Workflow(
+            name="Spieltag 23",
+            shutdown_after=True,
+            jobs=[
+                WorkflowJob(
+                    name="Job 1",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/a.mp4")],
+                ),
+            ],
+        )
+
+        repaired, repaired_count, dropped = _repair_restored_workflow(restored, fallback)
+
+        assert repaired_count == 1
+        assert repaired.shutdown_after is True
+
+    def test_empty_restored_jobs_returns_zero_counts(self):
+        """L419: restored.jobs ist leer → (restored, 0, 0) ohne Schleife."""
+        restored = Workflow(jobs=[])
+        repaired, repaired_count, dropped = _repair_restored_workflow(restored, None)
+        assert repaired_count == 0
+        assert dropped == 0

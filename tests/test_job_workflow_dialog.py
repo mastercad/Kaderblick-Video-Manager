@@ -15,7 +15,13 @@ from src.job_workflow.graph.view import _WorkflowGraphView
 from src.settings import AppSettings
 from src.workflow import FileEntry, WorkflowJob
 from src.job_workflow.dialog import JobWorkflowDialog, _node_visual_state, _planned_job_steps
-from src.job_workflow.panels.status import WorkflowNotesPanel
+from src.job_workflow.panels.status import (
+    WorkflowNotesPanel,
+    build_source_summary,
+    build_execution_notes,
+    build_step_summary_lines,
+)
+from src.job_workflow.controllers.state import resolve_step_input_context
 
 
 _app = QApplication.instance() or QApplication(sys.argv)
@@ -356,6 +362,17 @@ class TestJobWorkflowDialog:
                 "kaderblick": "done",
             },
             resume_status="Kaderblick senden …",
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+                {"id": "ytu-1", "type": "youtube_upload"},
+                {"id": "kb-1", "type": "kaderblick"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "conv-1"},
+                {"source": "conv-1", "target": "ytu-1"},
+                {"source": "ytu-1", "target": "kb-1"},
+            ],
         )
         dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
 
@@ -2134,3 +2151,148 @@ class TestJobWorkflowDialog:
         assert "Ausstehend" in state_text, (
             f"Convert-Node sollte 'Ausstehend' zeigen, zeigt aber: {state_text!r}"
         )
+
+
+class TestStatusPanelHelpersBranchCoverage:
+    """Branch-Abdeckung für status.py (L33, L43, L69)."""
+
+    def test_build_source_summary_folder_scan_with_nonempty_folder(self):
+        """L33: folder_scan + non-empty source_folder → gibt letzten Pfadteil zurück."""
+        job = WorkflowJob(
+            name="Job",
+            source_mode="folder_scan",
+            source_folder="/media/Aufnahmen/Spiel1",
+        )
+        result = build_source_summary(job)
+        assert result == "Spiel1"
+
+    def test_build_execution_notes_merge_precedes_convert_adds_note(self):
+        """L43: Merge vor Convert → zweite Notiz wird hinzugefügt."""
+        job = WorkflowJob(
+            name="Job",
+            source_mode="files",
+            files=[
+                FileEntry(source_path="/tmp/a.mp4", merge_group_id="g1"),
+                FileEntry(source_path="/tmp/b.mp4", merge_group_id="g1"),
+            ],
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "merge", "type": "merge"},
+                {"id": "conv", "type": "convert"},
+            ],
+            graph_edges=[
+                {"source": "src", "target": "merge"},
+                {"source": "merge", "target": "conv"},
+            ],
+        )
+        notes = build_execution_notes(job)
+        assert any("Reihenfolge" in n for n in notes)
+
+    def test_build_step_summary_lines_with_detail_includes_pipe(self):
+        """L69: Schritt mit step_detail → Zeile enthält '|'."""
+        job = _make_job(convert_enabled=True)
+        job.step_statuses = {"transfer": "running"}
+        job.step_details = {"transfer": "Datei 2/5 kopiert"}
+        lines = build_step_summary_lines(job)
+        assert any("|" in line for line in lines)
+
+
+class TestResolveStepInputContextBranchCoverage:
+    """Branch-Abdeckung für resolve_step_input_context (L85) mit nicht-merge/nicht-yt_version."""
+
+    def test_titlecard_step_type_returns_default_context(self):
+        """L85: step_type='titlecard' (weder merge noch yt_version) → StepInputContext mit summary=None."""
+        job = _make_job(convert_enabled=True)
+        ctx = resolve_step_input_context(job, "titlecard", youtube_default_crf=23)
+        assert ctx.summary is None
+
+
+class TestSyncEditorStateUploadActivatedHint:
+    """L303: Hinweis wenn triggered_step=='youtube_upload' und upload_youtube==True."""
+
+    def test_upload_activated_hint_appears_in_editor(self):
+        job = _make_job(upload_youtube=True)
+        dlg = JobWorkflowDialog(None, job, allow_edit=True, settings=_settings())
+        dlg._sync_editor_state(triggered_step="youtube_upload", sync_graph=False)
+        assert "Upload aktiviert" in dlg._editor_hint.text()
+
+
+class TestOnPiLoadFailedBranchCoverage:
+    """L378: on_pi_load_failed nimmt _pi_file_list.collect() wenn Attribut existiert."""
+
+    def test_on_pi_load_failed_uses_pi_file_list_when_present(self):
+        from unittest.mock import MagicMock
+        from src.job_workflow.controllers.state import WorkflowDialogStateController
+
+        draft = WorkflowJob(files=[FileEntry(source_path="/tmp/a.mp4")])
+        file_entry = FileEntry(source_path="/tmp/b.mp4")
+        pi_file_list = MagicMock()
+        pi_file_list.collect.return_value = [file_entry]
+
+        dialog = SimpleNamespace(
+            _draft=draft,
+            _pi_file_list=pi_file_list,
+        )
+        controller = WorkflowDialogStateController(dialog)
+        controller.on_pi_load_failed()
+
+        pi_file_list.collect.assert_called_once()
+        assert draft.files == [file_entry]
+
+
+class TestNormalizedStepStatusErrorBranches:
+    """L321, L337: Fehlende Branches in _normalized_step_status."""
+
+    def test_raw_startswith_error_returns_error(self):
+        """L321: raw.startswith('error') → return 'error'."""
+        from src.job_workflow.graph.defs import _normalized_step_status
+
+        job = _make_job(convert_enabled=True)
+        job.step_statuses = {"convert": "error-detail"}
+        job.current_step_key = ""
+        assert _normalized_step_status(job, "convert") == "error"
+
+    def test_current_step_with_repairable_status_returns_running(self):
+        """L337: step == current_step und raw='repairable' → return 'running'."""
+        from src.job_workflow.graph.defs import _normalized_step_status
+
+        job = _make_job(convert_enabled=True)
+        # Use a non-standard status that is not in the early-exit set and not "running"/"cancelled"
+        job.step_statuses = {"convert": "active"}
+        job.current_step_key = "convert"
+        job.resume_status = ""
+        assert _normalized_step_status(job, "convert") == "running"
+
+
+class TestStepProgressReturnsZero:
+    """L347: _step_progress returns 0 when step_key != current_step and no default_progress."""
+
+    def test_non_current_step_with_state_needing_progress_returns_zero(self):
+        from src.job_workflow.graph.defs import _step_progress
+
+        job = _make_job(convert_enabled=True)
+        job.current_step_key = "transfer"  # current step is 'transfer', not 'convert'
+        job.progress_pct = 75
+        # state 'running' has default_progress=None (uses job.progress_pct only for current step)
+        result = _step_progress(job, "convert", "running")
+        assert result == 0
+
+
+class TestPlannedJobStepsValidateDeep:
+    """L274: validate_deep appended when deep_validation_enabled."""
+
+    def test_planned_steps_include_validate_deep_node(self):
+        job = WorkflowJob(
+            name="DeepScan Job",
+            source_mode="files",
+            convert_enabled=False,
+            files=[FileEntry(source_path="/tmp/a.mp4", graph_source_id="source-files-1")],
+            graph_nodes=[
+                {"id": "source-files-1", "type": "source_files"},
+                {"id": "deep-1", "type": "validate_deep"},
+            ],
+            graph_edges=[
+                {"source": "source-files-1", "target": "deep-1"},
+            ],
+        )
+        assert "validate_deep" in _planned_job_steps(job)

@@ -76,5 +76,5 @@ class DeviceSettings:
 
 @dataclass
 class CameraSettings:
-    source: str = "/home/kaderblick/camera_api/recordings"
+    source: str = ""
     devices: list = field(default_factory=list)

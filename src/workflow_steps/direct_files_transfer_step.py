@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable
 
-from ..workflow import WorkflowJob
+from ..workflow import WorkflowJob, graph_reachable_types
 from .executor_support import ExecutorSupport
 from .transfer_io import emit_item_progress, transfer_files
 
@@ -78,8 +78,10 @@ class DirectFilesTransferStep:
                 continue
             if entry.merge_group_id:
                 return True
-            if job.convert_enabled:
+            reachable = graph_reachable_types(job)
+            if "convert" in reachable:
                 return True
-            if job.title_card_enabled or job.create_youtube_version or job.upload_youtube:
+            further = reachable & {"titlecard", "yt_version", "youtube_upload"}
+            if further:
                 return True
         return False

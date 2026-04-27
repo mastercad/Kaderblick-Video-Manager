@@ -248,10 +248,6 @@ class JobEditorPagesMixin:
         self._update_color_btn("bg", "#000000")
         self._update_color_btn("fg", "#FFFFFF")
 
-        default_logo = Path(__file__).parent.parent.parent.parent / "videoschnitt" / "assets" / "kaderblick.png"
-        if default_logo.exists():
-            self._tc_logo_edit.setText(str(default_logo))
-
         return page
 
     def _browse_tc_logo(self) -> None:

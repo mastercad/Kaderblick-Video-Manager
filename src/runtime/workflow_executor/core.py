@@ -12,8 +12,6 @@ from ...workflow_steps import (
     ExecutorSupport,
     MergeGroupStep,
     OutputStepStack,
-    ProcessingPhase,
-    TransferPhase,
     TransferStep,
 )
 from .pipeline import WorkflowExecutorPipelineMixin
@@ -87,11 +85,9 @@ class WorkflowExecutor(WorkflowExecutorPipelineMixin, WorkflowExecutorSupportMix
         self._download_func = download_device
         self._support = ExecutorSupport()
         self._transfer_step = TransferStep()
-        self._transfer_phase = TransferPhase()
         self._convert_step = ConvertStep()
         self._merge_step = MergeGroupStep()
         self._output_step_stack = OutputStepStack()
-        self._processing_phase = ProcessingPhase()
         self._transfer_fail = 0
         self._cancelled_indices: set[int] = set()
         self._job_cancel_flags: dict[int, _JobCancelFlag] = {}

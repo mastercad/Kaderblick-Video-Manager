@@ -453,13 +453,6 @@ def run_convert(job: ConvertJob, settings: AppSettings,
     dur_str = f", {dur:.0f}s" if dur else ""
     log(f"✓ Fertig: {out_path.name} ({size_mb:.0f} MB{dur_str})")
 
-    if yt.create_youtube and vs.output_format == "mp4":
-        yt_ok = run_youtube_convert(job, settings, cancel_flag, log_callback,
-                                    progress_callback)
-        if not yt_ok:
-            log("⚠ YouTube-Version konnte nicht erstellt werden "
-                "– beim Upload wird die konvertierte Datei verwendet.")
-
     job.status = "Fertig"
     return True
 

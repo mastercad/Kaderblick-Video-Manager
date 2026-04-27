@@ -13,8 +13,6 @@ class YoutubeUploadStep:
 
     def execute(self, executor: Any, prepared: PreparedOutput, yt_service: Any) -> int:
         youtube_upload_enabled = prepared.youtube_upload_enabled_override
-        if youtube_upload_enabled is None:
-            youtube_upload_enabled = prepared.job.upload_youtube
         if not (youtube_upload_enabled and yt_service):
             return 0
         existing_video_id = None

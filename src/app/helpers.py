@@ -37,11 +37,11 @@ def _summarize_pipeline(job: WorkflowJob) -> str:
     parts = []
     if job.source_mode == "pi_download":
         parts.append("Download")
-    if job.convert_enabled:
+    if "convert" in graph_types:
         parts.append("Konvert.")
     if any(file.merge_group_id for file in job.files) or "merge" in graph_types:
         parts.append("Kombinieren")
-    if job.title_card_enabled:
+    if "titlecard" in graph_types:
         parts.append("Titelkarte")
     if "validate_surface" in graph_types:
         parts.append("Quick-Check")
@@ -51,13 +51,13 @@ def _summarize_pipeline(job: WorkflowJob) -> str:
         parts.append("Cleanup")
     if "repair" in graph_types:
         parts.append("Reparatur")
-    if job.create_youtube_version:
+    if "yt_version" in graph_types:
         parts.append("YT-Version")
     if "stop" in graph_types:
         parts.append("Stop")
-    if job.upload_youtube:
+    if "youtube_upload" in graph_types:
         parts.append("YT-Upload")
-    if job.upload_kaderblick:
+    if "kaderblick" in graph_types:
         parts.append("KB")
     return " → ".join(parts) if parts else "—"
 
@@ -161,38 +161,29 @@ def format_elapsed_seconds(seconds: float) -> str:
 
 
 def _planned_job_steps(job: WorkflowJob, branch_results: dict[str, str] | None = None) -> list[str]:
-    graph_types = {
-        str(node.get("type", ""))
-        for node in getattr(job, "graph_nodes", [])
-        if isinstance(node, dict)
-    }
-    has_graph = bool(getattr(job, "graph_nodes", None))
-    reachable_types = graph_reachable_types_for_branches(job, branch_results) if has_graph else set()
-    has_merge = "merge" in reachable_types if has_graph else (any(file.merge_group_id for file in job.files) or "merge" in graph_types)
-    convert_enabled = "convert" in reachable_types if has_graph else job.convert_enabled
-    titlecard_enabled = "titlecard" in reachable_types if has_graph else job.title_card_enabled
-    surface_validation_enabled = "validate_surface" in reachable_types if has_graph else False
-    deep_validation_enabled = "validate_deep" in reachable_types if has_graph else False
-    cleanup_enabled = "cleanup" in reachable_types if has_graph else False
-    repair_enabled = "repair" in reachable_types if has_graph else False
-    youtube_version_enabled = "yt_version" in reachable_types if has_graph else job.create_youtube_version
-    stop_enabled = "stop" in reachable_types if has_graph else False
-    youtube_upload_enabled = "youtube_upload" in reachable_types if has_graph else job.upload_youtube
-    kaderblick_enabled = "kaderblick" in reachable_types if has_graph else (job.upload_youtube and job.upload_kaderblick)
-    if has_graph:
-        has_output_stack = (
-            convert_enabled
-            or has_merge
-            or youtube_upload_enabled
-            or youtube_version_enabled
-            or surface_validation_enabled
-            or deep_validation_enabled
-            or cleanup_enabled
-            or repair_enabled
-            or stop_enabled
-        )
-    else:
-        has_output_stack = convert_enabled or has_merge or youtube_upload_enabled
+    reachable_types = graph_reachable_types_for_branches(job, branch_results)
+    has_merge = "merge" in reachable_types or any(file.merge_group_id for file in job.files)
+    convert_enabled = "convert" in reachable_types
+    titlecard_enabled = "titlecard" in reachable_types
+    surface_validation_enabled = "validate_surface" in reachable_types
+    deep_validation_enabled = "validate_deep" in reachable_types
+    cleanup_enabled = "cleanup" in reachable_types
+    repair_enabled = "repair" in reachable_types
+    youtube_version_enabled = "yt_version" in reachable_types
+    stop_enabled = "stop" in reachable_types
+    youtube_upload_enabled = "youtube_upload" in reachable_types
+    kaderblick_enabled = "kaderblick" in reachable_types
+    has_output_stack = (
+        convert_enabled
+        or has_merge
+        or youtube_upload_enabled
+        or youtube_version_enabled
+        or surface_validation_enabled
+        or deep_validation_enabled
+        or cleanup_enabled
+        or repair_enabled
+        or stop_enabled
+    )
 
     steps = ["transfer"]
     if has_merge and graph_merge_precedes_convert(job):

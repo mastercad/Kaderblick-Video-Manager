@@ -302,3 +302,67 @@ def test_merge_group_step_passes_selected_output_resolution(tmp_path):
     assert failures == 0
     assert prepared is not None
     assert captured["target_resolution"] == "1080p"
+
+
+from src.workflow_steps.direct_files_transfer_step import DirectFilesTransferStep
+
+
+class TestShouldKeepMissingEntryForResume:
+    """Branch-Abdeckung für DirectFilesTransferStep._should_keep_missing_entry_for_resume (L75, L83)."""
+
+    _step = DirectFilesTransferStep()
+
+    def test_no_resume_no_step_statuses_returns_false(self):
+        """L75: kein resume_status und kein step_statuses → return False."""
+        job = WorkflowJob(
+            name="Job",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            resume_status="",
+            step_statuses={},
+        )
+        result = self._step._should_keep_missing_entry_for_resume(job, Path("/tmp/a.mp4"))
+        assert result is False
+
+    def test_no_matching_entry_returns_false(self):
+        """L87: source_path stimmt mit keinem Job-Eintrag überein → return False."""
+        job = WorkflowJob(
+            name="Job",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            resume_status="Transfer abgebrochen",
+        )
+        result = self._step._should_keep_missing_entry_for_resume(job, Path("/tmp/OTHER.mp4"))
+        assert result is False
+
+    def test_matching_entry_with_convert_reachable_returns_true(self):
+        """L83: Eintrag passt, kein merge_group_id, convert reachable → True."""
+        job = WorkflowJob(
+            name="Job",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            resume_status="Transfer abgebrochen",
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "conv", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src", "target": "conv"}],
+        )
+        result = self._step._should_keep_missing_entry_for_resume(job, Path("/tmp/a.mp4"))
+        assert result is True
+
+    def test_matching_entry_with_titlecard_reachable_returns_true(self):
+        """L86: Eintrag passt, kein merge_group_id, kein convert, aber titlecard reachable → True."""
+        job = WorkflowJob(
+            name="Job",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            resume_status="Transfer abgebrochen",
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "tc", "type": "titlecard"},
+            ],
+            graph_edges=[{"source": "src", "target": "tc"}],
+        )
+        result = self._step._should_keep_missing_entry_for_resume(job, Path("/tmp/a.mp4"))
+        assert result is True

@@ -16,6 +16,21 @@ from .youtube_upload_step import YoutubeUploadStep
 from .youtube_version_step import YoutubeVersionStep
 
 
+_OVERRIDE_MAP: dict[str, str] = {
+    "titlecard": "title_card_enabled_override",
+    "repair": "repair_enabled_override",
+    "yt_version": "youtube_version_enabled_override",
+    "youtube_upload": "youtube_upload_enabled_override",
+    "kaderblick": "kaderblick_enabled_override",
+}
+
+
+def _set_override_if_none(prepared: Any, node_type: str) -> None:
+    attr = _OVERRIDE_MAP.get(node_type)
+    if attr and getattr(prepared, attr, None) is None:
+        setattr(prepared, attr, True)
+
+
 class OutputStepStack:
     name = "output-stack"
     _STEP_ORDER = (
@@ -54,32 +69,6 @@ class OutputStepStack:
             "kaderblick": self._kaderblick_post_step,
         }
 
-    def execute(
-        self,
-        executor: Any,
-        prepared: PreparedOutput,
-        yt_service: Any,
-        kb_sort_index: dict[tuple[str, str], int],
-        *,
-        include_title_card: bool = True,
-        include_repair: bool = True,
-        include_youtube_version: bool = True,
-        start_at_step: str = "",
-    ) -> int:
-        if getattr(prepared.job, "graph_nodes", None):
-            prepared.delivery_branches = []
-        failures = self.execute_processing_steps(
-            executor,
-            prepared,
-            include_title_card=include_title_card,
-            include_repair=include_repair,
-            include_youtube_version=include_youtube_version,
-            start_at_step=start_at_step,
-        )
-        if failures or executor._cancel.is_set():
-            return failures
-        return self.execute_delivery_steps(executor, prepared, yt_service, kb_sort_index, start_at_step=start_at_step)
-
     def execute_processing_steps(
         self,
         executor: Any,
@@ -95,9 +84,6 @@ class OutputStepStack:
             return self._execute_graph_processing(
                 executor,
                 prepared,
-                include_title_card=include_title_card,
-                include_repair=include_repair,
-                include_youtube_version=include_youtube_version,
                 start_at_step=start_at_step,
                 stop_before_merge=stop_before_merge,
             )
@@ -176,9 +162,6 @@ class OutputStepStack:
         executor: Any,
         prepared: PreparedOutput,
         *,
-        include_title_card: bool,
-        include_repair: bool,
-        include_youtube_version: bool,
         start_at_step: str,
         stop_before_merge: bool,
     ) -> int:
@@ -191,9 +174,6 @@ class OutputStepStack:
             root_prepared=prepared,
             branch_prepared=prepared,
             node_id=start_node_id,
-            include_title_card=include_title_card,
-            include_repair=include_repair,
-            include_youtube_version=include_youtube_version,
             start_at_step=start_at_step,
             stop_before_merge=stop_before_merge,
             visited=set(),
@@ -246,19 +226,16 @@ class OutputStepStack:
         root_prepared: PreparedOutput,
         branch_prepared: PreparedOutput,
         node_id: str,
-        include_title_card: bool,
-        include_repair: bool,
-        include_youtube_version: bool,
         start_at_step: str,
         stop_before_merge: bool,
         visited: set[str],
     ) -> int:
+        node_type = ExecutorSupport.node_type(branch_prepared.job, node_id)
         if executor._cancel.is_set() or node_id in visited:
             return 0
 
         local_visited = set(visited)
         local_visited.add(node_id)
-        node_type = ExecutorSupport.node_type(branch_prepared.job, node_id)
         branch_prepared.graph_cursor_node_id = node_id
 
         if stop_before_merge and node_type == "merge":
@@ -270,8 +247,9 @@ class OutputStepStack:
             return 0
 
         step = self._processing_steps.get(node_type)
-        if step is not None and self._processing_step_enabled(node_type, include_title_card, include_repair, include_youtube_version):
+        if step is not None:
             if not self._skip_before_start(node_type, start_at_step):
+                _set_override_if_none(branch_prepared, node_type)
                 failures = step.execute(executor, branch_prepared)
                 if failures:
                     return failures
@@ -282,15 +260,12 @@ class OutputStepStack:
             getattr(branch_prepared, "validation_results", {}) or {},
         )
         for next_node_id in next_nodes:
-            next_prepared = self._clone_prepared(branch_prepared)
+            next_prepared = branch_prepared if len(next_nodes) == 1 else self._clone_prepared(branch_prepared)
             failures = self._walk_processing_branch(
                 executor,
                 root_prepared=root_prepared,
                 branch_prepared=next_prepared,
                 node_id=next_node_id,
-                include_title_card=include_title_card,
-                include_repair=include_repair,
-                include_youtube_version=include_youtube_version,
                 start_at_step=start_at_step,
                 stop_before_merge=stop_before_merge,
                 visited=local_visited,
@@ -320,6 +295,7 @@ class OutputStepStack:
 
         step = self._delivery_steps.get(node_type)
         if step is not None and not self._skip_before_start(node_type, start_at_step):
+            _set_override_if_none(branch_prepared, node_type)
             if isinstance(step, YoutubeUploadStep):
                 failures = step.execute(executor, branch_prepared, yt_service)
             elif isinstance(step, KaderblickPostStep):
@@ -376,21 +352,6 @@ class OutputStepStack:
         if getattr(prepared, "graph_origin_kind", "source") == "merge":
             return executor._graph_node_id_for_type(prepared.job, "merge")
         return ""
-
-    @staticmethod
-    def _processing_step_enabled(
-        node_type: str,
-        include_title_card: bool,
-        include_repair: bool,
-        include_youtube_version: bool,
-    ) -> bool:
-        if node_type == "titlecard":
-            return include_title_card
-        if node_type == "repair":
-            return include_repair
-        if node_type == "yt_version":
-            return include_youtube_version
-        return node_type in {"validate_surface", "validate_deep", "cleanup", "stop"}
 
     @classmethod
     def _skip_before_start(cls, step_name: str, start_at_step: str) -> bool:

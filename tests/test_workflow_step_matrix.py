@@ -16,6 +16,13 @@ from src.workflow import FileEntry, Workflow, WorkflowJob
 from src.runtime.workflow_executor import WorkflowExecutor
 from src.workflow_steps import ExecutorSupport, OutputStepStack, PreparedOutput
 
+
+def _run_stack(stack, executor, prepared, yt_service=None, kb_sort_index=None):
+    failures = stack.execute_processing_steps(executor, prepared)
+    if not failures and not executor._cancel.is_set():
+        failures += stack.execute_delivery_steps(executor, prepared, yt_service, kb_sort_index or {})
+    return failures
+
 _app = QApplication.instance() or QApplication(sys.argv)
 
 
@@ -82,6 +89,38 @@ def _build_valid_scenarios() -> list[StepScenario]:
 
 
 ALL_STEP_SCENARIOS = _build_valid_scenarios()
+
+
+def _graph_for_scenario(scenario: StepScenario) -> tuple[list, list]:
+    nodes: list = [{"id": "src-1", "type": "source_files"}]
+    edges: list = []
+    prev = "src-1"
+    if scenario.convert:
+        nodes.append({"id": "conv-1", "type": "convert"})
+        edges.append({"source": prev, "target": "conv-1"})
+        prev = "conv-1"
+    if scenario.merge:
+        nodes.append({"id": "merge-1", "type": "merge"})
+        edges.append({"source": prev, "target": "merge-1"})
+        prev = "merge-1"
+    if scenario.titlecard:
+        nodes.append({"id": "title-1", "type": "titlecard"})
+        edges.append({"source": prev, "target": "title-1"})
+        prev = "title-1"
+    if scenario.yt_version:
+        nodes.append({"id": "ytv-1", "type": "yt_version"})
+        edges.append({"source": prev, "target": "ytv-1"})
+        prev = "ytv-1"
+    if scenario.youtube_upload:
+        nodes.append({"id": "ytu-1", "type": "youtube_upload"})
+        edges.append({"source": prev, "target": "ytu-1"})
+        prev = "ytu-1"
+    if scenario.kaderblick:
+        nodes.append({"id": "kb-1", "type": "kaderblick"})
+        edges.append({"source": prev, "target": "kb-1"})
+    return nodes, edges
+
+
 OUTPUT_STEP_SCENARIOS = [
     scenario
     for scenario in ALL_STEP_SCENARIOS
@@ -200,6 +239,7 @@ def _new_app() -> ConverterApp:
 
 
 def _job_for_scenario(scenario: StepScenario, *, existing_paths: list[str] | None = None) -> WorkflowJob:
+    nodes, edges = _graph_for_scenario(scenario)
     job = WorkflowJob(
         name=f"Job {scenario.id}",
         source_mode="files",
@@ -211,6 +251,8 @@ def _job_for_scenario(scenario: StepScenario, *, existing_paths: list[str] | Non
         default_kaderblick_game_id="game-1" if scenario.kaderblick else "",
         default_kaderblick_video_type_id=4 if scenario.kaderblick else 0,
         default_kaderblick_camera_id=8 if scenario.kaderblick else 0,
+        graph_nodes=nodes,
+        graph_edges=edges,
     )
     paths = existing_paths or [f"/tmp/{scenario.id}_1.mp4"]
     if scenario.merge and len(paths) == 1:
@@ -266,6 +308,7 @@ def _prepared_output_for_scenario(tmp_path: Path, scenario: StepScenario) -> Pre
     output = tmp_path / f"{scenario.id}_output.mp4"
     source.write_text("src", encoding="utf-8")
     output.write_text("out", encoding="utf-8")
+    nodes, edges = _graph_for_scenario(scenario)
     job = WorkflowJob(
         title_card_enabled=scenario.titlecard,
         create_youtube_version=scenario.yt_version,
@@ -275,6 +318,8 @@ def _prepared_output_for_scenario(tmp_path: Path, scenario: StepScenario) -> Pre
         default_kaderblick_video_type_id=4,
         default_kaderblick_camera_id=8,
         files=[FileEntry(source_path=str(source), kaderblick_game_id="game-1")],
+        graph_nodes=nodes,
+        graph_edges=edges,
     )
     cv_job = ConvertJob(source_path=source, output_path=output, youtube_title="Titel")
     return PreparedOutput(
@@ -283,6 +328,12 @@ def _prepared_output_for_scenario(tmp_path: Path, scenario: StepScenario) -> Pre
         cv_job=cv_job,
         per_settings=AppSettings(),
         mark_finished=True,
+        graph_origin_node_id="src-1",
+        title_card_enabled_override=scenario.titlecard,
+        repair_enabled_override=False,
+        youtube_version_enabled_override=scenario.yt_version,
+        youtube_upload_enabled_override=scenario.youtube_upload,
+        kaderblick_enabled_override=(scenario.youtube_upload and scenario.kaderblick),
     )
 
 
@@ -416,7 +467,8 @@ def test_output_step_resume_matrix(tmp_path, scenario: StepScenario):
         "src.workflow_steps.kaderblick_post_step.KaderblickPostStep._post_to_kaderblick",
         side_effect=AssertionError("kaderblick should be reused, not reposted"),
     ):
-        failures = stack.execute(
+        failures = _run_stack(
+            stack,
             executor,
             prepared,
             yt_service=object() if scenario.youtube_upload else None,

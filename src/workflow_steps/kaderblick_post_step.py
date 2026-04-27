@@ -39,8 +39,6 @@ class KaderblickPostStep:
         kb_sort_index: dict[tuple[str, str], int],
     ) -> int:
         kaderblick_enabled = prepared.kaderblick_enabled_override
-        if kaderblick_enabled is None:
-            kaderblick_enabled = prepared.job.upload_kaderblick and prepared.job.upload_youtube
         if not kaderblick_enabled:
             return 0
         existing_video_id = None

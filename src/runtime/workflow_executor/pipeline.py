@@ -422,8 +422,6 @@ class WorkflowExecutorPipelineMixin:
         include_youtube_version = self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "yt_version")
         youtube_upload_enabled = self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "youtube_upload")
         kaderblick_enabled = youtube_upload_enabled and self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "kaderblick")
-        per_settings.youtube.create_youtube = include_youtube_version
-        per_settings.youtube.upload_to_youtube = youtube_upload_enabled
 
         if self._branch_reaches_type(item.job, item.graph_origin_node_id, source_path, "convert"):
             can_skip_convert = self._should_skip_step_for_resume(item.job, "convert", resume_step) and (
@@ -589,8 +587,6 @@ class WorkflowExecutorPipelineMixin:
         include_youtube_version = self._support.merge_reaches_type(prepared.job, "yt_version")
         youtube_upload_enabled = self._support.merge_reaches_type(prepared.job, "youtube_upload")
         kaderblick_enabled = youtube_upload_enabled and self._support.merge_reaches_type(prepared.job, "kaderblick")
-        prepared.per_settings.youtube.create_youtube = include_youtube_version
-        prepared.per_settings.youtube.upload_to_youtube = youtube_upload_enabled
         prepared.mark_finished = False
         prepared.title_card_enabled_override = include_title_card
         prepared.repair_enabled_override = include_repair

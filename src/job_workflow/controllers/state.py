@@ -47,8 +47,8 @@ def resolve_step_input_context(
     youtube_default_crf: int,
 ) -> StepInputContext:
     has_graph = bool(getattr(job, "graph_nodes", None))
-    convert_before_merge = graph_path_exists_between_types(job, {"convert"}, "merge") if has_graph else bool(job.convert_enabled)
-    convert_before_yt = graph_path_exists_between_types(job, {"convert"}, "yt_version") if has_graph else bool(job.convert_enabled)
+    convert_before_merge = graph_path_exists_between_types(job, {"convert"}, "merge") if has_graph else False
+    convert_before_yt = graph_path_exists_between_types(job, {"convert"}, "yt_version") if has_graph else False
     merge_before_yt = graph_path_exists_between_types(job, {"merge"}, "yt_version") if has_graph else False
 
     convert_summary = build_configured_source_summary(
@@ -140,14 +140,20 @@ class WorkflowDialogStateController:
         self._dialog = dialog
 
     def runtime_snapshot(self):
+        # Copy dicts before iterating: _set_step_status mutates step_statuses from a
+        # background thread.  Iterating over the live dict while another thread adds a
+        # new key raises "RuntimeError: dictionary changed size during iteration", which
+        # silently kills the timer slot and prevents the graph from ever refreshing.
+        step_statuses = self._dialog._job.step_statuses
+        step_details = self._dialog._job.step_details
         return (
             self._dialog._job.name,
             self._dialog._job.resume_status,
-            tuple(sorted((self._dialog._job.step_statuses or {}).items()))
-            if isinstance(self._dialog._job.step_statuses, dict)
+            tuple(sorted(dict(step_statuses).items()))
+            if isinstance(step_statuses, dict)
             else (),
-            tuple(sorted((self._dialog._job.step_details or {}).items()))
-            if isinstance(self._dialog._job.step_details, dict)
+            tuple(sorted(dict(step_details).items()))
+            if isinstance(step_details, dict)
             else (),
             self._dialog._job.progress_pct,
             self._dialog._job.overall_progress_pct,

@@ -93,14 +93,14 @@ def _resolve_effective_node_type(job: WorkflowJob, node_type: str | None) -> tup
         return "transfer", "Der Workflow wird vollständig zurückgesetzt."
     if node_type in _SOURCE_NODE_TYPES:
         return node_type, "Der Branch wird ab der Quelle neu aufgebaut."
-    if node_type == "merge" and job.convert_enabled and not graph_merge_precedes_convert(job):
+    reachable = graph_reachable_types(job)
+    has_convert = "convert" in reachable
+    if node_type == "merge" and has_convert and not graph_merge_precedes_convert(job):
         return "convert", "Merge startet hier ab Konvertierung neu, weil die Merge-Eingänge aus Konvertierungsartefakten stammen."
     if node_type == "titlecard":
-        if not getattr(job, "graph_nodes", None) and any(file.merge_group_id for file in job.files):
-            return "merge", "Titelkarte setzt hier auf den Merge zurück, weil das klassische Workflow-Schema das Zielartefakt direkt überschreibt."
         if graph_has_post_merge_titlecard(job):
             return "merge", "Titelkarte setzt hier auf den Merge zurück, weil das Zielartefakt in-place überschrieben worden sein kann."
-        if job.convert_enabled:
+        if has_convert:
             return "convert", "Titelkarte setzt hier auf die Konvertierung zurück, weil vorgelagerte Artefakte bereits überschrieben oder entfernt sein können."
         return "transfer", "Titelkarte setzt hier auf den Transfer zurück, weil kein stabiles Zwischenartefakt garantiert ist."
     return node_type, ""
@@ -468,13 +468,12 @@ def _planned_steps(job: WorkflowJob) -> list[str]:
         if isinstance(node, dict)
     }
     has_merge = any(file.merge_group_id for file in job.files) or "merge" in graph_types
-    has_graph = bool(getattr(job, "graph_nodes", None))
-    reachable_types = graph_reachable_types(job) if has_graph else set()
-    convert_enabled = "convert" in reachable_types if has_graph else job.convert_enabled
-    titlecard_enabled = "titlecard" in reachable_types if has_graph else job.title_card_enabled
-    youtube_version_enabled = "yt_version" in reachable_types if has_graph else job.create_youtube_version
-    youtube_upload_enabled = "youtube_upload" in reachable_types if has_graph else job.upload_youtube
-    kaderblick_enabled = "kaderblick" in reachable_types if has_graph else (job.upload_youtube and job.upload_kaderblick)
+    reachable_types = graph_reachable_types(job)
+    convert_enabled = "convert" in reachable_types
+    titlecard_enabled = "titlecard" in reachable_types
+    youtube_version_enabled = "yt_version" in reachable_types
+    youtube_upload_enabled = "youtube_upload" in reachable_types
+    kaderblick_enabled = "kaderblick" in reachable_types
 
     steps = ["transfer"]
     if has_merge and graph_merge_precedes_convert(job):

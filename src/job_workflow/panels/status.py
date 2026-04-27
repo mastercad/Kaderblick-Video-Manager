@@ -3,7 +3,7 @@ from __future__ import annotations
 from PySide6.QtWidgets import QLabel, QFrame, QProgressBar, QVBoxLayout, QWidget
 
 from ..graph import _STEP_LABELS, _infer_current_step, _planned_job_steps
-from ...workflow import WorkflowJob, graph_merge_precedes_convert, graph_source_nodes, graph_source_reaches_merge
+from ...workflow import WorkflowJob, graph_merge_precedes_convert, graph_reachable_types, graph_source_nodes, graph_source_reaches_merge
 
 
 _STEP_STATUS_LABELS = {
@@ -43,9 +43,13 @@ def build_execution_notes(job: WorkflowJob) -> list[str]:
             notes.append("Reihenfolge aus dem Canvas: Merge läuft vor der Konvertierung. Vorabprüfung prüft daher direkt die Eingangsdateien.")
     else:
         notes.append("Standalone-Pfad: Fertige Dateien können direkt nach dem Transfer in die Verarbeitung laufen.")
-    if job.upload_youtube or job.upload_kaderblick:
+    has_graph = bool(getattr(job, "graph_nodes", None))
+    reachable = graph_reachable_types(job) if has_graph else set()
+    has_upload = bool(reachable & {"youtube_upload", "kaderblick"})
+    has_ffmpeg_steps = bool(reachable & {"titlecard", "yt_version"})
+    if has_upload:
         notes.append("Upload-Lane separat: Uploads können parallel zur nächsten Konvertierung laufen.")
-    if job.title_card_enabled or job.create_youtube_version:
+    if has_ffmpeg_steps:
         notes.append("FFmpeg-Schritte liegen gemeinsam auf der Verarbeitungs-Lane und teilen sich dieselbe GPU-/Encoder-Ressource.")
     return notes
 

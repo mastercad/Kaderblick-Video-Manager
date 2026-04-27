@@ -262,8 +262,9 @@ def _format_elapsed_cell(seconds: float) -> str:
     return "–"
 
 
-def _reset_status_column(self):
-    for row in range(self.table.rowCount()):
+def _reset_status_column(self, rows: set[int] | None = None):
+    all_rows = rows if rows is not None else set(range(self.table.rowCount()))
+    for row in all_rows:
         status_item = self.table.item(row, 4)
         if status_item is None:
             status_item = QTableWidgetItem()

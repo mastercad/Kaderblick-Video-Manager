@@ -233,32 +233,28 @@ def _node_output_branches(node_type: str) -> list[tuple[str, str]]:
 
 def _planned_job_steps(job: WorkflowJob) -> list[str]:
     has_merge = any(file.merge_group_id for file in job.files)
-    reachable_types = graph_reachable_types(job) if getattr(job, "graph_nodes", None) else set()
-    has_graph = bool(getattr(job, "graph_nodes", None))
-    convert_enabled = "convert" in reachable_types if has_graph else job.convert_enabled
-    titlecard_enabled = "titlecard" in reachable_types if has_graph else job.title_card_enabled
-    surface_validation_enabled = "validate_surface" in reachable_types if has_graph else False
-    deep_validation_enabled = "validate_deep" in reachable_types if has_graph else False
-    cleanup_enabled = "cleanup" in reachable_types if has_graph else False
-    has_repair = "repair" in reachable_types if has_graph else False
-    youtube_version_enabled = "yt_version" in reachable_types if has_graph else job.create_youtube_version
-    stop_enabled = "stop" in reachable_types if has_graph else False
-    youtube_upload_enabled = "youtube_upload" in reachable_types if has_graph else job.upload_youtube
-    kaderblick_enabled = "kaderblick" in reachable_types if has_graph else (job.upload_youtube and job.upload_kaderblick)
-    if has_graph:
-        has_output_stack = (
-            convert_enabled
-            or has_merge
-            or youtube_upload_enabled
-            or youtube_version_enabled
-            or has_repair
-            or surface_validation_enabled
-            or deep_validation_enabled
-            or cleanup_enabled
-            or stop_enabled
-        )
-    else:
-        has_output_stack = convert_enabled or has_merge or youtube_upload_enabled
+    reachable_types = graph_reachable_types(job)
+    convert_enabled = "convert" in reachable_types
+    titlecard_enabled = "titlecard" in reachable_types
+    surface_validation_enabled = "validate_surface" in reachable_types
+    deep_validation_enabled = "validate_deep" in reachable_types
+    cleanup_enabled = "cleanup" in reachable_types
+    has_repair = "repair" in reachable_types
+    youtube_version_enabled = "yt_version" in reachable_types
+    stop_enabled = "stop" in reachable_types
+    youtube_upload_enabled = "youtube_upload" in reachable_types
+    kaderblick_enabled = "kaderblick" in reachable_types
+    has_output_stack = (
+        convert_enabled
+        or has_merge
+        or youtube_upload_enabled
+        or youtube_version_enabled
+        or has_repair
+        or surface_validation_enabled
+        or deep_validation_enabled
+        or cleanup_enabled
+        or stop_enabled
+    )
 
     steps = ["transfer"]
     if has_merge and graph_merge_precedes_convert(job):

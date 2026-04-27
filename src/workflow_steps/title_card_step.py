@@ -17,8 +17,6 @@ class TitleCardStep:
 
     def execute(self, executor: Any, prepared: PreparedOutput) -> int:
         title_card_enabled = prepared.title_card_enabled_override
-        if title_card_enabled is None:
-            title_card_enabled = prepared.job.title_card_enabled
         if not (title_card_enabled and prepared.cv_job.output_path):
             return 0
         reused_path = self._find_existing_titlecard_output(prepared)

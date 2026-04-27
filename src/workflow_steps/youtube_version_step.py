@@ -15,14 +15,11 @@ class YoutubeVersionStep:
 
     def execute(self, executor: Any, prepared: PreparedOutput) -> int:
         youtube_version_enabled = prepared.youtube_version_enabled_override
-        if youtube_version_enabled is None:
-            youtube_version_enabled = prepared.job.create_youtube_version
         if not (youtube_version_enabled and prepared.cv_job.output_path):
             return 0
 
-        has_graph = bool(getattr(prepared.job, "graph_nodes", None))
-        merge_before_yt = graph_path_exists_between_types(prepared.job, {"merge"}, "yt_version") if has_graph else False
-        convert_before_yt = graph_path_exists_between_types(prepared.job, {"convert"}, "yt_version") if has_graph else bool(prepared.job.convert_enabled)
+        merge_before_yt = graph_path_exists_between_types(prepared.job, {"merge"}, "yt_version")
+        convert_before_yt = graph_path_exists_between_types(prepared.job, {"convert"}, "yt_version")
         inherited_encoder = prepared.per_settings.video.encoder
         inherited_crf: int | None = None
         if merge_before_yt:

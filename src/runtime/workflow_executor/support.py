@@ -19,13 +19,12 @@ class WorkflowExecutorSupportMixin:
             if isinstance(node, dict)
         }
         has_merge = any(file.merge_group_id for file in job.files) or "merge" in graph_types
-        has_graph = bool(getattr(job, "graph_nodes", None))
-        reachable_types = graph_reachable_types(job) if has_graph else set()
-        convert_enabled = "convert" in reachable_types if has_graph else job.convert_enabled
-        titlecard_enabled = "titlecard" in reachable_types if has_graph else job.title_card_enabled
-        youtube_version_enabled = "yt_version" in reachable_types if has_graph else job.create_youtube_version
-        youtube_upload_enabled = "youtube_upload" in reachable_types if has_graph else job.upload_youtube
-        kaderblick_enabled = "kaderblick" in reachable_types if has_graph else (job.upload_youtube and job.upload_kaderblick)
+        reachable_types = graph_reachable_types(job)
+        convert_enabled = "convert" in reachable_types
+        titlecard_enabled = "titlecard" in reachable_types
+        youtube_version_enabled = "yt_version" in reachable_types
+        youtube_upload_enabled = "youtube_upload" in reachable_types
+        kaderblick_enabled = "kaderblick" in reachable_types
 
         steps = ["transfer"]
         if has_merge and self._merge_precedes_convert(job):
@@ -87,17 +86,13 @@ class WorkflowExecutorSupportMixin:
         status = str(job.step_statuses.get(step, "") or "")
         return self._is_finished_step_status(status) and self._step_precedes(job, step, current_resume_step)
 
-    @staticmethod
-    def _needs_delivery(job: WorkflowJob) -> bool:
-        return bool(job.upload_youtube or job.upload_kaderblick)
-
     def _build_pipeline_kaderblick_sort_index(
         self,
         active: list[tuple[int, WorkflowJob]],
     ) -> dict[tuple[str, str], int]:
         kb_by_game: dict[str, list[str]] = defaultdict(list)
         for _index, job in active:
-            if not (job.upload_kaderblick and job.upload_youtube):
+            if not self._support.job_reaches_type(job, "kaderblick"):
                 continue
 
             candidates: list[tuple[str, str]] = []
@@ -141,7 +136,7 @@ class WorkflowExecutorSupportMixin:
             ])
             merge_before_convert = self._merge_precedes_convert(job)
 
-            if job.convert_enabled:
+            if self._support.job_reaches_type(job, "convert"):
                 if merge_before_convert and merge_groups:
                     total += max(file_count - merge_member_count, 0)
                     total += len(merge_groups)
@@ -152,7 +147,7 @@ class WorkflowExecutorSupportMixin:
             if self._support.job_reaches_type(job, "repair"):
                 total += len(merge_groups) if merge_groups else max(1, file_count)
 
-            if job.upload_youtube:
+            if self._support.job_reaches_type(job, "youtube_upload"):
                 total += len(merge_groups) if merge_groups else max(1, file_count)
         return total
 
@@ -215,26 +210,6 @@ class WorkflowExecutorSupportMixin:
 
     def _merge_precedes_convert(self, job: WorkflowJob) -> bool:
         return self._support.merge_precedes_convert(job)
-
-    def _run_output_steps(
-        self,
-        prepared: PreparedOutput,
-        yt_service,
-        kb_sort_index: dict[tuple[str, str], int],
-        *,
-        include_title_card: bool = True,
-        include_repair: bool = True,
-        include_youtube_version: bool = True,
-    ) -> int:
-        return self._output_step_stack.execute(
-            self,
-            prepared,
-            yt_service,
-            kb_sort_index,
-            include_title_card=include_title_card,
-            include_repair=include_repair,
-            include_youtube_version=include_youtube_version,
-        )
 
     def _prepared_output_reaches_type(self, prepared: PreparedOutput, target_type: str) -> bool:
         return self._support.prepared_output_reaches_type(prepared, target_type)

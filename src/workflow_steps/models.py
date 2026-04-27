@@ -37,17 +37,3 @@ class ConvertItem:
     resume_from_step: str = ""
     graph_origin_node_id: str = ""
     merge_group_id: str = ""
-
-
-@dataclass
-class TransferPhaseResult:
-    convert_items: list[ConvertItem]
-    transfer_fail: int
-    cancelled: bool = False
-
-
-@dataclass
-class ProcessingResult:
-    ok: int
-    skip: int
-    fail: int

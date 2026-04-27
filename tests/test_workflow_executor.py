@@ -448,6 +448,38 @@ class TestJobCancelFlag:
 
         assert flag.wait(timeout=0.01) is True
 
+    def test_wait_returns_true_immediately_when_already_cancelled(self):
+        """L33: timeout=0 → return is_set() immediately."""
+        ex = WorkflowExecutor(Workflow(jobs=[WorkflowJob(name="A")]), _make_settings())
+        flag = ex._cancel_flag_for_job(0)
+        ex.cancel(active_indices={0})
+
+        assert flag.wait(timeout=0) is True
+
+    def test_wait_with_zero_timeout_not_cancelled_returns_false(self):
+        """L33: timeout=0 and not cancelled → return is_set() = False."""
+        ex = WorkflowExecutor(Workflow(), _make_settings())
+        flag = ex._cancel_flag_for_job(0)
+
+        assert flag.wait(timeout=0) is False
+
+    def test_wait_with_none_timeout_returns_true_when_cancelled(self):
+        """L45: no deadline branch — cancel from another thread."""
+        ex = WorkflowExecutor(Workflow(jobs=[WorkflowJob(name="A")]), _make_settings())
+        flag = ex._cancel_flag_for_job(0)
+
+        import threading
+
+        def _cancel_soon():
+            time.sleep(0.05)
+            ex.cancel(active_indices={0})
+
+        t = threading.Thread(target=_cancel_soon)
+        t.start()
+        result = flag.wait(timeout=None)
+        t.join(timeout=1.0)
+        assert result is True
+
 
 class TestMarkJobCancelled:
     def _make_executor_with_captured_statuses(self, jobs):
@@ -523,6 +555,32 @@ class TestMarkJobCancelled:
         assert any(s == "Job abgebrochen" for _, s in emitted), (
             f"Job zwischen Steps soll 'Job abgebrochen' bekommen, got: {emitted}"
         )
+
+    def test_request_job_cancel_out_of_bounds_is_ignored(self):
+        """L108: orig_idx außerhalb des Bereichs → return ohne Effekt."""
+        ex = WorkflowExecutor(Workflow(jobs=[WorkflowJob(name="A")]), _make_settings())
+        ex._request_job_cancel(99)  # darf nicht abstürzen
+        assert 99 not in ex._cancelled_indices
+
+    def test_request_job_cancel_already_cancelled_is_ignored(self):
+        """L110: orig_idx bereits in cancelled_indices → kein doppelter Eintrag."""
+        ex = WorkflowExecutor(Workflow(jobs=[WorkflowJob(name="A")]), _make_settings())
+        ex._cancelled_indices.add(0)
+        before = set(ex._cancelled_indices)
+        ex._request_job_cancel(0)
+        assert ex._cancelled_indices == before
+
+    def test_mark_job_cancelled_out_of_bounds_is_ignored(self):
+        """L123: orig_idx außerhalb des Bereichs → return ohne Effekt."""
+        ex = WorkflowExecutor(Workflow(jobs=[WorkflowJob(name="A")]), _make_settings())
+        ex._mark_job_cancelled(99)  # darf nicht abstürzen
+
+    def test_cancelled_property_returns_cancel_event_state(self):
+        """L160: cancelled property gibt _cancel.is_set() zurück."""
+        ex = WorkflowExecutor(Workflow(), _make_settings())
+        assert ex.cancelled is False
+        ex._cancel.set()
+        assert ex.cancelled is True
 
 
 class TestYouTubeUploadRequest:
@@ -1525,6 +1583,11 @@ class TestTransferResumeFallbacks:
             source_mode="files",
             convert_enabled=True,
             files=[FileEntry(source_path=str(src))],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), settings)
 
@@ -1558,6 +1621,11 @@ class TestTransferResumeFallbacks:
             convert_enabled=True,
             merge_segment_data={"camera": "DJI Osmo Action 5 Pro"},
             files=[FileEntry(source_path=str(src))],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), settings)
 
@@ -1622,6 +1690,11 @@ class TestTransferResumeFallbacks:
             download_destination=str(download_root),
             convert_enabled=True,
             files=[FileEntry(source_path="take1.mp4")],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_pi_download"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
         )
         finished_args = []
         ex = WorkflowExecutor(Workflow(jobs=[job]), settings)
@@ -1670,6 +1743,11 @@ class TestWorkflowStackScenarios:
             source_mode="files",
             convert_enabled=True,
             files=[FileEntry(source_path=str(source))],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
 
@@ -1829,6 +1907,15 @@ class TestWorkflowStackScenarios:
             default_kaderblick_video_type_id=3,
             default_kaderblick_camera_id=7,
             files=[FileEntry(source_path=str(source))],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "ytu-1", "type": "youtube_upload"},
+                {"id": "kb-1", "type": "kaderblick"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "ytu-1"},
+                {"source": "ytu-1", "target": "kb-1"},
+            ],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
 
@@ -1863,6 +1950,15 @@ class TestWorkflowStackScenarios:
                 create_youtube_version=True,
                 upload_youtube=False,
                 files=[FileEntry(source_path=str(source))],
+                graph_nodes=[
+                    {"id": "src-1", "type": "source_files"},
+                    {"id": "conv-1", "type": "convert"},
+                    {"id": "ytv-1", "type": "yt_version"},
+                ],
+                graph_edges=[
+                    {"source": "src-1", "target": "conv-1"},
+                    {"source": "conv-1", "target": "ytv-1"},
+                ],
             )
             ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
             ex.run()
@@ -1877,6 +1973,13 @@ class TestWorkflowStackScenarios:
                 create_youtube_version=False,
                 upload_youtube=False,
                 files=[FileEntry(source_path=str(source))],
+                graph_nodes=[
+                    {"id": "src-1", "type": "source_files"},
+                    {"id": "conv-1", "type": "convert"},
+                ],
+                graph_edges=[
+                    {"source": "src-1", "target": "conv-1"},
+                ],
             )
             ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
             ex.run()
@@ -1942,6 +2045,17 @@ class TestWorkflowStackScenarios:
             files=[FileEntry(source_path=str(source), output_filename="clip_converted")],
             resume_status="Konvertiere …",
             step_statuses={"transfer": "done", "convert": "running"},
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+                {"id": "ytv-1", "type": "yt_version"},
+                {"id": "ytu-1", "type": "youtube_upload"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "conv-1"},
+                {"source": "conv-1", "target": "ytv-1"},
+                {"source": "ytv-1", "target": "ytu-1"},
+            ],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
         ex._youtube_convert_func = MagicMock(return_value=True)
@@ -1972,6 +2086,15 @@ class TestWorkflowStackScenarios:
             files=[FileEntry(source_path=str(source))],
             resume_status="YT-Version erstellen …",
             step_statuses={"transfer": "done", "yt_version": "running"},
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "ytv-1", "type": "yt_version"},
+                {"id": "ytu-1", "type": "youtube_upload"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "ytv-1"},
+                {"source": "ytv-1", "target": "ytu-1"},
+            ],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
 
@@ -2003,6 +2126,15 @@ class TestWorkflowStackScenarios:
             upload_youtube=True,
             files=[FileEntry(source_path="take1.mp4")],
             step_statuses={"transfer": "done"},
+            graph_nodes=[
+                {"id": "src-1", "type": "source_pi_download"},
+                {"id": "conv-1", "type": "convert"},
+                {"id": "ytu-1", "type": "youtube_upload"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "conv-1"},
+                {"source": "conv-1", "target": "ytu-1"},
+            ],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), settings)
         ex._download_func = MagicMock(side_effect=AssertionError("pi download must stay skipped"))
@@ -2039,6 +2171,13 @@ class TestWorkflowStackScenarios:
             convert_enabled=True,
             files=[FileEntry(source_path="clip1.mp4")],
             step_statuses={"transfer": "done"},
+            graph_nodes=[
+                {"id": "src-1", "type": "source_folder_scan"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "conv-1"},
+            ],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
 
@@ -2076,6 +2215,17 @@ class TestWorkflowStackScenarios:
                 "convert": "done",
                 "yt_version": "done",
             },
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+                {"id": "ytv-1", "type": "yt_version"},
+                {"id": "ytu-1", "type": "youtube_upload"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "conv-1"},
+                {"source": "conv-1", "target": "ytv-1"},
+                {"source": "ytv-1", "target": "ytu-1"},
+            ],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
         ex._convert_func = MagicMock(side_effect=AssertionError("convert must stay skipped"))
@@ -2106,6 +2256,11 @@ class TestWorkflowStackScenarios:
                 FileEntry(source_path=str(source_a)),
                 FileEntry(source_path=str(source_b)),
             ],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
         transfer_finished = threading.Event()
@@ -2157,6 +2312,15 @@ class TestWorkflowStackScenarios:
             files=[
                 FileEntry(source_path=str(source_a), merge_group_id="g1"),
                 FileEntry(source_path=str(source_b), merge_group_id="g1"),
+            ],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+                {"id": "merge-1", "type": "merge"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "conv-1"},
+                {"source": "conv-1", "target": "merge-1"},
             ],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
@@ -2383,12 +2547,22 @@ class TestWorkflowStackScenarios:
             source_mode="files",
             convert_enabled=True,
             files=[FileEntry(source_path=str(first))],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
         )
         job_b = WorkflowJob(
             name="Job B",
             source_mode="files",
             convert_enabled=True,
             files=[FileEntry(source_path=str(second))],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src-1", "target": "conv-1"}],
         )
 
         ex = WorkflowExecutor(Workflow(jobs=[job_a, job_b]), _make_settings())
@@ -2425,9 +2599,9 @@ class TestWorkflowStackScenarios:
         ex = WorkflowExecutor(
             Workflow(
                 jobs=[
-                    WorkflowJob(name="Job A", source_mode="files", convert_enabled=True, files=[FileEntry(source_path=str(first))]),
-                    WorkflowJob(name="Job B", source_mode="files", convert_enabled=True, files=[FileEntry(source_path=str(second))]),
-                    WorkflowJob(name="Job C", source_mode="files", convert_enabled=True, files=[FileEntry(source_path=str(third))]),
+                    WorkflowJob(name="Job A", source_mode="files", convert_enabled=True, files=[FileEntry(source_path=str(first))], graph_nodes=[{"id": "src-1", "type": "source_files"}, {"id": "conv-1", "type": "convert"}], graph_edges=[{"source": "src-1", "target": "conv-1"}]),
+                    WorkflowJob(name="Job B", source_mode="files", convert_enabled=True, files=[FileEntry(source_path=str(second))], graph_nodes=[{"id": "src-1", "type": "source_files"}, {"id": "conv-1", "type": "convert"}], graph_edges=[{"source": "src-1", "target": "conv-1"}]),
+                    WorkflowJob(name="Job C", source_mode="files", convert_enabled=True, files=[FileEntry(source_path=str(third))], graph_nodes=[{"id": "src-1", "type": "source_files"}, {"id": "conv-1", "type": "convert"}], graph_edges=[{"source": "src-1", "target": "conv-1"}]),
                 ]
             ),
             _make_settings(),
@@ -2684,6 +2858,15 @@ class TestWorkflowStackScenarios:
             files=[
                 FileEntry(source_path=str(source_a)),
                 FileEntry(source_path=str(source_b)),
+            ],
+            graph_nodes=[
+                {"id": "src-1", "type": "source_files"},
+                {"id": "conv-1", "type": "convert"},
+                {"id": "ytu-1", "type": "youtube_upload"},
+            ],
+            graph_edges=[
+                {"source": "src-1", "target": "conv-1"},
+                {"source": "conv-1", "target": "ytu-1"},
             ],
         )
         ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
@@ -3094,6 +3277,17 @@ class TestMergeUploadAfterConcat:
                 upload_kaderblick=False,
                 title_card_enabled=False,
                 create_youtube_version=False,
+                graph_nodes=[
+                    {"id": "src-1", "type": "source_files"},
+                    {"id": "conv-1", "type": "convert"},
+                    {"id": "merge-1", "type": "merge"},
+                    {"id": "ytu-1", "type": "youtube_upload"},
+                ],
+                graph_edges=[
+                    {"source": "src-1", "target": "conv-1"},
+                    {"source": "conv-1", "target": "merge-1"},
+                    {"source": "merge-1", "target": "ytu-1"},
+                ],
             )
             job.files = entries
 
@@ -3202,6 +3396,17 @@ class TestMergeUploadAfterConcat:
                 upload_kaderblick=False,
                 title_card_enabled=False,
                 create_youtube_version=True,
+                graph_nodes=[
+                    {"id": "src-1", "type": "source_files"},
+                    {"id": "merge-1", "type": "merge"},
+                    {"id": "ytv-1", "type": "yt_version"},
+                    {"id": "ytu-1", "type": "youtube_upload"},
+                ],
+                graph_edges=[
+                    {"source": "src-1", "target": "merge-1"},
+                    {"source": "merge-1", "target": "ytv-1"},
+                    {"source": "ytv-1", "target": "ytu-1"},
+                ],
             )
             job.files = entries
 
@@ -3383,6 +3588,17 @@ class TestTitleCardMergeGroup:
                 upload_kaderblick=False,
                 title_card_enabled=True,
                 create_youtube_version=False,
+                graph_nodes=[
+                    {"id": "src-1", "type": "source_files"},
+                    {"id": "conv-1", "type": "convert"},
+                    {"id": "merge-1", "type": "merge"},
+                    {"id": "title-1", "type": "titlecard"},
+                ],
+                graph_edges=[
+                    {"source": "src-1", "target": "conv-1"},
+                    {"source": "conv-1", "target": "merge-1"},
+                    {"source": "merge-1", "target": "title-1"},
+                ],
             )
             job.files = entries
 
@@ -3472,6 +3688,15 @@ class TestOriginalPreservationWithoutConvert:
                 title_card_enabled=True,
                 create_youtube_version=False,
                 files=[FileEntry(source_path=str(src))],
+                graph_nodes=[
+                    {"id": "src-1", "type": "source_files"},
+                    {"id": "title-1", "type": "titlecard"},
+                    {"id": "ytu-1", "type": "youtube_upload"},
+                ],
+                graph_edges=[
+                    {"source": "src-1", "target": "title-1"},
+                    {"source": "title-1", "target": "ytu-1"},
+                ],
             )
 
             ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
@@ -3516,6 +3741,19 @@ class TestOriginalPreservationWithoutConvert:
                 ],
                 resume_status="Zusammenführen …",
                 step_statuses={"transfer": "done", "merge": "running"},
+                graph_nodes=[
+                    {"id": "src-1", "type": "source_files"},
+                    {"id": "merge-1", "type": "merge"},
+                    {"id": "ytv-1", "type": "yt_version"},
+                    {"id": "ytu-1", "type": "youtube_upload"},
+                    {"id": "kb-1", "type": "kaderblick"},
+                ],
+                graph_edges=[
+                    {"source": "src-1", "target": "merge-1"},
+                    {"source": "merge-1", "target": "ytv-1"},
+                    {"source": "ytv-1", "target": "ytu-1"},
+                    {"source": "ytu-1", "target": "kb-1"},
+                ],
             )
 
             ex = WorkflowExecutor(Workflow(jobs=[job]), _make_settings())
