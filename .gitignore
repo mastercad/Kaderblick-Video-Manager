@@ -16,3 +16,6 @@ data/last_workflow.json
 data/integration_state.json
 /workflows/
 *.log
+.coverage
+.pytest_cache
+tmp_*

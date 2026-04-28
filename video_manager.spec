@@ -2,18 +2,16 @@
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_submodules
 
 
 project_root = Path(SPECPATH)
 
 datas = [
     (str(project_root / "assets"), "assets"),
-    *collect_data_files("ultralytics"),
 ]
 
 hiddenimports = [
-    *collect_submodules("ultralytics"),
     *collect_submodules("googleapiclient"),
     *collect_submodules("google_auth_oauthlib"),
 ]

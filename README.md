@@ -2,6 +2,10 @@
 
 Der Kaderblick — Video Manager hilft Ihnen dabei, Fußball-Videos an einem Ort zu sammeln, zu verarbeiten und bei Bedarf auf YouTube und Kaderblick weiterzugeben.
 
+<p align="center">
+  <img src="assets/application_main.png" alt="Hauptfenster des Kaderblick — Video Managers mit Workflow-Liste und Protokoll" width="1200">
+</p>
+
 Diese Anleitung richtet sich an Menschen ohne Technik-Erfahrung. Sie erklärt nicht die interne Technik der App, sondern den einfachen Arbeitsablauf im Alltag.
 
 Mit der App können Sie:
@@ -83,17 +87,17 @@ Sie müssen dafür nicht alles verstehen. Es reicht, wenn Sie die folgenden Schr
 
 Starten Sie die App.
 
-Im Hauptfenster sehen Sie oben die grüne Leiste, in der Mitte die Workflow-Liste und unten das Protokoll.
+Im Hauptfenster sehen Sie oben die grüne Leiste mit den Aktionen, in der Mitte die Workflow-Liste und unten das Protokoll.
 
 ### 2. Neuen Workflow anlegen
 
-Klicken Sie oben auf `＋ Neuer Workflow`.
+Klicken Sie oben auf `+ Neuer Workflow`.
 
 Danach öffnet sich zuerst der grafische Workflow-Editor.
 
 Für Einsteiger ist der einfachste Weg:
 
-1. `＋ Neuer Workflow` klicken
+1. `+ Neuer Workflow` klicken
 2. im geöffneten Fenster auf `Übernehmen` klicken
 3. den neuen Workflow in der Liste markieren
 4. auf `Bearbeiten` klicken
@@ -130,7 +134,7 @@ Damit haben Sie eine Workflow-Datei, die Sie später wieder laden oder weitergeb
 
 ### 7. Workflow starten
 
-Markieren Sie den Workflow in der Liste und klicken Sie auf `▶ Starten`.
+Markieren Sie den Workflow in der Liste und klicken Sie auf `Starten`.
 
 Den Fortschritt sehen Sie:
 
@@ -141,7 +145,7 @@ Den Fortschritt sehen Sie:
 
 ### 8. Wenn Sie anhalten möchten
 
-Klicken Sie auf `■ Abbrechen`.
+Klicken Sie auf `Abbrechen`.
 
 Wenn Sie vorher bestimmte Workflows markiert haben, werden nur diese abgebrochen.
 
@@ -160,15 +164,11 @@ Ab hier wird die App genauer erklärt.
 
 ## So sieht die App aus
 
-<p align="center">
-  <img src="assets/application_main.png" alt="Hauptfenster des Kaderblick — Video Managers mit Workflow-Liste oben und Protokoll unten" width="1200">
-</p>
-
 Das Hauptfenster besteht aus drei Bereichen:
 
-- oben: die grüne Leiste mit den wichtigsten Aktionen
-- in der Mitte: Ihre Workflow-Liste
-- unten: das Protokoll mit allen laufenden Meldungen
+- **oben:** die grüne Leiste mit den Aktionen `+ Neuer Workflow`, `Bearbeiten`, `Kopieren`, `Workflow`, `Entfernen`, `Starten`, `Abbrechen`, `Laden`, `Speichern` und `Rechner herunterfahren`
+- **Mitte:** die Workflow-Liste mit den Spalten `#`, `Name`, `Quelle`, `Pipeline`, `Status`, `Job` und `Dauer`
+- **unten:** das Protokoll mit allen laufenden Meldungen der aktiven Jobs
 
 Jede Zeile in der Mitte ist ein Workflow.
 
@@ -182,7 +182,7 @@ Ein Workflow ist einfach ein kompletter Arbeitsauftrag, zum Beispiel:
 
 ## Schritt 1: Einen Workflow anlegen
 
-Klicken Sie oben auf `＋ Neuer Workflow`.
+Klicken Sie oben auf `+ Neuer Workflow`.
 
 Danach öffnet die App zuerst den grafischen Workflow-Editor.
 
@@ -190,7 +190,7 @@ Das ist normal.
 
 Für Einsteiger ist der einfachste Weg:
 
-1. `＋ Neuer Workflow` klicken
+1. `+ Neuer Workflow` klicken
 2. den geöffneten Workflow-Editor einfach mit `Übernehmen` bestätigen
 3. danach den neuen Workflow in der Liste markieren
 4. auf `Bearbeiten` klicken
@@ -383,9 +383,9 @@ Der Empfänger bekommt nur den Workflow selbst, nicht Ihren persönlichen Zwisch
 
 Markieren Sie einen oder mehrere Workflows in der Liste.
 
-Klicken Sie danach auf `▶ Starten`.
+Klicken Sie danach auf `Starten`.
 
-Wenn Sie nichts markieren, startet die App alle aktiven Workflows.
+Wenn Sie nichts markieren, startet die App alle wartenden Workflows.
 
 Während der Verarbeitung sehen Sie in der Liste:
 
@@ -399,7 +399,7 @@ Im Protokoll unten sehen Sie zusätzlich die einzelnen Meldungen im Detail.
 
 ## Schritt 5: Einen laufenden Workflow abbrechen
 
-Wenn Sie eine Verarbeitung anhalten möchten, klicken Sie auf `■ Abbrechen`.
+Wenn Sie eine Verarbeitung anhalten möchten, klicken Sie auf `Abbrechen`.
 
 Die App fragt dann zur Sicherheit nach.
 
@@ -432,7 +432,7 @@ Dann bietet sie an:
 
 ## Was der grafische Workflow-Editor macht
 
-Wenn Sie im Hauptfenster einen Workflow markieren und `Workflow` klicken, öffnet sich der grafische Workflow-Editor.
+Wenn Sie im Hauptfenster einen Workflow markieren und `Workflow` in der Werkzeugleiste klicken, öffnet sich der grafische Workflow-Editor.
 
 Dieser Bereich ist für den Ablauf des Workflows zuständig.
 
@@ -627,7 +627,7 @@ Für normale Nutzer ist das der einzige Startbefehl, den Sie brauchen.
 
 Im Projekt ist aktuell vorgesehen:
 
-- Python 3.10 oder neuer
+- Python 3.11 oder neuer
 - `ffmpeg`
 - `ffprobe`
 
@@ -662,13 +662,13 @@ Diese Dateinamen sind in dieser README bereits passend vorbereitet.
 
 Wenn Sie einfach nur loslegen möchten, genügt meistens dieser Ablauf:
 
-1. `＋ Neuer Workflow`
+1. `+ Neuer Workflow`
 2. `Übernehmen`
 3. Workflow markieren
 4. `Bearbeiten`
 5. Quelle auswählen
 6. Verarbeitung und Upload einstellen
 7. `Speichern`
-8. `▶ Starten`
+8. `Starten`
 
 So kommen Sie ohne Technik-Wissen am schnellsten ans Ziel.
