@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QRectF, QSize, Qt
 from PySide6.QtGui import QColor, QFont, QFontDatabase, QFontMetrics, QPainter, QPalette
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import QApplication, QWidget
 
 from ..runtime_paths import asset_path
@@ -30,6 +31,9 @@ _BRAND_K_SIZE_DELTA = 1.7
 _loaded_brand_family: str | None = None
 
 
+_ICON_GAP = 8  # px between shield icon and text
+
+
 class BrandWordmarkWidget(QWidget):
     def __init__(self, text: str = "KADERBLICK", parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -39,15 +43,28 @@ class BrandWordmarkWidget(QWidget):
         self.setObjectName("brandWordmark")
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFont(brand_wordmark_font())
+        icon_path = asset_path("kaderblick_workflow_manager_with_title_justify_invert.svg")
+        self._icon_renderer: QSvgRenderer | None = (
+            QSvgRenderer(str(icon_path)) if icon_path.exists() else None
+        )
+
+    def _icon_width_for_height(self, h: int) -> int:
+        if self._icon_renderer is None or not self._icon_renderer.isValid():
+            return 0
+        ds = self._icon_renderer.defaultSize()
+        if ds.height() == 0:
+            return h
+        return round(h * ds.width() / ds.height())
 
     def sizeHint(self) -> QSize:
         first_font = QFont(self.font())
         first_font.setPointSizeF(first_font.pointSizeF() + _BRAND_K_SIZE_DELTA)
         first_metrics = QFontMetrics(first_font)
         rest_metrics = QFontMetrics(self.font())
-        width = first_metrics.horizontalAdvance(self._first) + rest_metrics.horizontalAdvance(self._rest)
+        text_width = first_metrics.horizontalAdvance(self._first) + rest_metrics.horizontalAdvance(self._rest)
         height = max(first_metrics.height(), rest_metrics.height())
-        return QSize(width, height)
+        icon_width = (self._icon_width_for_height(height) + _ICON_GAP) if self._icon_renderer is not None else 0
+        return QSize(icon_width + text_width, height)
 
     def minimumSizeHint(self) -> QSize:
         return self.sizeHint()
@@ -61,17 +78,25 @@ class BrandWordmarkWidget(QWidget):
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
-        top = (self.height() - max(first_metrics.height(), rest_metrics.height())) // 2
+        text_height = max(first_metrics.height(), rest_metrics.height())
+        top = (self.height() - text_height) // 2
+
+        x_off = 0
+        if self._icon_renderer is not None and self._icon_renderer.isValid():
+            icon_w = self._icon_width_for_height(text_height)
+            self._icon_renderer.render(painter, QRectF(0, top, icon_w, text_height))
+            x_off = icon_w + _ICON_GAP
+
         first_baseline_y = top + first_metrics.ascent()
         rest_baseline_y = top + rest_metrics.ascent()
 
         painter.setFont(first_font)
         painter.setPen(QColor("#018707"))
-        painter.drawText(0, first_baseline_y, self._first)
+        painter.drawText(x_off, first_baseline_y, self._first)
 
         painter.setFont(self.font())
         painter.setPen(QColor("#FFFFFF"))
-        painter.drawText(first_metrics.horizontalAdvance(self._first), rest_baseline_y, self._rest)
+        painter.drawText(x_off + first_metrics.horizontalAdvance(self._first), rest_baseline_y, self._rest)
         painter.end()
 
 
