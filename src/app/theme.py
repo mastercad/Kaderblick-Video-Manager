@@ -12,13 +12,13 @@ from PySide6.QtWidgets import QApplication, QWidget
 from ..runtime_paths import asset_path
 
 
-_PRIMARY_GREEN = "#06B62E"
-_PRIMARY_GREEN_DARK = "#059B28"
-_PRIMARY_GREEN_SOFT = "#E9F8EC"
+_PRIMARY_PURPLE = "#6d4cc2"
+_PRIMARY_PURPLE_DARK = "#5a3ca8"
+_PRIMARY_PURPLE_SOFT = "#ede8f9"
 _SURFACE = "#FFFFFF"
-_SURFACE_ALT = "#F7FAF7"
-_APP_BG = "#F3F5F2"
-_BORDER = "#D6E3D6"
+_SURFACE_ALT = "#F7F5FC"
+_APP_BG = "#F4F2F9"
+_BORDER = "#D5CFF0"
 _TEXT = "#18212B"
 _MUTED = "#667582"
 _SHADOW = "rgba(8, 32, 16, 0.08)"
@@ -138,7 +138,7 @@ def _build_palette(seed: QPalette) -> QPalette:
     surface = QColor(_SURFACE)
     surface_alt = QColor(_SURFACE_ALT)
     app_bg = QColor(_APP_BG)
-    selection = QColor("#D8F2DE")
+    selection = QColor("#E2DCF6")
     muted = QColor(_MUTED)
 
     for group in (QPalette.ColorGroup.Active, QPalette.ColorGroup.Inactive, QPalette.ColorGroup.Disabled):
@@ -149,6 +149,7 @@ def _build_palette(seed: QPalette) -> QPalette:
         palette.setColor(group, QPalette.ColorRole.AlternateBase, surface_alt)
         palette.setColor(group, QPalette.ColorRole.Window, app_bg)
         palette.setColor(group, QPalette.ColorRole.Highlight, selection)
+
         palette.setColor(group, QPalette.ColorRole.HighlightedText, text)
         palette.setColor(group, QPalette.ColorRole.PlaceholderText, muted)
 
@@ -171,7 +172,7 @@ def _build_stylesheet() -> str:
     }}
 
     QMenuBar {{
-        background: {_PRIMARY_GREEN};
+        background: {_PRIMARY_PURPLE};
         color: white;
         border: none;
         padding: 4px 12px;
@@ -202,12 +203,12 @@ def _build_stylesheet() -> str:
     }}
 
     QMenu::item:selected {{
-        background: {_PRIMARY_GREEN_SOFT};
-        color: {_PRIMARY_GREEN_DARK};
+        background: {_PRIMARY_PURPLE_SOFT};
+        color: {_PRIMARY_PURPLE_DARK};
     }}
 
     QToolBar {{
-        background: {_PRIMARY_GREEN};
+        background: {_PRIMARY_PURPLE};
         border: none;
         spacing: 6px;
         padding: 10px 14px;
@@ -267,7 +268,7 @@ def _build_stylesheet() -> str:
     }}
 
     QToolBar QCheckBox::indicator:checked {{
-        background: {_PRIMARY_GREEN_DARK};
+        background: {_PRIMARY_PURPLE_DARK};
         border-color: white;
     }}
 
@@ -285,7 +286,7 @@ def _build_stylesheet() -> str:
     }}
 
     QProgressBar {{
-        background: #ECF2ED;
+        background: #EDE8F9;
         border: none;
         border-radius: 9px;
         min-height: 18px;
@@ -295,7 +296,7 @@ def _build_stylesheet() -> str:
     }}
 
     QProgressBar::chunk {{
-        background: {_PRIMARY_GREEN};
+        background: {_PRIMARY_PURPLE};
         border-radius: 9px;
     }}
 
@@ -321,14 +322,14 @@ def _build_stylesheet() -> str:
 
     QTableWidget {{
         alternate-background-color: {_SURFACE_ALT};
-        gridline-color: #E8EFE8;
-        selection-background-color: #D8F2DE;
+        gridline-color: #E3DDF5;
+        selection-background-color: #E2DCF6;
         selection-color: {_TEXT};
         padding: 4px;
     }}
 
     QHeaderView::section {{
-        background: #EFF7F0;
+        background: #EEE8FA;
         color: {_TEXT};
         border: none;
         border-bottom: 1px solid {_BORDER};
@@ -350,7 +351,7 @@ def _build_stylesheet() -> str:
     QTextEdit,
     QPlainTextEdit {{
         padding: 8px 10px;
-        selection-background-color: #D8F2DE;
+        selection-background-color: #E2DCF6;
         selection-color: {_TEXT};
         color: {_TEXT};
     }}
@@ -374,7 +375,7 @@ def _build_stylesheet() -> str:
     }}
 
     QPushButton {{
-        background: {_PRIMARY_GREEN};
+        background: {_PRIMARY_PURPLE};
         color: white;
         border: none;
         border-radius: 12px;
@@ -383,21 +384,21 @@ def _build_stylesheet() -> str:
     }}
 
     QPushButton:hover {{
-        background: {_PRIMARY_GREEN_DARK};
+        background: {_PRIMARY_PURPLE_DARK};
     }}
 
     QPushButton:disabled {{
-        background: #B9C9BA;
+        background: #C4B5E8;
         color: #F3F7F3;
     }}
 
     QPushButton[flat="true"] {{
         background: transparent;
-        color: {_PRIMARY_GREEN_DARK};
+        color: {_PRIMARY_PURPLE_DARK};
     }}
 
     QPushButton[flat="true"]:hover {{
-        background: {_PRIMARY_GREEN_SOFT};
+        background: {_PRIMARY_PURPLE_SOFT};
     }}
 
     QGroupBox {{
@@ -421,13 +422,13 @@ def _build_stylesheet() -> str:
         width: 18px;
         height: 18px;
         border-radius: 9px;
-        border: 1px solid #A8C9AF;
+        border: 1px solid #B5A4DF;
         background: white;
     }}
 
     QCheckBox::indicator:checked {{
-        background: {_PRIMARY_GREEN};
-        border-color: {_PRIMARY_GREEN};
+        background: {_PRIMARY_PURPLE};
+        border-color: {_PRIMARY_PURPLE};
     }}
 
     QSplitter::handle {{
@@ -441,13 +442,13 @@ def _build_stylesheet() -> str:
     }}
 
     QScrollBar::handle:vertical {{
-        background: #B9D8BE;
+        background: #C4B5E8;
         min-height: 28px;
         border-radius: 6px;
     }}
 
     QScrollBar::handle:vertical:hover {{
-        background: #9BC8A3;
+        background: #A896D9;
     }}
 
     QScrollBar::add-line:vertical,

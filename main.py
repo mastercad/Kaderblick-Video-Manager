@@ -26,7 +26,7 @@ from PySide6.QtWidgets import QApplication
 from src.runtime_paths import asset_path
 from src.app import ConverterApp
 
-_ICON = asset_path("icon.svg")
+_ICON = asset_path("kaderblick_workflow_appicon.svg")
 
 
 def _build_parser() -> argparse.ArgumentParser:

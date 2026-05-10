@@ -165,7 +165,7 @@ class ConverterApp(QMainWindow):
         self.resize(960, 640)
         self.setMinimumSize(720, 460)
 
-        icon_path = asset_path("icon.svg")
+        icon_path = asset_path("kaderblick_workflow_appicon.svg")
         if icon_path.exists():
             self.setWindowIcon(QIcon(str(icon_path)))
 

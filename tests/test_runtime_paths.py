@@ -16,7 +16,7 @@ def test_frozen_runtime_uses_executable_dir_for_writable_state(monkeypatch, tmp_
     assert runtime_paths.is_frozen_app() is True
     assert runtime_paths.portable_root() == tmp_path
     assert runtime_paths.bundled_resource_root() == internal_root
-    assert runtime_paths.asset_path("icon.svg") == internal_root / "assets" / "icon.svg"
+    assert runtime_paths.asset_path("kaderblick_workflow_appicon.svg") == internal_root / "assets" / "kaderblick_workflow_appicon.svg"
     assert runtime_paths.config_dir() == tmp_path / "config"
     assert runtime_paths.data_dir() == tmp_path / "data"
     assert runtime_paths.workflows_dir() == tmp_path / "workflows"
