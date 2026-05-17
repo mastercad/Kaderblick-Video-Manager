@@ -18,7 +18,6 @@ from ...workflow import WorkflowJob
 
 
 class _WorkflowGraphView(QGraphicsView):
-    selection_changed = Signal(object)
     graph_changed = Signal()
     SNAP_DISTANCE = 28
     PORT_PICK_DISTANCE = 18
@@ -42,10 +41,22 @@ class _WorkflowGraphView(QGraphicsView):
         self._edges: list[tuple[str, str, str, _GraphEdgeItem]] = []
         self._draft_job: WorkflowJob | None = None
         self._last_selection: dict = {}
+        self._selection_changed_callback = None
         self._is_panning = False
         self._last_pan_pos: QPoint | None = None
         self._interaction = _WorkflowGraphInteraction(self)
         self._scene.selectionChanged.connect(self._interaction.emit_selection)
+
+    def set_selection_changed_callback(self, callback) -> None:
+        self._selection_changed_callback = callback
+
+    def notify_selection_changed(self) -> None:
+        callback = self._selection_changed_callback
+        if callback is not None:
+            try:
+                callback(self._last_selection)
+            except RuntimeError:
+                self._selection_changed_callback = None
 
     def clear_graph(self) -> None:
         self._interaction.reset()

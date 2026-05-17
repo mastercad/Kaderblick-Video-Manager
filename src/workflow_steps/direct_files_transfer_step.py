@@ -73,8 +73,9 @@ class DirectFilesTransferStep:
     def _should_keep_missing_entry_for_resume(job: WorkflowJob, source_path: Path) -> bool:
         if not (job.resume_status or job.step_statuses):
             return False
+        normalized_source_path = source_path.as_posix()
         for entry in job.files:
-            if entry.source_path != str(source_path):
+            if entry.source_path.replace("\\", "/") != normalized_source_path:
                 continue
             if entry.merge_group_id:
                 return True

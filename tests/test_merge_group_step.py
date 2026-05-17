@@ -1,4 +1,4 @@
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import SimpleNamespace
 
 from src.media.converter import ConvertJob
@@ -365,4 +365,20 @@ class TestShouldKeepMissingEntryForResume:
             graph_edges=[{"source": "src", "target": "tc"}],
         )
         result = self._step._should_keep_missing_entry_for_resume(job, Path("/tmp/a.mp4"))
+        assert result is True
+
+    def test_matching_entry_with_windows_style_path_returns_true(self):
+        """Windows-Pfadobjekte muessen gegen gespeicherte Posix-Pfade matchen."""
+        job = WorkflowJob(
+            name="Job",
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+            resume_status="Transfer abgebrochen",
+            graph_nodes=[
+                {"id": "src", "type": "source_files"},
+                {"id": "conv", "type": "convert"},
+            ],
+            graph_edges=[{"source": "src", "target": "conv"}],
+        )
+        result = self._step._should_keep_missing_entry_for_resume(job, PureWindowsPath("/tmp/a.mp4"))
         assert result is True

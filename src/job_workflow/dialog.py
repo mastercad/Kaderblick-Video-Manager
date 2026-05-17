@@ -324,20 +324,25 @@ class JobWorkflowDialog(QDialog):
     def _on_graph_selection_changed(self, selection) -> None:
         if not self._allow_edit:
             return
-        self._graph_controller.on_graph_selection_changed(selection)
-        if not selection:
-            self._selection_label.setText("Keine Auswahl")
-            self._remove_node_btn.setEnabled(False)
-            self._reset_from_node_btn.setEnabled(False)
+        try:
+            self._graph_controller.on_graph_selection_changed(selection)
+            if not selection:
+                self._selection_label.setText("Keine Auswahl")
+                self._remove_node_btn.setEnabled(False)
+                self._reset_from_node_btn.setEnabled(False)
+                return
+            if selection.get("kind") == "edge":
+                self._selection_label.setText("Verbindung ausgewählt")
+            else:
+                node_type = str(selection.get("type", "")).strip()
+                node_label = str(_NODE_DEFINITIONS.get(node_type, {}).get("label") or node_type or "unbekannt")
+                self._selection_label.setText(node_label)
+            self._remove_node_btn.setEnabled(True)
+            self._reset_from_node_btn.setEnabled(selection.get("kind") == "node")
+        except RuntimeError:
+            # Dialog/Widgets are already being torn down; stale scene selection
+            # notifications can still arrive and must be ignored.
             return
-        if selection.get("kind") == "edge":
-            self._selection_label.setText("Verbindung ausgewählt")
-        else:
-            node_type = str(selection.get("type", "")).strip()
-            node_label = str(_NODE_DEFINITIONS.get(node_type, {}).get("label") or node_type or "unbekannt")
-            self._selection_label.setText(node_label)
-        self._remove_node_btn.setEnabled(True)
-        self._reset_from_node_btn.setEnabled(selection.get("kind") == "node")
 
     def _on_graph_changed(self) -> None:
         self._sync_draft_from_graph()

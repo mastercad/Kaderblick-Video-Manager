@@ -244,10 +244,10 @@ class TestJobWorkflowDialog:
 
         graph_view._stop_panning()
 
-    def test_graph_view_selection_changed_emits_payload_for_selected_node(self):
+    def test_graph_view_selection_changed_notifies_callback_for_selected_node(self):
         graph_view = _WorkflowGraphView()
         received = []
-        graph_view.selection_changed.connect(received.append)
+        graph_view.set_selection_changed_callback(received.append)
 
         node_id = graph_view.add_node("source_files")
         node = graph_view.node_item(node_id)
