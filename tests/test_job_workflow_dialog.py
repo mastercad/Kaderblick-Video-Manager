@@ -244,6 +244,23 @@ class TestJobWorkflowDialog:
 
         graph_view._stop_panning()
 
+    def test_graph_view_selection_changed_emits_payload_for_selected_node(self):
+        graph_view = _WorkflowGraphView()
+        received = []
+        graph_view.selection_changed.connect(received.append)
+
+        node_id = graph_view.add_node("source_files")
+        node = graph_view.node_item(node_id)
+
+        assert node is not None
+
+        node.setSelected(True)
+        QApplication.processEvents()
+
+        assert received
+        assert received[-1] == {"kind": "node", "id": node_id, "type": "source_files"}
+        assert graph_view._last_selection == received[-1]
+
         assert graph_view._is_panning is False
         assert graph_view._last_pan_pos is None
         assert graph_view.cursor().shape() != Qt.CursorShape.ClosedHandCursor

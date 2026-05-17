@@ -213,6 +213,28 @@ def test_output_step_stack_combination_matrix(
     assert calls == expected_calls
 
 
+def test_youtube_upload_step_does_not_evaluate_service_truthiness(tmp_path):
+    class _BoolTrapService:
+        def __bool__(self):
+            raise AssertionError("yt_service truthiness must not be evaluated")
+
+    stack = OutputStepStack()
+    executor = _FakeExecutor()
+    prepared = _prepared_output(tmp_path, yt_upload=True)
+
+    with patch(
+        "src.workflow_steps.youtube_upload_step.get_video_id_for_output",
+        return_value=None,
+    ), patch(
+        "src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube",
+        return_value=True,
+    ):
+        failures = _run_stack(stack, executor, prepared, yt_service=_BoolTrapService())
+
+    assert failures == 0
+    assert prepared.job.step_statuses.get("youtube_upload") == "done"
+
+
 def test_output_step_stack_skips_upload_and_kaderblick_without_yt_service(tmp_path):
     stack = OutputStepStack()
     executor = _FakeExecutor()

@@ -18,7 +18,7 @@ from ...workflow import WorkflowJob
 
 
 class _WorkflowGraphView(QGraphicsView):
-    selection_changed = Signal()
+    selection_changed = Signal(object)
     graph_changed = Signal()
     SNAP_DISTANCE = 28
     PORT_PICK_DISTANCE = 18

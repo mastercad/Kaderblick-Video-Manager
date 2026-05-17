@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtCore import QPointF, QRectF, Qt, Slot
 from PySide6.QtGui import QColor, QPen
 from PySide6.QtWidgets import QGraphicsPathItem
 
@@ -52,25 +52,29 @@ class _WorkflowGraphInteraction:
                 return item.source_id, item.target_id
         return None
 
+    @Slot()
     def emit_selection(self) -> None:
         scene = self._scene()
         if scene is None:
             return
         selected_node = self.selected_node_id()
         if selected_node is not None:
-            self._graph_view._last_selection = {
+            selection = {
                 "kind": "node", "id": selected_node, "type": self._graph_view.node_type(selected_node)
             }
-            self._graph_view.selection_changed.emit()
+            self._graph_view._last_selection = selection
+            self._graph_view.selection_changed.emit(selection)
             return
         selected_edge = self.selected_edge_key()
         if selected_edge is not None:
             source_id, target_id = selected_edge
-            self._graph_view._last_selection = {"kind": "edge", "source": source_id, "target": target_id}
-            self._graph_view.selection_changed.emit()
+            selection = {"kind": "edge", "source": source_id, "target": target_id}
+            self._graph_view._last_selection = selection
+            self._graph_view.selection_changed.emit(selection)
             return
-        self._graph_view._last_selection = {}
-        self._graph_view.selection_changed.emit()
+        selection = {}
+        self._graph_view._last_selection = selection
+        self._graph_view.selection_changed.emit(selection)
 
     def remove_selected_item(self) -> None:
         selected_node = self.selected_node_id()

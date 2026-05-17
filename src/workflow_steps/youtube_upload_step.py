@@ -13,7 +13,7 @@ class YoutubeUploadStep:
 
     def execute(self, executor: Any, prepared: PreparedOutput, yt_service: Any) -> int:
         youtube_upload_enabled = prepared.youtube_upload_enabled_override
-        if not (youtube_upload_enabled and yt_service):
+        if not youtube_upload_enabled or yt_service is None:
             return 0
         existing_video_id = None
         upload_file = self._upload_artifact(prepared)
@@ -107,7 +107,7 @@ class YoutubeUploadStep:
         title = prepared.cv_job.youtube_title or (registry_entry.get("title") if registry_entry else "") or (upload_file.stem if upload_file is not None else "")
         playlist = prepared.cv_job.youtube_playlist or "-"
         result = "vorhanden" if existing else "hochgeladen"
-        if video_id and yt_service:
+        if video_id and yt_service is not None:
             try:
                 response = yt_service.videos().list(part="status,processingDetails", id=video_id).execute()
                 item = next(iter(response.get("items") or []), {})
