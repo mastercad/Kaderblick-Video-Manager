@@ -183,9 +183,13 @@ class MergeGroupStep:
     def _expected_merged_path(first_job: WorkflowJob, cv_job: ConvertJob):
         base = cv_job.output_path or cv_job.source_path
         target_extension = ExecutorSupport.resolve_container_extension(first_job.merge_output_format, base)
-        if first_job.merge_output_title or cv_job.youtube_title:
+        if cv_job.youtube_title or first_job.merge_output_title:
             stem = build_output_filename_from_title(
-                first_job.merge_output_title or cv_job.youtube_title,
+                # _apply_merge_output_metadata() has just resolved this title
+                # from the current settings plus explicit job overrides.  The
+                # persisted merge_output_title is only a legacy/custom fallback
+                # and must not replace the freshly resolved value.
+                cv_job.youtube_title or first_job.merge_output_title,
                 fallback=base.stem,
             )
             if stem != base.stem:

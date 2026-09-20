@@ -147,7 +147,11 @@ class ExecutorSupport:
     @staticmethod
     def build_convert_job(executor: Any, job: WorkflowJob, file_path: str) -> ConvertJob:
         entry = ExecutorSupport.find_file_entry(job, file_path)
-        metadata = ExecutorSupport.resolve_youtube_metadata(job, file_path)
+        # Structured job metadata may intentionally inherit the current global
+        # match settings.  Always resolve it against the settings used by this
+        # run instead of falling back to a previously rendered job title.
+        settings = getattr(executor, "_settings", None)
+        metadata = ExecutorSupport.resolve_youtube_metadata(job, file_path, settings=settings)
         youtube_title = metadata["title"]
         youtube_playlist = metadata["playlist"]
         youtube_description = metadata["description"]

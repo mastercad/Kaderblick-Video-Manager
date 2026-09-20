@@ -329,6 +329,35 @@ class TestBuildJobSettings:
         assert "Heim" in cv_job.youtube_tags
         assert "Gast" in cv_job.youtube_tags
 
+    def test_build_convert_job_refreshes_inherited_match_data_from_current_settings(self, tmp_path):
+        settings = _make_settings()
+        settings.default_match_date = "2026-09-20"
+        settings.default_match_competition = "Kreisoberliga"
+        settings.default_match_home_team = "SG 90 Braunsdorf"
+        settings.default_match_away_team = "SpG Dorfhainer SV / Pretzschendorfer SV"
+        ex = WorkflowExecutor(Workflow(), settings)
+        source = tmp_path / "S1240003.MP4"
+        source.write_text("video", encoding="utf-8")
+        job = WorkflowJob(
+            output_format="mp4",
+            default_youtube_title="2026-09-20 | Altes Heimteam vs Alter Gegner | 1. Halbzeit",
+            youtube_match_data={},
+            youtube_segment_data={
+                "camera": "Panasonic HC-VX3E-K",
+                "side": "",
+                "half": 1,
+                "part": 0,
+                "type_name": "1. Halbzeit",
+            },
+        )
+
+        cv_job = ex._build_convert_job(job, str(source))
+
+        assert cv_job.youtube_title == (
+            "2026-09-20 | SG 90 Braunsdorf vs SpG Dorfhainer SV / Pretzschendorfer SV | 1. Halbzeit"
+        )
+        assert "Altes Heimteam" not in cv_job.output_path.name
+
 
 class TestLivePipelineProgress:
     def test_convert_progress_is_emitted_before_pipeline_item_finishes(self, tmp_path):

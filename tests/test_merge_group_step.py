@@ -18,16 +18,16 @@ class _DummyEmitter:
 
 
 class _FakeExecutor:
-    def __init__(self):
+    def __init__(self, settings=None):
         self.log_message = _DummyEmitter()
         self.job_progress = _DummyEmitter()
         self._cancel = SimpleNamespace(is_set=lambda: False)
         self._concat_func = lambda *_args, **_kwargs: True
         self.status_updates = []
+        self._settings = settings or AppSettings()
 
-    @staticmethod
-    def _build_job_settings(_job):
-        return AppSettings()
+    def _build_job_settings(self, _job):
+        return self._settings
 
     @staticmethod
     def _merge_precedes_convert(_job):
@@ -116,6 +116,53 @@ def test_merge_group_step_uses_title_based_output_filename_for_merged_result(tmp
     assert prepared is not None
     assert prepared.cv_job.output_path is not None
     assert prepared.cv_job.output_path.name == "2026-03-22 - Heim vs Gast - Kamera 1 - Links 1. Halbzeit.mp4"
+
+
+def test_merge_group_step_uses_current_settings_instead_of_stale_saved_title(tmp_path):
+    source_a = tmp_path / "S1240003.MP4"
+    source_b = tmp_path / "S1240004.MP4"
+    source_a.write_text("video-a", encoding="utf-8")
+    source_b.write_text("video-b", encoding="utf-8")
+    job = WorkflowJob(
+        source_mode="files",
+        files=[
+            FileEntry(source_path=str(source_a), merge_group_id="g1"),
+            FileEntry(source_path=str(source_b), merge_group_id="g1"),
+        ],
+        merge_output_title="2026-09-20 | Altes Heimteam vs Alter Gegner | 1. Halbzeit",
+        merge_match_data={},
+        merge_segment_data={
+            "camera": "",
+            "side": "",
+            "half": 1,
+            "part": 0,
+            "type_name": "1. Halbzeit",
+        },
+    )
+    item_a = ConvertItem(orig_idx=0, job=job, cv_job=ConvertJob(source_path=source_a, output_path=source_a))
+    item_b = ConvertItem(orig_idx=0, job=job, cv_job=ConvertJob(source_path=source_b, output_path=source_b))
+    settings = AppSettings(
+        default_match_date="2026-09-20",
+        default_match_competition="Kreisoberliga",
+        default_match_home_team="SG 90 Braunsdorf",
+        default_match_away_team="SpG Dorfhainer SV / Pretzschendorfer SV",
+    )
+    executor = _FakeExecutor(settings)
+
+    def _concat(_sources, output, **_kwargs):
+        output.write_text("merged", encoding="utf-8")
+        return True
+
+    executor._concat_func = _concat
+
+    prepared, failures = MergeGroupStep().execute(executor, "g1", [item_a, item_b])
+
+    assert failures == 0
+    assert prepared is not None
+    assert prepared.cv_job.output_path.name == (
+        "2026-09-20 - SG 90 Braunsdorf vs SpG Dorfhainer SV Pretzschendorfer SV - 1. Halbzeit.mp4"
+    )
+    assert "Altes Heimteam" not in prepared.cv_job.output_path.name
 
 
 def test_merge_group_step_reuses_merge_metadata_for_single_source_merge(tmp_path):
