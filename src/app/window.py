@@ -77,6 +77,9 @@ from .workflow_actions import (
     _selected_job_rows,
     _sync_shutdown_checkbox,
     _sync_publish_kaderblick_checkbox,
+    _toggle_archived_visibility,
+    _toggle_selected_jobs_archived,
+    _update_archive_action,
 )
 
 if TYPE_CHECKING:
@@ -124,6 +127,9 @@ class ConverterApp(QMainWindow):
         def _clear_workflow(self) -> None: ...
         def _selected_job_row(self) -> int: ...
         def _selected_job_rows(self) -> list[int]: ...
+        def _toggle_archived_visibility(self, checked: bool) -> None: ...
+        def _update_archive_action(self) -> None: ...
+        def _toggle_selected_jobs_archived(self) -> None: ...
         def _handle_table_double_click(self, index) -> None: ...
         def _open_job_workflow(self, row: int | None = None) -> None: ...
         def _edit_job(self) -> None: ...
@@ -181,6 +187,7 @@ class ConverterApp(QMainWindow):
         self._wf_thread = None
         self._wf_start_time: float = 0.0
         self._active_run_indices: set[int] = set()
+        self._last_active_job_index: int | None = None
         self._job_run_started_monotonic: dict[str, float] = {}
         self._job_run_elapsed_base_seconds: dict[str, float] = {}
         self._workflow_run_started_monotonic: float = 0.0
@@ -279,6 +286,9 @@ ConverterApp._remove_selected = _remove_selected
 ConverterApp._clear_workflow = _clear_workflow
 ConverterApp._selected_job_row = _selected_job_row
 ConverterApp._selected_job_rows = _selected_job_rows
+ConverterApp._toggle_archived_visibility = _toggle_archived_visibility
+ConverterApp._update_archive_action = _update_archive_action
+ConverterApp._toggle_selected_jobs_archived = _toggle_selected_jobs_archived
 ConverterApp._handle_table_double_click = _handle_table_double_click
 ConverterApp._open_job_workflow = _open_job_workflow
 ConverterApp._edit_job = _edit_job

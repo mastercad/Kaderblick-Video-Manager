@@ -2004,7 +2004,7 @@ class TestKaderblickPublish:
             failures = executor._publish_completed_kaderblick_games([(0, started)], 0)
 
         assert failures == 0
-        publish.assert_called_once_with(executor._settings.kaderblick, "42")
+        publish.assert_called_once_with(executor._settings.kaderblick, "42", "football")
         assert workflow.kaderblick_publish_statuses == {"42": "done"}
 
     def test_does_not_publish_when_workflow_option_is_disabled(self):
@@ -2076,7 +2076,7 @@ class TestKaderblickPublish:
             failures = executor._publish_completed_kaderblick_games([(0, job)], 0)
 
         assert failures == 0
-        publish.assert_called_once_with(executor._settings.kaderblick, "42")
+        publish.assert_called_once_with(executor._settings.kaderblick, "42", "football")
         assert workflow.kaderblick_publish_statuses == {"42": "done"}
 
     def test_failed_publish_is_retried_but_successful_publish_is_not(self):

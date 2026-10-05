@@ -30,6 +30,40 @@ def _job_label(index: int, job) -> str:
     return (str(getattr(job, "name", "") or "").strip() or f"Job {index + 1}")
 
 
+def _current_run_job_label(self) -> str:
+    active_indices = sorted(getattr(self, "_active_run_indices", set()))
+    current_indices = [
+        index
+        for index in active_indices
+        if 0 <= index < len(self._workflow.jobs)
+        and _is_active_job_status(
+            self._workflow.jobs[index].resume_status or self._workflow.jobs[index].status
+        )
+    ]
+
+    last_index = getattr(self, "_last_active_job_index", None)
+    if last_index in current_indices:
+        current_indices.remove(last_index)
+        current_indices.insert(0, last_index)
+    elif not current_indices and last_index in active_indices:
+        current_indices = [last_index]
+    elif not current_indices and len(active_indices) == 1:
+        current_indices = active_indices
+
+    if not current_indices:
+        return ""
+
+    visible_names = [
+        _job_label(index, self._workflow.jobs[index])
+        for index in current_indices[:2]
+    ]
+    label = ", ".join(visible_names)
+    remaining = len(current_indices) - len(visible_names)
+    if remaining:
+        label += f" +{remaining}"
+    return label
+
+
 def _job_source_paths(job) -> set[Path]:
     from ..workflow import graph_has_multiple_sources, graph_source_nodes
 
@@ -261,6 +295,7 @@ def _start_workflow(self, *, active_indices: set[int] | None = None):
         for index, job in enumerate(self._workflow.jobs)
         if job.enabled and (active_indices is None or index in active_indices)
     }
+    self._last_active_job_index = None
     # Maps orig_idx (baked into the executor's active list at start) to the
     # current position in self._workflow.jobs.  Updated in _clear_workflow when
     # the user removes a job while the workflow is still running.
@@ -342,6 +377,8 @@ def _on_job_status(self, orig_idx: int, status: str):
     if 0 <= cur_idx < len(self._workflow.jobs):
         job = self._workflow.jobs[cur_idx]
         job.resume_status = status
+        if _is_active_job_status(status):
+            self._last_active_job_index = cur_idx
         overall_pct = _compute_job_overall_progress(job, status, job.progress_pct)
         job.overall_progress_pct = overall_pct
         if _is_terminal_job_status(status, overall_pct):
@@ -371,6 +408,7 @@ def _on_job_progress(self, orig_idx: int, pct: int, step_key: str = ""):
     if 0 <= cur_idx < len(self._workflow.jobs):
         job = self._workflow.jobs[cur_idx]
         job.progress_pct = pct
+        self._last_active_job_index = cur_idx
         overall_pct = _compute_job_overall_progress(job, job.resume_status or job.status, pct)
         job.overall_progress_pct = overall_pct
         if _is_active_job_status(job.resume_status or job.status):
@@ -392,6 +430,7 @@ def _on_source_progress(self, orig_idx: int, pct: int):
     cur_idx = getattr(self, '_job_orig_to_cur', {}).get(orig_idx, orig_idx)
     if 0 <= cur_idx < len(self._workflow.jobs):
         job = self._workflow.jobs[cur_idx]
+        self._last_active_job_index = cur_idx
         job.transfer_progress_pct = pct
         current_step = job.current_step_key or "transfer"
         if current_step in {"", "transfer"}:
@@ -441,7 +480,11 @@ def _on_overall_progress(self, done: int, total: int):
     display_total = actual_total if actual_total > 0 else max(total, 1)
     self.progress.setMaximum(display_total)
     self.progress.setValue(min(display_done, display_total))
-    self.status_label.setText(f"Schritt {display_done}/{display_total}  ({self._format_duration(elapsed)})")
+    job_label = _current_run_job_label(self)
+    prefix = f"Aktuell: {job_label}  ·  " if job_label else ""
+    self.status_label.setText(
+        f"{prefix}Schritt {display_done}/{display_total}  ({self._format_duration(elapsed)})"
+    )
     if hasattr(self, "duration_label"):
         self.duration_label.setText(f"Gesamtdauer: {format_elapsed_seconds(elapsed)}")
 

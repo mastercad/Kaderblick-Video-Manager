@@ -71,7 +71,7 @@ class JobWorkflowDialog(QDialog):
             get_pi_destination=lambda: self._pi_dest_edit.text(),
             get_pi_load_button=lambda: self._pi_load_btn,
             get_pi_load_status=lambda: self._pi_load_status,
-            fetch_video_types_fn=lambda kb: fetch_video_types(kb),
+            fetch_video_types_fn=lambda kb, sport_code="football": fetch_video_types(kb, sport_code),
             fetch_cameras_fn=lambda kb: fetch_cameras(kb),
             on_kaderblick_options_loaded=self._apply_kaderblick_options,
             on_pi_entries_loaded=self._apply_pi_camera_entries,

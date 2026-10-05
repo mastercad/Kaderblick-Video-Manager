@@ -14,16 +14,29 @@ class ProgressDelegate(QStyledItemDelegate):
     _BAR_COLOR = QColor(41, 128, 185, 190)       # kräftiges Blau (gut sichtbar)
     _BAR_DONE_COLOR = QColor(39, 174, 96, 190)  # kräftiges Grün
 
-    def __init__(self, parent=None, *, progress_role=int(Qt.ItemDataRole.UserRole)):
+    def __init__(
+        self,
+        parent=None,
+        *,
+        progress_role=int(Qt.ItemDataRole.UserRole),
+        show_percentage=False,
+    ):
         super().__init__(parent)
         self._progress_role = progress_role
+        self._show_percentage = show_percentage
+
+    def _display_text(self, text: str, pct: int | None) -> str:
+        if self._show_percentage and isinstance(pct, int):
+            return f"{text}  ·  {max(0, min(pct, 100))}%"
+        return text
 
     def paint(self, painter, option, index):
         self.initStyleOption(option, index)
         text = index.data(Qt.DisplayRole) or ""
         pct = index.data(self._progress_role)
+        display_text = self._display_text(text, pct)
 
-        if pct is not None and isinstance(pct, int) and pct > 0:
+        if isinstance(pct, int) and (pct > 0 or self._show_percentage):
             # Standardhintergrund (Auswahl, Alternating Rows etc.)
             style = (option.widget.style() if option.widget
                      else QApplication.style())
@@ -51,7 +64,7 @@ class ProgressDelegate(QStyledItemDelegate):
             painter.drawText(
                 rect.adjusted(4, 0, -4, 0),
                 Qt.AlignVCenter | Qt.AlignLeft,
-                text,
+                display_text,
             )
             painter.restore()
         else:

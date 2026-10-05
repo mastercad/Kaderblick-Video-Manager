@@ -407,6 +407,7 @@ class ExecutorSupport:
             default_match_home_team=executor._settings.default_match_home_team,
             default_match_away_team=executor._settings.default_match_away_team,
             default_match_location=getattr(executor._settings, "default_match_location", ""),
+            default_sport_code=getattr(executor._settings, "default_sport_code", "football"),
             default_kaderblick_game_id=getattr(executor._settings, "default_kaderblick_game_id", ""),
             last_directory=executor._settings.last_directory,
         )

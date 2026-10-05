@@ -44,7 +44,7 @@ class WorkflowExternalDataController:
         get_pi_destination: Callable[[], str],
         get_pi_load_button: Callable[[], object],
         get_pi_load_status: Callable[[], object],
-        fetch_video_types_fn: Callable[[object], list[dict]],
+        fetch_video_types_fn: Callable[[object, str], list[dict]],
         fetch_cameras_fn: Callable[[object], list[dict]],
         on_kaderblick_options_loaded: Callable[[list[dict], list[dict]], None],
         on_pi_entries_loaded: Callable[[list[FileEntry]], None],
@@ -103,7 +103,10 @@ class WorkflowExternalDataController:
         video_types: list[dict] = []
         cameras: list[dict] = []
         try:
-            video_types = self._fetch_video_types(kb)
+            video_types = self._fetch_video_types(
+                kb,
+                getattr(settings, "default_sport_code", "football"),
+            )
         except Exception as exc:
             errors.append(f"Video-Typen: {exc}")
         try:

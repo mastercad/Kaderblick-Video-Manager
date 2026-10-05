@@ -36,6 +36,7 @@ CLIENT_SECRET_FILE = _CONFIG_DIR / "client_secret.json"
 TOKEN_FILE = _DATA_DIR / "youtube_token.json"
 
 _INVALID_OUTPUT_SEGMENT_RE = re.compile(r'[\\/:*?"<>|]+')
+_INVALID_MATCH_SEGMENT_RE = re.compile(r'[\\:*?"<>]+')
 _WORKFLOW_STAGE_SEGMENTS = {"raw", "processed"}
 
 
@@ -51,6 +52,63 @@ def _default_output_leaf(workflow_name: str, device_name: str = "", current_date
         return _sanitize_output_segment(device_segment)
     day = (current_date or date.today()).isoformat()
     return _sanitize_output_segment(f"{workflow_name or 'Workflow'} {day}")
+
+
+def _match_team_segment(name: str) -> str:
+    """Macht einen Teamnamen zu genau einem Ordnersegment.
+
+    Schrägstriche kennzeichnen bei Spielgemeinschaften keinen Unterordner und
+    werden deshalb lesbar durch `` | `` ersetzt. Punkte bleiben erhalten.
+    """
+    segment = re.sub(r"[/]+", " | ", str(name or "").strip())
+    segment = _INVALID_MATCH_SEGMENT_RE.sub("_", segment)
+    segment = re.sub(r"\s+", " ", segment).strip()
+    return segment
+
+
+def _match_output_leaf(date_iso: str, home_team: str, away_team: str) -> str:
+    home = _match_team_segment(home_team)
+    away = _match_team_segment(away_team)
+    if not (date_iso or "").strip() or not home or not away:
+        return ""
+    try:
+        display_date = date.fromisoformat(str(date_iso).strip()).strftime("%d.%m.%Y")
+    except ValueError:
+        display_date = str(date_iso).strip()
+    # Windows akzeptiert keine Verzeichnisnamen mit abschließendem Punkt oder
+    # Leerzeichen. Innere Punkte (z. B. ``vs.`` oder ``e.V.``) bleiben erhalten.
+    return f"{display_date} {home} vs {away}".strip().rstrip(". ")
+
+
+def _path_identity(value: str) -> str:
+    """Vergleicht Pfadnamen unabhängig von Punkten und Trennern."""
+    return "".join(char.casefold() for char in str(value or "") if char.isalnum())
+
+
+def _root_contains_match(root: Path, match_leaf: str, date_iso: str, home_team: str, away_team: str) -> bool:
+    leaf_identity = _path_identity(root.name)
+    if not leaf_identity:
+        return False
+    if leaf_identity == _path_identity(match_leaf):
+        return True
+
+    try:
+        parsed_date = date.fromisoformat(str(date_iso).strip())
+        date_variants = {
+            parsed_date.strftime("%d%m%Y"),
+            parsed_date.strftime("%Y%m%d"),
+        }
+    except ValueError:
+        date_variants = {_path_identity(date_iso)}
+    home_identity = _path_identity(home_team)
+    away_identity = _path_identity(away_team)
+    return bool(
+        home_identity
+        and away_identity
+        and home_identity in leaf_identity
+        and away_identity in leaf_identity
+        and any(value and value in leaf_identity for value in date_variants)
+    )
 
 
 def _normalize_stage_root(path_value: str) -> Path | None:
@@ -76,6 +134,7 @@ class AppSettings:
     default_match_home_team: str = ""
     default_match_away_team: str = ""
     default_match_location: str = ""
+    default_sport_code: str = "football"
     default_kaderblick_game_id: str = ""
     last_directory: str = ""
     restore_last_workflow: bool = True
@@ -84,7 +143,21 @@ class AppSettings:
         root = (root or "").strip()
         if not root:
             return ""
-        return (Path(root) / _default_output_leaf(workflow_name, device_name)).as_posix()
+        output_root = Path(root)
+        match_leaf = _match_output_leaf(
+            self.default_match_date,
+            self.default_match_home_team,
+            self.default_match_away_team,
+        )
+        if match_leaf and not _root_contains_match(
+            output_root,
+            match_leaf,
+            self.default_match_date,
+            self.default_match_home_team,
+            self.default_match_away_team,
+        ):
+            output_root /= match_leaf
+        return (output_root / _default_output_leaf(workflow_name, device_name)).as_posix()
 
     def workflow_output_dir_for(self, workflow_name: str, device_name: str = "") -> str:
         return self._output_dir_for_root(self.workflow_output_root, workflow_name, device_name)
@@ -119,6 +192,7 @@ class AppSettings:
             "home_team": (self.default_match_home_team or "").strip(),
             "away_team": (self.default_match_away_team or "").strip(),
             "location": (self.default_match_location or "").strip(),
+            "sport_code": (self.default_sport_code or "football").strip(),
         }
 
     def save(self, preserve_existing_secrets: bool = True):

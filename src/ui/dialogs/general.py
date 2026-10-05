@@ -5,14 +5,20 @@ from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
-from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QCheckBox, QComboBox, QDialog, QDialogButtonBox, QFileDialog, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget
 
 from ...settings import AppSettings
+from ...integrations.kaderblick import fetch_match_information
 from ...integrations.youtube_title_editor import MatchData, SegmentData, _add_to_history, build_playlist_title, build_video_description, build_video_title, load_memory, save_memory
 from ...ui import ClearableDateField
 
 
 class GeneralSettingsDialog(QDialog):
+    _SPORTS = (
+        ("Fußball", "football"),
+        ("Volleyball", "volleyball"),
+    )
+
     def __init__(self, parent, settings: AppSettings):
         super().__init__(parent)
         self.setWindowTitle("Allgemeine Einstellungen")
@@ -34,7 +40,8 @@ class GeneralSettingsDialog(QDialog):
         output_form = QFormLayout()
         output_hint = QLabel(
             "Wenn gesetzt, schreiben Workflows ohne eigenes Ziel automatisch in\n"
-            "<Basisordner>/<Workflow-Name>/."
+            "<Basisordner>/<Spiel>/<Workflow- oder Kamera-Name>/. Ist der Spielordner\n"
+            "bereits Teil des Basisordners, wird er nicht erneut angelegt."
         )
         output_hint.setEnabled(False)
         self.output_root_edit = QLineEdit(settings.workflow_output_root)
@@ -52,7 +59,7 @@ class GeneralSettingsDialog(QDialog):
         match_group = QGroupBox("Globale Spieldaten")
         match_form = QFormLayout()
         match_hint = QLabel(
-            "Datum, Wettbewerb, Teams, Austragungsort und Kaderblick-Spiel-ID gelten als zentrale Vorgaben.\n"
+            "Sportart, Datum, Wettbewerb, Teams, Austragungsort und Kaderblick-Spiel-ID gelten als zentrale Vorgaben.\n"
             "Leere Felder in Workflow-Nodes übernehmen diese Werte automatisch; nur explizite Node-Werte überschreiben sie."
         )
         match_hint.setEnabled(False)
@@ -66,8 +73,28 @@ class GeneralSettingsDialog(QDialog):
         self.match_home_edit = self._make_history_combo(memory.get("history_home_team", []), "Heimmannschaft")
         self.match_away_edit = self._make_history_combo(memory.get("history_away_team", []), "Auswärtsmannschaft")
         self.match_location_edit = self._make_history_combo(memory.get("history_location", []), "Austragungsort")
+        self.sport_combo = QComboBox()
+        for label, code in self._SPORTS:
+            self.sport_combo.addItem(label, code)
+        sport_code = (getattr(settings, "default_sport_code", "football") or "football").strip()
+        sport_index = self.sport_combo.findData(sport_code)
+        if sport_index < 0:
+            self.sport_combo.addItem(sport_code.replace("_", " ").title(), sport_code)
+            sport_index = self.sport_combo.count() - 1
+        self.sport_combo.setCurrentIndex(sport_index)
         self.kb_game_id_edit = QLineEdit(settings.default_kaderblick_game_id)
         self.kb_game_id_edit.setPlaceholderText("z. B. 42")
+        self.load_match_btn = QPushButton("Spieldaten laden")
+        self.load_match_btn.setToolTip(
+            "Lädt Datum, Wettbewerb, Mannschaften und Austragungsort anhand der "
+            "Kaderblick-Spiel-ID."
+        )
+        self.load_match_btn.clicked.connect(self._load_kaderblick_match)
+        game_id_row = QWidget()
+        game_id_layout = QHBoxLayout(game_id_row)
+        game_id_layout.setContentsMargins(0, 0, 0, 0)
+        game_id_layout.addWidget(self.kb_game_id_edit, 1)
+        game_id_layout.addWidget(self.load_match_btn)
         self.match_competition_edit.setCurrentText(settings.default_match_competition)
         self.match_home_edit.setCurrentText(settings.default_match_home_team)
         self.match_away_edit.setCurrentText(settings.default_match_away_team)
@@ -77,7 +104,8 @@ class GeneralSettingsDialog(QDialog):
         match_form.addRow("Heimmannschaft:", self.match_home_edit)
         match_form.addRow("Auswärtsmannschaft:", self.match_away_edit)
         match_form.addRow("Austragungsort:", self.match_location_edit)
-        match_form.addRow("Kaderblick-Spiel-ID:", self.kb_game_id_edit)
+        match_form.addRow("Sportart:", self.sport_combo)
+        match_form.addRow("Kaderblick-Spiel-ID:", game_id_row)
         match_form.addRow("", match_hint)
         match_group.setLayout(match_form)
         layout.addWidget(match_group)
@@ -163,6 +191,40 @@ class GeneralSettingsDialog(QDialog):
             location=self.match_location_edit.currentText().strip(),
         )
 
+    def _current_sport_code(self) -> str:
+        return str(self.sport_combo.currentData() or "football").strip()
+
+    def _load_kaderblick_match(self) -> None:
+        game_id = self.kb_game_id_edit.text().strip()
+        if not game_id:
+            QMessageBox.warning(self, "Spiel-ID fehlt", "Bitte zuerst eine Kaderblick-Spiel-ID eingeben.")
+            return
+        if not game_id.isdigit():
+            QMessageBox.warning(self, "Ungültige Spiel-ID", "Die Kaderblick-Spiel-ID muss eine Zahl sein.")
+            return
+
+        self.load_match_btn.setEnabled(False)
+        self.load_match_btn.setText("Lade …")
+        try:
+            match = fetch_match_information(
+                self.settings.kaderblick,
+                game_id,
+                self._current_sport_code(),
+            )
+        except Exception as exc:
+            QMessageBox.critical(self, "Spieldaten konnten nicht geladen werden", str(exc))
+            return
+        finally:
+            self.load_match_btn.setEnabled(True)
+            self.load_match_btn.setText("Spieldaten laden")
+
+        self.match_date_edit.setText(match.get("date_iso", ""))
+        self.match_competition_edit.setCurrentText(match.get("competition", ""))
+        self.match_home_edit.setCurrentText(match.get("home_team", ""))
+        self.match_away_edit.setCurrentText(match.get("away_team", ""))
+        self.match_location_edit.setCurrentText(match.get("location", ""))
+        self._update_preview()
+
     def _update_preview(self, *_args) -> None:
         match = self._current_match()
         segment = SegmentData(type_name="1. Halbzeit", half=1)
@@ -200,6 +262,7 @@ class GeneralSettingsDialog(QDialog):
         self.settings.default_match_home_team = home_team
         self.settings.default_match_away_team = away_team
         self.settings.default_match_location = location
+        self.settings.default_sport_code = self._current_sport_code()
         self.settings.default_kaderblick_game_id = self.kb_game_id_edit.text().strip()
         self.settings.save()
 

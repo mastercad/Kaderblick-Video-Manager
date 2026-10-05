@@ -1265,6 +1265,134 @@ class TestSelectedWorkflowCancel:
         finally:
             window.close()
 
+    def test_restarted_cancelled_job_is_named_in_overall_status(self):
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(
+                    name="Bereits fertig",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/a.mp4")],
+                    resume_status="Fertig",
+                ),
+                WorkflowJob(
+                    name="Neu gestarteter Job",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/b.mp4")],
+                    resume_status="Konvertierung abgebrochen",
+                    current_step_key="convert",
+                    step_statuses={"transfer": "done", "convert": "cancelled"},
+                ),
+            ]
+            window._refresh_table()
+            window.table.selectRow(1)
+
+            with patch.object(
+                window,
+                "_ask_resume_behavior",
+                return_value=QMessageBox.StandardButton.No,
+            ), patch("src.app.QThread", _DummyThread), patch(
+                "src.app.WorkflowExecutor", _DummyExecutor
+            ):
+                window._start_selected_workflows()
+
+            window._on_job_status(1, "Konvertiere …")
+            window._on_job_progress(1, 35)
+            window._on_overall_progress(1, 2)
+
+            assert "Aktuell: Neu gestarteter Job" in window.status_label.text()
+            assert "Bereits fertig" not in window.status_label.text()
+            assert "Schritt " in window.status_label.text()
+        finally:
+            window.close()
+
+
+class TestWorkflowArchive:
+    def test_archived_workflows_are_hidden_by_default_and_can_be_shown(self):
+        window = _new_app()
+        try:
+            window._workflow = Workflow(
+                jobs=[
+                    WorkflowJob(name="Aktiv"),
+                    WorkflowJob(name="Selten", enabled=False),
+                ]
+            )
+
+            window._refresh_table()
+
+            assert window.table.isRowHidden(0) is False
+            assert window.table.isRowHidden(1) is True
+            assert window.status_label.text() == "Bereit"
+
+            window._update_count()
+            assert window.status_label.text() == "1 aktiv, 1 archiviert"
+
+            window.act_show_archived.setChecked(True)
+
+            assert window.table.isRowHidden(1) is False
+            assert window.table.item(1, 4).text() == "Archiviert"
+            assert window.table.item(1, 1).foreground().color() == Qt.gray
+        finally:
+            window.close()
+
+    def test_archive_action_preserves_job_and_persists_state(self):
+        window = _new_app()
+        try:
+            job = _rich_job(name="Selten")
+            original = job.to_dict()
+            window._workflow = Workflow(jobs=[job])
+            window._refresh_table()
+            window.table.selectRow(0)
+
+            with patch.object(window, "_save_last_workflow") as save_last_workflow:
+                window.act_archive.trigger()
+
+            assert job.enabled is False
+            assert job.to_dict() == {**original, "enabled": False}
+            assert window.table.isRowHidden(0) is True
+            assert window.status_label.text() == "0 aktiv, 1 archiviert"
+            save_last_workflow.assert_called_once()
+        finally:
+            window.close()
+
+    def test_archived_workflow_can_be_reactivated(self):
+        window = _new_app()
+        try:
+            job = WorkflowJob(name="Selten", enabled=False)
+            window._workflow = Workflow(jobs=[job])
+            window.act_show_archived.setChecked(True)
+            window.table.selectRow(0)
+
+            assert window.act_archive.text() == "Aktivieren"
+
+            with patch.object(window, "_save_last_workflow") as save_last_workflow:
+                window.act_archive.trigger()
+
+            assert job.enabled is True
+            assert window.table.isRowHidden(0) is False
+            assert window.status_label.text() == "1 Workflow geladen"
+            save_last_workflow.assert_called_once()
+        finally:
+            window.close()
+
+    def test_hidden_archived_workflow_is_not_started_without_selection(self):
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(name="Aktiv", files=[FileEntry(source_path="/tmp/a.mp4")]),
+                WorkflowJob(name="Archiv", enabled=False, files=[FileEntry(source_path="/tmp/b.mp4")]),
+            ]
+            window._refresh_table()
+            window.table.clearSelection()
+
+            with patch("src.app.QThread", _DummyThread), patch("src.app.WorkflowExecutor", _DummyExecutor):
+                window._start_selected_workflows()
+
+            assert window._wf_executor is not None
+            assert window._wf_executor.active_indices == {0}
+        finally:
+            window.close()
+
 
 class TestSessionRepair:
     def test_repair_restored_placeholder_workflow_does_not_restore_last_workflow_without_resume_state(self):
@@ -2120,9 +2248,15 @@ class TestConverterAppResumeState:
             window._workflow = Workflow(jobs=[job])
             window._refresh_table()
 
+            window._on_job_status(0, "Konvertiere …")
             window._on_job_progress(0, 50)
 
-            assert window.table.item(0, 4).data(int(Qt.ItemDataRole.UserRole)) == 50
+            status_item = window.table.item(0, 4)
+            assert status_item.data(int(Qt.ItemDataRole.UserRole)) == 50
+            assert window._step_progress_delegate._display_text(
+                status_item.text(),
+                status_item.data(int(Qt.ItemDataRole.UserRole)),
+            ) == "Konvertiere …  ·  50%"
             assert window.table.item(0, 5).text() == "50%"
             assert window.table.item(0, 5).data(int(Qt.ItemDataRole.UserRole) + 1) == 50
         finally:

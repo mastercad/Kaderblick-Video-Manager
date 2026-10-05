@@ -102,7 +102,11 @@ class CameraSettingsDialog(QDialog):
         path_group = QGroupBox("Pfade")
         path_form = QFormLayout()
         self._source_edit = QLineEdit(cam.source)
-        self._source_edit.setPlaceholderText("/home/kaderblick/camera_api/recordings")
+        self._source_edit.setPlaceholderText("/opt/camera_api/recordings")
+        self._source_edit.setToolTip(
+            "Verzeichnis mit den .mjpg- und .wav-Aufnahmen auf dem Kamerasystem.\n"
+            "Standard neuer Installationen: /opt/camera_api/recordings"
+        )
         path_form.addRow("Quellpfad (Pi):", self._source_edit)
         path_group.setLayout(path_form)
         layout.addWidget(path_group)

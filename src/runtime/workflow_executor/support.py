@@ -126,7 +126,11 @@ class WorkflowExecutorSupportMixin:
                 continue
             self.log_message.emit(f"📣 Kaderblick: Videos für Spiel {game_id} veröffentlichen …")
             try:
-                publish_game_videos(self._settings.kaderblick, game_id)
+                publish_game_videos(
+                    self._settings.kaderblick,
+                    game_id,
+                    getattr(self._settings, "default_sport_code", "football"),
+                )
             except RuntimeError as exc:
                 statuses[game_id] = "error"
                 failures += 1

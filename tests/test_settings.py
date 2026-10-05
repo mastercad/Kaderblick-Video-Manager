@@ -1,5 +1,7 @@
 import json
 from datetime import date
+from pathlib import Path
+from unittest.mock import MagicMock
 
 from PySide6.QtCore import QDate
 from PySide6.QtWidgets import QApplication
@@ -240,6 +242,67 @@ class TestAppSettingsLoad:
         assert loaded.workflow_output_dir_for("Spieltag 23") == f"/media/video/workflows/Spieltag 23 {date.today().isoformat()}"
         assert loaded.workflow_output_dir_for("Spieltag 23", "Pi Nord") == "/media/video/workflows/Pi Nord"
 
+    def test_output_root_adds_match_directory_before_device_directory(self):
+        settings = settings_module.AppSettings(
+            workflow_output_root="/media/video/Ligaspiele",
+            default_match_date="2026-10-04",
+            default_match_home_team="SpG SG Wurgwitz/SG 90 Braunsdorf",
+            default_match_away_team="Dresdner SC 1898",
+        )
+
+        assert settings.workflow_output_dir_for("Kaderblick Kamera Links", "Kaderblick Kamera Links") == (
+            "/media/video/Ligaspiele/"
+            "04.10.2026 SpG SG Wurgwitz | SG 90 Braunsdorf vs Dresdner SC 1898/"
+            "Kaderblick Kamera Links"
+        )
+
+    def test_output_root_does_not_duplicate_existing_match_directory_with_vs_dot(self):
+        match_dir = (
+            "/media/video/Ligaspiele/"
+            "04.10.2026 SpG SG Wurgwitz | SG 90 Braunsdorf vs. Dresdner SC 1898"
+        )
+        settings = settings_module.AppSettings(
+            workflow_output_root=match_dir,
+            default_match_date="2026-10-04",
+            default_match_home_team="SpG SG Wurgwitz/SG 90 Braunsdorf",
+            default_match_away_team="Dresdner SC 1898",
+        )
+
+        assert settings.workflow_raw_dir_for("Kaderblick Kamera Rechts", "Kaderblick Kamera Rechts") == (
+            f"{match_dir}/Kaderblick Kamera Rechts/raw"
+        )
+
+    def test_output_match_directory_preserves_dots_in_team_names(self):
+        settings = settings_module.AppSettings(
+            workflow_output_root="/media/video/Ligaspiele",
+            default_match_date="2026-10-04",
+            default_match_home_team="SpG Musterstadt/TSV Beispiel e.V.",
+            default_match_away_team="SV Gegner e.V.",
+        )
+
+        output = settings.workflow_output_dir_for("Panasonic")
+
+        match_directory = Path(output).parent.name
+        assert "SpG Musterstadt | TSV Beispiel e.V. vs SV Gegner e.V" in match_directory
+        assert not match_directory.endswith(".")
+
+    def test_output_match_directory_preserves_internal_vs_dot(self):
+        match_dir = (
+            "/media/video/Ligaspiele/"
+            "04.10.2026 SpG SG Wurgwitz | SG 90 Braunsdorf vs. Dresdner SC 1898"
+        )
+        settings = settings_module.AppSettings(
+            workflow_output_root=match_dir,
+            default_match_date="2026-10-04",
+            default_match_home_team="SpG SG Wurgwitz/SG 90 Braunsdorf",
+            default_match_away_team="Dresdner SC 1898",
+        )
+
+        output = settings.workflow_output_dir_for("Panasonic")
+
+        assert output.startswith(f"{match_dir}/")
+        assert "vs." in output
+
     def test_save_and_load_preserve_camera_settings(self, monkeypatch, tmp_path):
         config_file = tmp_path / "config" / "settings.json"
         monkeypatch.setattr(settings_module, "SETTINGS_FILE", config_file)
@@ -304,6 +367,11 @@ class TestKaderblickSettingsDialog:
 
 
 class TestCameraSettingsDialog:
+    def test_new_camera_settings_use_opt_recordings_path(self):
+        settings = settings_module.AppSettings()
+
+        assert settings.cameras.source == "/opt/camera_api/recordings"
+
     def test_dialog_save_persists_camera_settings(self, monkeypatch, tmp_path):
         config_file = tmp_path / "config" / "settings.json"
         monkeypatch.setattr(settings_module, "SETTINGS_FILE", config_file)
@@ -327,6 +395,43 @@ class TestCameraSettingsDialog:
 
 
 class TestGeneralSettingsDialog:
+    def test_dialog_loads_match_data_from_kaderblick_id(self, monkeypatch):
+        monkeypatch.setattr("src.ui.dialogs.general.load_memory", lambda: {})
+        fetch = MagicMock(return_value={
+            "date_iso": "2026-10-04",
+            "competition": "Sachsenklasse Ost",
+            "home_team": "SpG Wurgwitz",
+            "away_team": "Dresdner SC",
+            "location": "Sportplatz Wurgwitz",
+        })
+        monkeypatch.setattr("src.ui.dialogs.general.fetch_match_information", fetch)
+        settings = settings_module.AppSettings(default_kaderblick_game_id="84")
+        dlg = GeneralSettingsDialog(None, settings)
+
+        dlg._load_kaderblick_match()
+
+        fetch.assert_called_once_with(settings.kaderblick, "84", "football")
+        assert dlg.match_date_edit.isoValue() == "2026-10-04"
+        assert dlg.match_competition_edit.currentText() == "Sachsenklasse Ost"
+        assert dlg.match_home_edit.currentText() == "SpG Wurgwitz"
+        assert dlg.match_away_edit.currentText() == "Dresdner SC"
+        assert dlg.match_location_edit.currentText() == "Sportplatz Wurgwitz"
+
+    def test_dialog_persists_selected_sport(self, monkeypatch, tmp_path):
+        config_file = tmp_path / "config" / "settings.json"
+        monkeypatch.setattr(settings_module, "SETTINGS_FILE", config_file)
+        monkeypatch.setattr("src.ui.dialogs.general.load_memory", lambda: {})
+        monkeypatch.setattr("src.ui.dialogs.general.save_memory", lambda _data: None)
+        settings = settings_module.AppSettings()
+        dlg = GeneralSettingsDialog(None, settings)
+        dlg.sport_combo.setCurrentIndex(dlg.sport_combo.findData("volleyball"))
+
+        dlg._save()
+
+        payload = json.loads(config_file.read_text(encoding="utf-8"))
+        assert settings.default_sport_code == "volleyball"
+        assert payload["default_sport_code"] == "volleyball"
+
     def test_dialog_save_persists_global_workflow_output_root(self, monkeypatch, tmp_path):
         config_file = tmp_path / "config" / "settings.json"
         monkeypatch.setattr(settings_module, "SETTINGS_FILE", config_file)

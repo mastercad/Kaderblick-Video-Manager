@@ -166,7 +166,7 @@ Ab hier wird die App genauer erklärt.
 
 Das Hauptfenster besteht aus drei Bereichen:
 
-- **oben:** die grüne Leiste mit den Aktionen `+ Neuer Workflow`, `Bearbeiten`, `Kopieren`, `Workflow`, `Entfernen`, `Starten`, `Abbrechen`, `Laden`, `Speichern` und `Rechner herunterfahren`
+- **oben:** die grüne Leiste mit den Aktionen `+ Neuer Workflow`, `Bearbeiten`, `Kopieren`, `Workflow`, `Archivieren`, `Entfernen`, `Starten`, `Abbrechen`, `Laden`, `Speichern` und `Rechner herunterfahren`
 - **Mitte:** die Workflow-Liste mit den Spalten `#`, `Name`, `Quelle`, `Pipeline`, `Status`, `Job` und `Dauer`
 - **unten:** das Protokoll mit allen laufenden Meldungen der aktiven Jobs
 
@@ -177,6 +177,12 @@ Ein Workflow ist einfach ein kompletter Arbeitsauftrag, zum Beispiel:
 - „Zwei Halbzeiten von der Kamera holen, zusammenführen und hochladen“
 - „Drei vorhandene MP4-Dateien nur konvertieren“
 - „Einen Ordner mit Aufnahmen prüfen und für YouTube vorbereiten“
+
+### Selten benötigte Workflows archivieren
+
+Markieren Sie einen selten benötigten Workflow und klicken Sie auf `Archivieren`. Der Workflow wird deaktiviert und aus der normalen Liste ausgeblendet, seine vollständige Konfiguration bleibt aber gespeichert.
+
+Zum Wiederherstellen wählen Sie `Ansicht` → `Archivierte Workflows anzeigen`, markieren den grau dargestellten Workflow und klicken auf `Aktivieren`. Archivierte Workflows werden nicht gestartet.
 
 ---
 
@@ -385,7 +391,7 @@ Markieren Sie einen oder mehrere Workflows in der Liste.
 
 Klicken Sie danach auf `Starten`.
 
-Wenn Sie nichts markieren, startet die App alle wartenden Workflows.
+Wenn Sie nichts markieren, startet die App alle aktiven Workflows. Archivierte Workflows werden ausgelassen.
 
 Während der Verarbeitung sehen Sie in der Liste:
 

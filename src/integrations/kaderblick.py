@@ -5,10 +5,10 @@ da der YouTube-Link im Payload hinterlegt wird.
 
 API-Endpunkte (Base-URL aus KaderblickSettings)
 ──────────────────────────────────────────────
-GET  /api/video-types           → verfügbare Video-Typen
+GET  /api/sports/{sport}/video-types → verfügbare Video-Typen
 GET  /api/cameras               → verfügbare Kameras
-GET  /videos/{game_id}          → vorhandene Videos zu einem Spiel
-POST /videos/save/{game_id}     → Video anlegen
+GET  /api/sports/{sport}/matches/{game_id}/videos → vorhandene Videos
+POST /api/sports/{sport}/matches/{game_id}/videos → Video anlegen
 
 Duplikat-Erkennung
 ──────────────────
@@ -21,6 +21,7 @@ alle erfolgreich angelegten Einträge (keyed by YouTube-Video-ID).
 """
 
 import json
+import re
 import urllib.error
 import urllib.request
 from datetime import datetime
@@ -245,9 +246,33 @@ def _post(url: str, kb, payload: dict, timeout: int = 15) -> dict:
 #  API-Aufrufe
 # ─────────────────────────────────────────────────────────────────
 
-def fetch_video_types(kb) -> list[dict]:
-    """Ruft /api/video-types ab. Gibt Liste von {id, name} zurück."""
-    data = _get(f"{kb.base_url.rstrip('/')}/api/video-types", kb)
+_SPORT_CODE_RE = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def normalize_sport_code(value: str) -> str:
+    """Normalisiert und validiert den Sport-Code für sportabhängige API-Pfade."""
+    code = str(value or "football").strip().lower()
+    if not _SPORT_CODE_RE.fullmatch(code):
+        raise ValueError(f"Ungültiger Kaderblick-Sport-Code: {value!r}")
+    return code
+
+
+def _sport_api_base(kb, sport_code: str) -> str:
+    return f"{kb.base_url.rstrip('/')}/api/sports/{normalize_sport_code(sport_code)}"
+
+
+def fetch_sports(kb) -> list[dict]:
+    """Ruft den Kaderblick-Sportartenkatalog ab."""
+    data = _get(f"{kb.base_url.rstrip('/')}/api/sports", kb)
+    sports = data.get("sports", []) if isinstance(data, dict) else []
+    if not isinstance(sports, list):
+        raise RuntimeError("Unbekanntes Antwortformat von /api/sports")
+    return sports
+
+
+def fetch_video_types(kb, sport_code: str = "football") -> list[dict]:
+    """Ruft die Video-Typen der gewählten Sportart ab."""
+    data = _get(f"{_sport_api_base(kb, sport_code)}/video-types", kb)
     if isinstance(data, list):
         result = data
     else:
@@ -258,12 +283,12 @@ def fetch_video_types(kb) -> list[dict]:
                 break
         if result is None:
             raise RuntimeError(
-                f"Unbekanntes Antwortformat von /api/video-types.\n"
+                f"Unbekanntes Antwortformat der Video-Typen-API.\n"
                 f"Keys: {list(data.keys())}\n"
                 f"Antwort: {str(data)[:400]}")
     if not result:
         raise RuntimeError(
-            f"API /api/video-types lieferte eine leere Liste.\n"
+            f"Die Video-Typen-API lieferte eine leere Liste.\n"
             f"Rohantwort: {str(data)[:400]}")
     return result
 
@@ -291,20 +316,56 @@ def fetch_cameras(kb) -> list[dict]:
     return result
 
 
-def fetch_game_videos(kb, game_id: str) -> list[dict]:
-    """Ruft /videos/{game_id} ab. Gibt die videos-Liste zurück."""
-    data = _get(f"{kb.base_url.rstrip('/')}/videos/{game_id}", kb)
+def fetch_match_information(kb, game_id: str, sport_code: str = "football") -> dict[str, str]:
+    """Lädt die für Dateinamen und YouTube-Metadaten relevanten Spieldaten."""
+    code = normalize_sport_code(sport_code)
+    suffix = f"/matches/{game_id}/details" if code == "football" else f"/matches/{game_id}"
+    data = _get(f"{_sport_api_base(kb, code)}{suffix}", kb)
+    game = data.get("game", {}) if code == "football" and isinstance(data, dict) else data
+    if not isinstance(game, dict) or not game:
+        raise RuntimeError("Die Kaderblick-Antwort enthält keine Spieldaten")
+
+    def _name(value) -> str:
+        if isinstance(value, dict):
+            return str(value.get("name") or "").strip()
+        return str(value or "").strip()
+
+    calendar_event = game.get("calendarEvent") if isinstance(game.get("calendarEvent"), dict) else {}
+    start_date = str(
+        calendar_event.get("startDate")
+        or game.get("scheduledAt")
+        or game.get("startDate")
+        or ""
+    ).strip()
+    date_iso = start_date[:10] if re.match(r"^\d{4}-\d{2}-\d{2}", start_date) else ""
+    competition = (
+        _name(game.get("competition"))
+        or _name(game.get("gameType"))
+        or _name(game.get("matchType"))
+    )
+    return {
+        "date_iso": date_iso,
+        "competition": competition,
+        "home_team": _name(game.get("homeTeam")),
+        "away_team": _name(game.get("awayTeam")),
+        "location": _name(game.get("location")),
+    }
+
+
+def fetch_game_videos(kb, game_id: str, sport_code: str = "football") -> list[dict]:
+    """Ruft die vorhandenen Videos eines Spiels ab."""
+    data = _get(f"{_sport_api_base(kb, sport_code)}/matches/{game_id}/videos", kb)
     return data.get("videos", [])
 
 
-def post_video(kb, game_id: str, payload: dict) -> dict:
+def post_video(kb, game_id: str, payload: dict, sport_code: str = "football") -> dict:
     """Postet ein neues Video zu einem Spiel. Gibt die API-Antwort zurück."""
-    return _post(f"{kb.base_url.rstrip('/')}/videos/save/{game_id}", kb, payload)
+    return _post(f"{_sport_api_base(kb, sport_code)}/matches/{game_id}/videos", kb, payload)
 
 
-def publish_game_videos(kb, game_id: str) -> dict:
+def publish_game_videos(kb, game_id: str, sport_code: str = "football") -> dict:
     """Meldet Kaderblick, dass alle gestarteten Videos des Spiels vorliegen."""
-    return _post(f"{kb.base_url.rstrip('/')}/games/{game_id}/videos/publish", kb, {})
+    return _post(f"{_sport_api_base(kb, sport_code)}/matches/{game_id}/videos/publish", kb, {})
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -355,6 +416,7 @@ def post_to_kaderblick(
     Gibt True zurück wenn erfolgreich (oder bereits vorhanden), False bei Fehler.
     """
     kb = settings.kaderblick
+    sport_code = normalize_sport_code(getattr(settings, "default_sport_code", "football"))
     active_token = kb.jwt_token if kb.auth_mode == "jwt" else kb.bearer_token
     if not active_token:
         mode_label = "JWT-Token" if kb.auth_mode == "jwt" else "Bearer-Token"
@@ -382,12 +444,10 @@ def post_to_kaderblick(
             f"(ID {existing_kb_id}) – übersprungen")
         return True
 
-    base = kb.base_url.rstrip("/")
-
     # 2. Serverabfrage auf Duplikat + aktuellen Sort-Index ermitteln
     server_sort_max = 0
     try:
-        game_videos = fetch_game_videos(kb, game_id)
+        game_videos = fetch_game_videos(kb, game_id, sport_code)
         for v in game_videos:
             if v.get("youtubeId") == youtube_video_id:
                 log_callback(
@@ -427,7 +487,7 @@ def post_to_kaderblick(
         f"  📤 Kaderblick: Trage '{video_name}' für Spiel {game_id} "
         f"(Sort-Index {effective_sort}) ein …")
     try:
-        response = post_video(kb, game_id, payload)
+        response = post_video(kb, game_id, payload, sport_code)
     except RuntimeError as exc:
         log_callback(f"  ❌ Kaderblick: {exc}")
         return False

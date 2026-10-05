@@ -51,6 +51,12 @@ def _build_menu(self: QMainWindow):
     file_menu.addSeparator()
     file_menu.addAction("Beenden", self.close)
 
+    view_menu = mb.addMenu("&Ansicht")
+    self.act_show_archived = view_menu.addAction("Archivierte Workflows anzeigen")
+    self.act_show_archived.setCheckable(True)
+    self.act_show_archived.setChecked(False)
+    self.act_show_archived.toggled.connect(self._toggle_archived_visibility)
+
     settings_menu = mb.addMenu("&Einstellungen")
     settings_menu.addAction("Video …", self._open_video_settings)
     settings_menu.addAction("Audio …", self._open_audio_settings)
@@ -76,6 +82,10 @@ def _build_toolbar(self: QMainWindow):
     tb.addAction("Bearbeiten", self._edit_job)
     tb.addAction("Kopieren", self._duplicate_job)
     tb.addAction("Workflow", self._open_job_workflow)
+    self.act_archive = tb.addAction("Archivieren", self._toggle_selected_jobs_archived)
+    self.act_archive.setToolTip(
+        "Ausgewählte Workflows archivieren; ihre Einstellungen bleiben vollständig erhalten."
+    )
     tb.addAction("Entfernen", self._clear_workflow)
     tb.addSeparator()
 
@@ -136,8 +146,14 @@ def _build_central(self: QMainWindow):
     self.table.verticalHeader().setVisible(False)
     self.table.setAlternatingRowColors(True)
     self.table.doubleClicked.connect(self._handle_table_double_click)
+    self.table.itemSelectionChanged.connect(self._update_archive_action)
+    self._update_archive_action()
 
-    self._step_progress_delegate = ProgressDelegate(self.table, progress_role=_ROLE_STEP_PROGRESS)
+    self._step_progress_delegate = ProgressDelegate(
+        self.table,
+        progress_role=_ROLE_STEP_PROGRESS,
+        show_percentage=True,
+    )
     self._job_progress_delegate = ProgressDelegate(self.table, progress_role=_ROLE_JOB_PROGRESS)
     self.table.setItemDelegateForColumn(4, self._step_progress_delegate)
     self.table.setItemDelegateForColumn(5, self._job_progress_delegate)
@@ -183,6 +199,9 @@ def _build_statusbar(self: QMainWindow):
 
 def _refresh_table(self):
     jobs = self._workflow.jobs
+    show_archived = bool(
+        hasattr(self, "act_show_archived") and self.act_show_archived.isChecked()
+    )
     self.table.setRowCount(len(jobs))
     for row, job in enumerate(jobs):
         self.table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
@@ -205,6 +224,16 @@ def _refresh_table(self):
         duration_item = QTableWidgetItem(_format_elapsed_cell(job.run_elapsed_seconds))
         duration_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
         self.table.setItem(row, 6, duration_item)
+        self.table.setRowHidden(row, not job.enabled and not show_archived)
+
+        if not job.enabled:
+            status_item.setText("Archiviert")
+            status_item.setData(_ROLE_STEP_PROGRESS, 0)
+            for column in range(self.table.columnCount()):
+                self.table.item(row, column).setForeground(Qt.gray)
+
+    if hasattr(self, "_update_archive_action"):
+        self._update_archive_action()
 
     if hasattr(self, "duration_label"):
         total_seconds = float(getattr(self._workflow, "last_run_elapsed_seconds", 0.0) or 0.0)
@@ -305,7 +334,16 @@ def _reset_status_column(self, rows: set[int] | None = None):
 def _update_count(self):
     self.status_label.setStyleSheet("")
     count = len(self._workflow.jobs)
-    self.status_label.setText(f"{count} Workflow{'s' if count != 1 else ''} geladen" if count else "Bereit")
+    active_count = sum(job.enabled for job in self._workflow.jobs)
+    archived_count = count - active_count
+    if not count:
+        self.status_label.setText("Bereit")
+    elif archived_count:
+        self.status_label.setText(
+            f"{active_count} aktiv, {archived_count} archiviert"
+        )
+    else:
+        self.status_label.setText(f"{count} Workflow{'s' if count != 1 else ''} geladen")
 
 
 def _handle_table_double_click(self, index):

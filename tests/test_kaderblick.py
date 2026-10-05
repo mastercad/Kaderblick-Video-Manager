@@ -21,7 +21,12 @@ from src.integrations.kaderblick import (
     _headers,
     _PostPreservingRedirectHandler,
     _ssl_ctx,
+    fetch_game_videos,
+    fetch_match_information,
+    fetch_video_types,
     get_video_duration_seconds,
+    post_video,
+    publish_game_videos,
 )
 
 
@@ -251,6 +256,85 @@ class TestVideoDurationSeconds:
         assert kb.jwt_token == "old_token"   # unverändert
 
 
+class TestModularSportApiRoutes:
+    def test_football_endpoints_use_modular_api_namespace(self):
+        kb = _KB(base_url="https://api.example.test/")
+
+        with patch("src.integrations.kaderblick._get", return_value={"videoTypes": [{"id": 1}]}) as get:
+            fetch_video_types(kb, "football")
+        get.assert_called_once_with(
+            "https://api.example.test/api/sports/football/video-types", kb
+        )
+
+        with patch("src.integrations.kaderblick._get", return_value={"videos": []}) as get:
+            fetch_game_videos(kb, "84", "football")
+        get.assert_called_once_with(
+            "https://api.example.test/api/sports/football/matches/84/videos", kb
+        )
+
+        with patch("src.integrations.kaderblick._post", return_value={}) as post:
+            post_video(kb, "84", {"name": "Video"}, "football")
+        post.assert_called_once_with(
+            "https://api.example.test/api/sports/football/matches/84/videos",
+            kb,
+            {"name": "Video"},
+        )
+
+        with patch("src.integrations.kaderblick._post", return_value={}) as post:
+            publish_game_videos(kb, "84", "football")
+        post.assert_called_once_with(
+            "https://api.example.test/api/sports/football/matches/84/videos/publish",
+            kb,
+            {},
+        )
+
+    def test_fetch_match_information_normalizes_football_details(self):
+        kb = _KB()
+        response = {
+            "game": {
+                "homeTeam": {"name": "Heim"},
+                "awayTeam": {"name": "Gast"},
+                "location": {"name": "Sportplatz Nord"},
+                "calendarEvent": {"startDate": "2026-10-04T13:00:00+02:00"},
+                "competition": {"name": "Sachsenklasse Ost"},
+            }
+        }
+
+        with patch("src.integrations.kaderblick._get", return_value=response) as get:
+            result = fetch_match_information(kb, "84", "football")
+
+        get.assert_called_once_with(
+            "https://api.kaderblick.de/api/sports/football/matches/84/details", kb
+        )
+        assert result == {
+            "date_iso": "2026-10-04",
+            "competition": "Sachsenklasse Ost",
+            "home_team": "Heim",
+            "away_team": "Gast",
+            "location": "Sportplatz Nord",
+        }
+
+    def test_fetch_match_information_supports_volleyball_shape(self):
+        kb = _KB()
+        response = {
+            "homeTeam": {"name": "VC Heim"},
+            "awayTeam": {"name": "VC Gast"},
+            "location": {"name": "Sporthalle"},
+            "scheduledAt": "2026-10-10T18:30:00+02:00",
+            "competition": {"name": "Regionalliga"},
+        }
+
+        with patch("src.integrations.kaderblick._get", return_value=response) as get:
+            result = fetch_match_information(kb, "12", "volleyball")
+
+        get.assert_called_once_with(
+            "https://api.kaderblick.de/api/sports/volleyball/matches/12", kb
+        )
+        assert result["date_iso"] == "2026-10-10"
+        assert result["home_team"] == "VC Heim"
+        assert result["away_team"] == "VC Gast"
+
+
 # ─── post_to_kaderblick: Sort-Index-Berechnung ────────────────────────────────
 
 class TestPostToKaderblickSortIndex:
@@ -282,10 +366,12 @@ class TestPostToKaderblickSortIndex:
 
         posted_payloads: list[dict] = []
 
-        def fake_fetch_game_videos(kb, gid):
+        def fake_fetch_game_videos(kb, gid, sport_code):
+            assert sport_code == settings.default_sport_code
             return game_videos
 
-        def fake_post_video(kb, gid, payload):
+        def fake_post_video(kb, gid, payload, sport_code):
+            assert sport_code == settings.default_sport_code
             posted_payloads.append(payload)
             return {"success": True, "video": {"id": 999}}
 
@@ -405,4 +491,3 @@ class TestPostToKaderblickSortIndex:
 
         assert result is True
         mock_post.assert_not_called()
-

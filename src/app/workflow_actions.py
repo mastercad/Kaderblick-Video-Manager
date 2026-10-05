@@ -128,6 +128,43 @@ def _selected_job_rows(self) -> list[int]:
     return [row for row in rows if 0 <= row < len(self._workflow.jobs)]
 
 
+def _toggle_archived_visibility(self, _checked: bool) -> None:
+    self.table.clearSelection()
+    self.table.setCurrentItem(None)
+    self._refresh_table()
+
+
+def _update_archive_action(self) -> None:
+    if not hasattr(self, "act_archive"):
+        return
+    rows = self._selected_job_rows() if hasattr(self, "table") else []
+    selected_jobs = [self._workflow.jobs[row] for row in rows]
+    should_activate = bool(selected_jobs) and all(not job.enabled for job in selected_jobs)
+    self.act_archive.setText("Aktivieren" if should_activate else "Archivieren")
+    self.act_archive.setToolTip(
+        "Ausgewählte archivierte Workflows wieder aktivieren."
+        if should_activate
+        else "Ausgewählte Workflows archivieren; ihre Einstellungen bleiben vollständig erhalten."
+    )
+    self.act_archive.setEnabled(bool(selected_jobs))
+
+
+def _toggle_selected_jobs_archived(self) -> None:
+    rows = self._selected_job_rows()
+    if not rows:
+        return
+
+    should_activate = all(not self._workflow.jobs[row].enabled for row in rows)
+    for row in rows:
+        self._workflow.jobs[row].enabled = should_activate
+
+    self.table.clearSelection()
+    self.table.setCurrentItem(None)
+    self._refresh_table()
+    self._update_count()
+    self._persist_workflow_state()
+
+
 def _open_job_workflow(self, row: int | None = None):
     from . import JobWorkflowDialog
 

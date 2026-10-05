@@ -348,7 +348,7 @@ class JobEditorSourceMixin:
 
         errors, types, cameras = [], [], []
         try:
-            types = fetch_video_types(kb)
+            types = fetch_video_types(kb, getattr(self._settings, "default_sport_code", "football"))
         except Exception as exc:
             errors.append(f"Video-Typen: {exc}")
         try:

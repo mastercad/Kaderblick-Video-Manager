@@ -76,5 +76,5 @@ class DeviceSettings:
 
 @dataclass
 class CameraSettings:
-    source: str = ""
+    source: str = "/opt/camera_api/recordings"
     devices: list = field(default_factory=list)
