@@ -8,8 +8,11 @@ Geprüft:
 """
 
 import os
+import json
+import struct
 import tempfile
 import threading
+import wave
 from pathlib import Path
 from unittest.mock import MagicMock, patch, call
 
@@ -576,6 +579,87 @@ class TestRunYouTubeConvert:
 
 
 class TestRunConvertCompatibility:
+    def test_timestamped_mjpeg_and_wav_use_shared_clock_for_avi_sync(self, tmp_path):
+        metadata = struct.Struct(">4sBBHQIQQI")
+        audio_header = struct.Struct("<4sHHIIIIHHQQ")
+        audio_record = struct.Struct("<QQII")
+
+        def segment(marker, payload):
+            return bytes((0xFF, marker)) + (len(payload) + 2).to_bytes(2, "big") + payload
+
+        def frame(index, sequence, timestamp_ns, fps=None):
+            parts = [b"\xff\xd8"]
+            if fps:
+                parts.append(segment(0xFE, json.dumps({"fps": fps}).encode()))
+            parts.append(segment(0xEF, metadata.pack(
+                b"KBFM", 1, 0, metadata.size, index, sequence,
+                timestamp_ns, timestamp_ns + 1_000_000, 0,
+            )))
+            return b"".join((*parts, segment(0xDA, b""), b"pixels", b"\xff\xd9"))
+
+        source = tmp_path / "input.mjpg"
+        original_frames = [
+            frame(0, 20, 1_000_000_000, 15),
+            frame(1, 22, 1_066_667_000),
+            frame(2, 26, 1_200_000_000),
+        ]
+        source.write_bytes(b"".join(original_frames))
+        audio = source.with_suffix(".wav")
+        with wave.open(str(audio), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(48_000)
+            output.writeframes(b"\x00\x00" * 19_200)  # 0.4 s
+
+        anchors = [
+            (1_200, 925_000_000, 1_200, 0),
+            (19_200, 1_300_000_000, 1_920, 0),
+        ]
+        payload = audio_header.pack(
+            b"KATS", 1, audio_header.size, audio_record.size,
+            0x07, 1, 48_000, 1, 16, 900_000_000, len(anchors),
+        ) + b"".join(audio_record.pack(*anchor) for anchor in anchors)
+        with audio.open("r+b") as output:
+            output.seek(0, 2)
+            output.write(b"kbts" + struct.pack("<I", len(payload)) + payload)
+            size = output.tell()
+            output.seek(4)
+            output.write(struct.pack("<I", size - 8))
+
+        target = tmp_path / "output.avi"
+        settings = AppSettings()
+        settings.video.output_format = "avi"
+        settings.video.fps = 15
+        settings.video.audio_sync = True
+        settings.video.overwrite = True
+        settings.audio.include_audio = True
+        settings.audio.amplify_audio = False
+        job = ConvertJob(source_path=source, output_path=target)
+        captured = {}
+
+        def fake_run_ffmpeg(cmd, **kwargs):
+            captured["cmd"] = cmd
+            captured["chunks"] = list(kwargs["input_chunks"])
+            target.touch()
+            return 0
+
+        with patch("src.media.converter.get_duration", return_value=None), \
+             patch("src.media.converter.run_ffmpeg", side_effect=fake_run_ffmpeg):
+            assert run_convert(job, settings) is True
+
+        assert "pipe:0" in captured["cmd"]
+        assert str(source) not in captured["cmd"]
+        assert captured["chunks"] == [
+            original_frames[0], original_frames[1], original_frames[1], original_frames[2]
+        ]
+        audio_filter = captured["cmd"][captured["cmd"].index("-af") + 1]
+        assert "atrim=start_sample=4800" in audio_filter
+        assert "asetpts=PTS-STARTPTS" in audio_filter
+        assert "asetrate=48000.000000000" in audio_filter
+        assert "aresample=48000" in audio_filter
+        assert captured["cmd"][captured["cmd"].index("-r") + 1] == "15"
+        assert captured["cmd"][captured["cmd"].index("-c:a") + 1] == "pcm_s16le"
+
     @patch("src.media.converter.run_ffmpeg", return_value=0)
     @patch("src.media.converter.get_duration", return_value=12.0)
     @patch("src.media.converter.get_video_stream_info", return_value={"fps": 25.0, "bit_rate": 6000000, "codec_name": "h264"})

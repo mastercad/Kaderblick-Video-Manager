@@ -39,6 +39,19 @@ class _FakePopen:
         return self.returncode
 
 
+class _FakeStdin:
+    def __init__(self):
+        self.data = bytearray()
+        self.closed = False
+
+    def write(self, value):
+        self.data.extend(value)
+        return len(value)
+
+    def close(self):
+        self.closed = True
+
+
 class TestValidateMediaOutput:
     def test_rejects_invalid_mp4_without_moov(self, tmp_path):
         path = tmp_path / "broken.mp4"
@@ -175,3 +188,15 @@ def test_run_ffmpeg_forwards_platform_process_group_kwargs():
     assert rc == 0
     assert popen_kwargs["creationflags"] == 1234
     assert "preexec_fn" not in popen_kwargs
+
+
+def test_run_ffmpeg_streams_input_chunks_to_stdin():
+    process = _FakePopen()
+    process.stdin = _FakeStdin()
+
+    with patch("src.media.ffmpeg_runner.subprocess.Popen", return_value=process):
+        rc = run_ffmpeg(["ffmpeg", "-i", "pipe:0"], input_chunks=[b"one", b"two"])
+
+    assert rc == 0
+    assert process.stdin.data == b"onetwo"
+    assert process.stdin.closed is True

@@ -25,6 +25,15 @@ from .ffmpeg_runner import (
     get_video_stream_info, get_audio_stream_info,
     validate_media_output,
 )
+from .mjpeg_timeline import (
+    MjpegTimelineAnalysis,
+    WavTimelineAnalysis,
+    analyze_mjpeg_timeline,
+    analyze_wav_timeline,
+    has_frame_timestamps,
+    iter_reconstructed_mjpeg,
+    wav_duration,
+)
 from ..integrations.youtube_title_editor import build_output_filename_from_title
 
 # Rohe MJPEG-Streams benötigen -framerate/-f mjpeg Input-Flags.
@@ -267,7 +276,7 @@ def run_convert(job: ConvertJob, settings: AppSettings,
     input_duration = None
     audio_duration = None
     if wav_path:
-        audio_duration = get_duration(wav_path)
+        audio_duration = wav_duration(wav_path) or get_duration(wav_path)
         input_duration = audio_duration
     if not input_duration:
         input_duration = get_duration(src)
@@ -282,27 +291,97 @@ def run_convert(job: ConvertJob, settings: AppSettings,
     # Lösung: tatsächliche Frames zählen und Input-Framerate so
     # anpassen, dass Video-Dauer = Audio-Dauer.
     effective_fps = vs.fps
+    timestamp_analysis: MjpegTimelineAnalysis | None = None
+    audio_timestamp_analysis: WavTimelineAnalysis | None = None
+    audio_lead_seconds = 0.0
+    audio_delay_samples = 0
     if (is_raw_mjpeg and vs.audio_sync and wav_path
             and audio_duration and audio_duration > 0):
-        frame_count = count_frames(src, cancel_flag=cancel_flag,
-                                   log_callback=log_callback)
-        if cancel_flag and cancel_flag.is_set():
-            job.status = "Abgebrochen"
-            return False
-        if frame_count and frame_count > 0:
-            video_duration = frame_count / vs.fps
-            drift = abs(video_duration - audio_duration)
-            drift_pct = drift / audio_duration * 100
-            if drift_pct > 0.1:  # > 0.1% Abweichung → anpassen
-                effective_fps = frame_count / audio_duration
-                log(f"Audio-Sync: {frame_count} Frames, "
-                    f"Audio {audio_duration:.1f}s, "
-                    f"Video {video_duration:.1f}s "
-                    f"(Δ {drift:.1f}s / {drift_pct:.1f}%)")
-                log(f"Framerate angepasst: {vs.fps} → {effective_fps:.4f} FPS")
+        if has_frame_timestamps(src):
+            log("Audio-Sync: analysiere eingebettete Frame-Zeitstempel …")
+            timestamp_analysis = analyze_mjpeg_timeline(
+                src,
+                fallback_fps=float(vs.fps),
+                cancel_flag=cancel_flag,
+                log_callback=log_callback,
+            )
+        if timestamp_analysis is not None:
+            effective_fps = timestamp_analysis.fps
+            input_duration = timestamp_analysis.duration
+            audio_timestamp_analysis = analyze_wav_timeline(wav_path)
+            log(
+                f"Frame-Zeitachse: {timestamp_analysis.source_frames:,} Originalframes, "
+                f"{timestamp_analysis.inserted_frames:,} fehlende Frames an "
+                f"{len(timestamp_analysis.drops):,} Stelle(n), "
+                f"{timestamp_analysis.duration:.3f}s bei {effective_fps:g} FPS"
+            )
+            for drop in timestamp_analysis.drops[:20]:
+                log(
+                    f"  Frame-Drop nach #{drop.after_frame_index}: "
+                    f"{drop.missing_frames} Frame(s), Luecke {drop.gap_seconds:.3f}s, "
+                    f"V4L2-Sequenz {drop.previous_sequence}->{drop.next_sequence}"
+                )
+            if len(timestamp_analysis.drops) > 20:
+                log(f"  … {len(timestamp_analysis.drops) - 20} weitere Frame-Drops")
+            if audio_timestamp_analysis is not None:
+                audio_start_sample = audio_timestamp_analysis.sample_at_timestamp(
+                    timestamp_analysis.first_timestamp_ns
+                )
+                if audio_start_sample >= 0:
+                    audio_lead_seconds = (
+                        audio_start_sample / audio_timestamp_analysis.effective_sample_rate
+                    )
+                    log(
+                        f"Audio-Zeitachse: {len(audio_timestamp_analysis.anchors):,} ALSA-Anker, "
+                        f"Vorlauf {audio_lead_seconds:.6f}s / {audio_start_sample:,} Samples, "
+                        f"Taktrate {audio_timestamp_analysis.effective_sample_rate:.3f} Hz "
+                        f"({audio_timestamp_analysis.rate_error_ppm:+.1f} ppm), "
+                        f"XRUNs {audio_timestamp_analysis.xrun_count}"
+                    )
+                else:
+                    audio_delay_samples = round(
+                        -audio_start_sample
+                        * audio_timestamp_analysis.sample_rate
+                        / audio_timestamp_analysis.effective_sample_rate
+                    )
+                    log(
+                        f"Audio-Zeitachse: Audio beginnt "
+                        f"{-audio_start_sample / audio_timestamp_analysis.effective_sample_rate:.6f}s "
+                        f"nach dem ersten Videoframe; fuege {audio_delay_samples:,} Samples Stille ein"
+                    )
+                if audio_timestamp_analysis.xrun_count:
+                    log(
+                        f"WARNUNG: {audio_timestamp_analysis.xrun_count} Audio-XRUN(s) erkannt; "
+                        "die betroffenen Audioluecken sind nicht verlustfrei rekonstruierbar"
+                    )
             else:
-                log(f"Audio-Sync: OK ({frame_count} Frames, "
-                    f"Δ {drift:.1f}s)")
+                # Kompatibilitaet fuer Aufnahmen ohne kbts-Audiozeitachse.
+                audio_lead_seconds = max(0.0, audio_duration - timestamp_analysis.duration)
+                if audio_lead_seconds > 0:
+                    log(
+                        "Audio-Sync ohne kbts-Zeitanker: "
+                        f"Vorlauf wird aus der Dauerdifferenz geschaetzt ({audio_lead_seconds:.3f}s)"
+                    )
+        else:
+            frame_count = count_frames(src, cancel_flag=cancel_flag,
+                                       log_callback=log_callback)
+            if cancel_flag and cancel_flag.is_set():
+                job.status = "Abgebrochen"
+                return False
+            if frame_count and frame_count > 0:
+                video_duration = frame_count / vs.fps
+                drift = abs(video_duration - audio_duration)
+                drift_pct = drift / audio_duration * 100
+                if drift_pct > 0.1:  # > 0.1% Abweichung → anpassen
+                    effective_fps = frame_count / audio_duration
+                    log(f"Audio-Sync (Altaufnahme ohne Frame-Zeitstempel): {frame_count} Frames, "
+                        f"Audio {audio_duration:.1f}s, "
+                        f"Video {video_duration:.1f}s "
+                        f"(Δ {drift:.1f}s / {drift_pct:.1f}%)")
+                    log(f"Framerate angepasst: {vs.fps} → {effective_fps:.4f} FPS")
+                else:
+                    log(f"Audio-Sync: OK ({frame_count} Frames, "
+                        f"Δ {drift:.1f}s)")
 
     # ── Quelldatei analysieren (Codec, FPS, Bitrate) ───────────────────────────
     # Für Container-Formate: tatsächliche Quell-FPS und Bitrate ermitteln.
@@ -359,7 +438,7 @@ def run_convert(job: ConvertJob, settings: AppSettings,
         if is_raw_mjpeg:
             cmd += ["-fflags", "+genpts",
                     "-framerate", f"{effective_fps:.6f}", "-f", "mjpeg",
-                    "-i", str(src)]
+                    "-i", "pipe:0" if timestamp_analysis is not None else str(src)]
         else:
             cmd += ["-fflags", "+genpts", "-i", str(src)]
         if wav_path:
@@ -381,7 +460,7 @@ def run_convert(job: ConvertJob, settings: AppSettings,
             log(f"Encoder:  {encoder}")
             cmd += encoder_args
         else:
-            cmd += ["-c:v", "mjpeg", "-q:v", "2", "-r", str(vs.fps)]
+            cmd += ["-c:v", "mjpeg", "-q:v", "2", "-r", f"{effective_fps:g}"]
 
         if target_dimensions is not None:
             cmd += ["-vf", _build_scale_pad_filter(target_dimensions[0], target_dimensions[1])]
@@ -396,24 +475,44 @@ def run_convert(job: ConvertJob, settings: AppSettings,
 
         # Audio-Handling
         # Filter-Kette: volume (Verstärkung) → loudnorm (EBU R128)
-        _amplify_filter = f"volume={aus.amplify_db}dB,loudnorm"
+        audio_filters: list[str] = []
+        if audio_timestamp_analysis is not None:
+            if audio_lead_seconds > 0:
+                start_sample = audio_timestamp_analysis.sample_at_timestamp(
+                    timestamp_analysis.first_timestamp_ns
+                )
+                audio_filters.append(f"atrim=start_sample={start_sample}")
+            audio_filters += [
+                "asetpts=PTS-STARTPTS",
+                f"asetrate={audio_timestamp_analysis.effective_sample_rate:.9f}",
+                f"aresample={audio_timestamp_analysis.sample_rate}",
+            ]
+            if audio_delay_samples > 0:
+                audio_filters.append(f"adelay={audio_delay_samples}S:all=1")
+        elif audio_lead_seconds > 0:
+            audio_filters += [f"atrim=start={audio_lead_seconds:.6f}", "asetpts=PTS-STARTPTS"]
+        if aus.amplify_audio:
+            audio_filters += [f"volume={aus.amplify_db}dB", "loudnorm"]
 
         if wav_path:
             if vs.output_format == "mp4":
                 cmd += build_aac_audio_args(aus.audio_bitrate)
             else:
-                cmd += ["-c:a", "aac", "-b:a", aus.audio_bitrate]
-            if aus.amplify_audio:
-                cmd += ["-af", _amplify_filter]
+                # PCM vermeidet AAC-Priming und Blockrundung im AVI-Container.
+                # Damit bleibt die aus den kbts-Ankern berechnete Sampleposition
+                # auch in der fertigen Datei exakt erhalten.
+                cmd += ["-c:a", "pcm_s16le"]
+            if audio_filters:
+                cmd += ["-af", ",".join(audio_filters)]
             cmd += ["-shortest"]
         elif has_embedded_audio:
             if vs.output_format == "mp4":
                 cmd += build_aac_audio_args(aus.audio_bitrate)
-                if aus.amplify_audio:
-                    cmd += ["-af", _amplify_filter]
+                if audio_filters:
+                    cmd += ["-af", ",".join(audio_filters)]
             elif aus.amplify_audio:
                 cmd += ["-c:a", "aac", "-b:a", aus.audio_bitrate,
-                        "-af", _amplify_filter]
+                        "-af", ",".join(audio_filters)]
             else:
                 cmd += ["-c:a", "copy"]
         else:
@@ -426,10 +525,15 @@ def run_convert(job: ConvertJob, settings: AppSettings,
     log("Starte ffmpeg …")
     log(f"  CMD: {' '.join(cmd)}")
 
+    input_chunks = (
+        iter_reconstructed_mjpeg(src, timestamp_analysis, cancel_flag=cancel_flag)
+        if timestamp_analysis is not None else None
+    )
     rc = run_ffmpeg(cmd, duration=input_duration,
                     cancel_flag=cancel_flag,
                     log_callback=log_callback,
-                    progress_callback=progress_callback)
+                    progress_callback=progress_callback,
+                    input_chunks=input_chunks)
 
     if rc == -1:
         job.status = "Abgebrochen"

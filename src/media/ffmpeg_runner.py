@@ -16,7 +16,7 @@ import subprocess
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Iterable, Optional
 
 from ..runtime_paths import bundled_binary_path, popen_process_group_kwargs, terminate_process_tree
 
@@ -526,7 +526,8 @@ def count_frames(filepath: Path,
 def run_ffmpeg(cmd: list, duration: Optional[float] = None,
                cancel_flag: Optional[threading.Event] = None,
                log_callback=None,
-               progress_callback=None) -> int:
+               progress_callback=None,
+               input_chunks: Optional[Iterable[bytes]] = None) -> int:
     """Führt ffmpeg als Popen aus mit Fortschrittsanzeige und Abbruch.
 
     Liest den Fortschritt aus der stderr-Statuszeile (``time=HH:MM:SS.xx``),
@@ -538,12 +539,14 @@ def run_ffmpeg(cmd: list, duration: Optional[float] = None,
         cancel_flag: threading.Event – wenn gesetzt, wird der Prozess abgebrochen.
         log_callback: Callable für Log-Nachrichten.
         progress_callback: Callable(percent: int) für Fortschritt 0–100.
+        input_chunks: Optionaler Byte-Strom fuer einen ffmpeg-Input ``pipe:0``.
 
     Returns:
         Exit-Code des Prozesses (``-1`` bei Abbruch).
     """
     proc = subprocess.Popen(
         cmd,
+        stdin=subprocess.PIPE if input_chunks is not None else None,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         # stderr im Binary-Mode lesen weil ffmpeg \r ohne \n benutzt
@@ -552,6 +555,26 @@ def run_ffmpeg(cmd: list, duration: Optional[float] = None,
     )
 
     cancelled = False
+    feeder_error: list[Exception] = []
+
+    def _feed_stdin() -> None:
+        if input_chunks is None or proc.stdin is None:
+            return
+        try:
+            for chunk in input_chunks:
+                if cancel_flag and cancel_flag.is_set():
+                    break
+                proc.stdin.write(chunk)
+            proc.stdin.close()
+        except (BrokenPipeError, OSError, ValueError) as exc:
+            feeder_error.append(exc)
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    feeder = threading.Thread(target=_feed_stdin, daemon=True)
+    feeder.start()
 
     # Watcher-Thread: überwacht das cancel_flag unabhängig von der
     # Read-Schleife und killt den Prozess sofort.
@@ -637,9 +660,15 @@ def run_ffmpeg(cmd: list, duration: Optional[float] = None,
         proc.wait()
 
     watcher.join(timeout=2)
+    feeder.join(timeout=2)
 
     if cancelled:
         return -1
+
+    if feeder_error and proc.returncode == 0:
+        if log_callback:
+            log_callback(f"  MJPEG-Zufuhr fehlgeschlagen: {feeder_error[-1]}")
+        return 1
 
     # Erfolg → 100 %
     if proc.returncode == 0 and progress_callback:
