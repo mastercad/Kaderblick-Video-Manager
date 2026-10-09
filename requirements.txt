@@ -2,7 +2,9 @@
 # Python 3.11+ erforderlich
 
 # GUI
-PySide6>=6.5.0
+# PySide6 6.12.0 aborts during QApplication teardown on Linux
+# ("none_dealloc: deallocating None") in the workflow-dialog test suite.
+PySide6==6.11.2
 
 # YouTube Upload
 google-api-python-client>=2.100.0
