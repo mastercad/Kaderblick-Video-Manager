@@ -1698,7 +1698,9 @@ class TestTransferResumeFallbacks:
         download_root = tmp_path / "downloads"
         download_root.mkdir(parents=True)
         reused = download_root / "take1.mjpg"
+        reused_wav = download_root / "take1.wav"
         reused.write_text("data", encoding="utf-8")
+        reused_wav.write_text("audio", encoding="utf-8")
 
         settings = _make_settings()
         settings.cameras.devices = [SimpleNamespace(name="Cam1", ip="1.2.3.4")]
@@ -1718,7 +1720,10 @@ class TestTransferResumeFallbacks:
             device_name="Cam1",
             download_destination=str(download_root),
             convert_enabled=True,
-            files=[FileEntry(source_path="take1.mp4")],
+            files=[FileEntry(
+                source_path="take1.mjpg",
+                source_size_bytes=reused.stat().st_size + reused_wav.stat().st_size,
+            )],
             graph_nodes=[
                 {"id": "src-1", "type": "source_pi_download"},
                 {"id": "conv-1", "type": "convert"},
@@ -2162,7 +2167,9 @@ class TestKaderblickPublish:
         download_root = tmp_path / "downloads"
         download_root.mkdir(parents=True)
         reused = download_root / "take1.mjpg"
+        reused_wav = download_root / "take1.wav"
         reused.write_text("data", encoding="utf-8")
+        reused_wav.write_text("audio", encoding="utf-8")
 
         settings = _make_settings()
         settings.cameras.devices = [SimpleNamespace(name="Cam1", ip="1.2.3.4")]
@@ -2172,7 +2179,10 @@ class TestKaderblickPublish:
             source_mode="pi_download",
             device_name="Cam1",
             download_destination=str(download_root),
-            files=[FileEntry(source_path="take1.mp4")],
+            files=[FileEntry(
+                source_path="take1.mjpg",
+                source_size_bytes=reused.stat().st_size + reused_wav.stat().st_size,
+            )],
         )
         ex = WorkflowExecutor(Workflow(), settings)
         ex._download_func = MagicMock(side_effect=RuntimeError("offline"))
@@ -2196,9 +2206,11 @@ class TestKaderblickPublish:
         ex = WorkflowExecutor(Workflow(), settings, allow_reuse_existing=False)
         ex._download_func = MagicMock(return_value=[])
 
-        ex._download_from_pi(0, job)
+        with pytest.raises(RuntimeError, match="vollständig übertragen"):
+            ex._download_from_pi(0, job)
 
         assert ex._download_func.call_args.kwargs["allow_reuse_existing"] is False
+        assert ex._download_func.call_args.kwargs["raise_on_failure"] is True
 
     @patch("src.workflow_steps.youtube_upload_step.YoutubeUploadStep._upload_to_youtube", return_value=True)
     def test_resume_reuses_existing_converted_output_and_continues_pipeline(self, mock_upload, tmp_path):

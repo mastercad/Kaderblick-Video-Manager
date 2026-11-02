@@ -198,6 +198,8 @@ def _build_statusbar(self: QMainWindow):
 
 
 def _refresh_table(self):
+    from ..ui.source_icons import source_mode_icon
+
     jobs = self._workflow.jobs
     show_archived = bool(
         hasattr(self, "act_show_archived") and self.act_show_archived.isChecked()
@@ -206,7 +208,9 @@ def _refresh_table(self):
     for row, job in enumerate(jobs):
         self.table.setItem(row, 0, QTableWidgetItem(str(row + 1)))
         self.table.setItem(row, 1, QTableWidgetItem(job.name or "–"))
-        self.table.setItem(row, 2, QTableWidgetItem(_summarize_source(job)))
+        source_item = QTableWidgetItem(_summarize_source(job))
+        source_item.setIcon(source_mode_icon(job.source_mode, self.table))
+        self.table.setItem(row, 2, source_item)
         pipeline_item = QTableWidgetItem(_summarize_pipeline(job))
         pipeline_item.setToolTip("Doppelklick für Workflow-Editor")
         self.table.setItem(row, 3, pipeline_item)

@@ -3495,11 +3495,17 @@ class TestStartWorkflowResetsOnlyActiveRows:
 class TestSummarizeSource:
     """Branch-Abdeckung für _summarize_source (helpers.py L23-28)."""
 
+    def test_files_shows_count_without_font_dependent_icon(self):
+        job = WorkflowJob(
+            source_mode="files",
+            files=[FileEntry(source_path="/tmp/a.mp4")],
+        )
+        assert _summarize_source(job) == "1 Datei"
+
     def test_folder_scan_with_folder_shows_folder_name(self):
         job = WorkflowJob(source_mode="folder_scan", source_folder="/srv/videos/spieltag")
         result = _summarize_source(job)
-        assert "spieltag" in result
-        assert "📁" in result
+        assert result == "spieltag"
 
     def test_folder_scan_without_folder_shows_dash(self):
         job = WorkflowJob(source_mode="folder_scan", source_folder="")
@@ -3509,8 +3515,7 @@ class TestSummarizeSource:
     def test_pi_download_with_device_name_shows_name(self):
         job = WorkflowJob(source_mode="pi_download", device_name="Pi Nord")
         result = _summarize_source(job)
-        assert "Pi Nord" in result
-        assert "📷" in result
+        assert result == "Pi Nord"
 
     def test_pi_download_without_device_name_shows_dash(self):
         job = WorkflowJob(source_mode="pi_download", device_name="")
@@ -3521,6 +3526,44 @@ class TestSummarizeSource:
         job = WorkflowJob(source_mode="unbekannt")
         result = _summarize_source(job)
         assert result == "?"
+
+    def test_all_source_modes_have_native_icons(self):
+        from src.ui.source_icons import source_mode_icon
+
+        for source_mode in ("files", "folder_scan", "pi_download"):
+            assert not source_mode_icon(source_mode).isNull()
+
+    def test_main_table_shows_native_icons_and_plain_source_text(self):
+        window = _new_app()
+        try:
+            window._workflow.jobs = [
+                WorkflowJob(
+                    name="Dateien",
+                    source_mode="files",
+                    files=[FileEntry(source_path="/tmp/a.mp4")],
+                ),
+                WorkflowJob(
+                    name="Ordner",
+                    source_mode="folder_scan",
+                    source_folder="/srv/videos/spieltag",
+                ),
+                WorkflowJob(
+                    name="Kamera",
+                    source_mode="pi_download",
+                    device_name="Kaderblick Kamera Links",
+                ),
+            ]
+
+            window._refresh_table()
+
+            assert [window.table.item(row, 2).text() for row in range(3)] == [
+                "1 Datei",
+                "spieltag",
+                "Kaderblick Kamera Links",
+            ]
+            assert all(not window.table.item(row, 2).icon().isNull() for row in range(3))
+        finally:
+            window.close()
 
 
 class TestSummarizePipeline:

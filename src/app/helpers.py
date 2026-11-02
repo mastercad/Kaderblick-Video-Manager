@@ -15,16 +15,14 @@ from ..workflow import (
 
 
 def _summarize_source(job: WorkflowJob) -> str:
-    mode_icons = {"files": "🗃", "folder_scan": "📁", "pi_download": "📷"}
-    icon = mode_icons.get(job.source_mode, "?")
     if job.source_mode == "files":
         count = len(job.files)
-        return f"{icon} {count} Datei{'en' if count != 1 else ''}"
+        return f"{count} Datei{'en' if count != 1 else ''}"
     if job.source_mode == "folder_scan":
         folder = Path(job.source_folder).name if job.source_folder else "–"
-        return f"{icon} {folder}"
+        return folder
     if job.source_mode == "pi_download":
-        return f"{icon} {job.device_name or '–'}"
+        return job.device_name or "–"
     return "?"
 
 

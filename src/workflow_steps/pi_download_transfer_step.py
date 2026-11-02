@@ -10,6 +10,14 @@ from .executor_support import ExecutorSupport
 class PiDownloadTransferStep:
     name = "pi-download-transfer"
 
+    @staticmethod
+    def _covers_selection(job: WorkflowJob, paths: list[str]) -> bool:
+        if not job.files:
+            return bool(paths)
+        expected = {Path(entry.source_path).stem for entry in job.files}
+        actual = {Path(path).stem for path in paths}
+        return actual == expected
+
     def execute(
         self,
         executor: Any,
@@ -73,6 +81,7 @@ class PiDownloadTransferStep:
                 create_device_subdir=False,
                 delete_after_download=job.delete_after_download,
                 selective_bases=selective,
+                raise_on_failure=True,
             )
         except Exception as exc:
             if cancel_flag.is_set():
@@ -81,7 +90,7 @@ class PiDownloadTransferStep:
                 executor._set_job_status(orig_idx, "Transfer abgebrochen")
                 return []
             fallback = self._existing_targets(executor, job) if ExecutorSupport.allow_reuse_existing(executor) else []
-            if fallback:
+            if self._covers_selection(job, fallback):
                 executor.log_message.emit(
                     f"  ↩ Download nicht möglich ({exc}) – nutze {len(fallback)} vorhandene Datei(en) im Zielverzeichnis"
                 )
@@ -99,7 +108,7 @@ class PiDownloadTransferStep:
             executor._set_step_detail(job, "transfer", f"Download von {device.name} ({device.ip}) | Durch Benutzer abgebrochen")
             executor._set_job_status(orig_idx, "Transfer abgebrochen")
             return []
-        if paths:
+        if self._covers_selection(job, paths):
             executor._set_step_detail(
                 job,
                 "transfer",
@@ -111,7 +120,7 @@ class PiDownloadTransferStep:
             return paths
 
         fallback = self._existing_targets(executor, job) if ExecutorSupport.allow_reuse_existing(executor) else []
-        if fallback:
+        if self._covers_selection(job, fallback):
             executor.log_message.emit(
                 f"  ↩ Keine neue Übertragung – nutze {len(fallback)} vorhandene Datei(en) im Zielverzeichnis"
             )
@@ -121,7 +130,11 @@ class PiDownloadTransferStep:
                 for path in fallback:
                     on_file_ready(path)
             return fallback
-        return []
+        selected = len(job.files)
+        selection = f"{selected} ausgewählte Aufnahme(n)" if selected else "keine vollständige Aufnahme"
+        raise RuntimeError(
+            f"Download von {device.name} ({device.ip}) fehlgeschlagen: {selection} vollständig übertragen"
+        )
 
     @staticmethod
     def _existing_targets(executor: Any, job: WorkflowJob) -> list[str]:
@@ -131,7 +144,24 @@ class PiDownloadTransferStep:
         local_dir = dest_root
         if not local_dir.exists():
             return []
-        if job.files:
-            wanted = {Path(entry.source_path).stem for entry in job.files}
-            return [str(path) for path in sorted(local_dir.glob("*.mjpg")) if path.stem in wanted]
-        return [str(path) for path in sorted(local_dir.glob("*.mjpg"))]
+        # Ein Dateiname allein belegt keinen erfolgreichen Download. Gerade
+        # rsync behaelt partielle Dateien fuer das Fortsetzen. Deshalb darf
+        # nur ein vollstaendiges MJPG/WAV-Paar mit exakt der beim Einlesen der
+        # Kamera ermittelten Gesamtgroesse wiederverwendet werden.
+        complete: list[str] = []
+        for entry in job.files:
+            expected_size = int(entry.source_size_bytes or 0)
+            if expected_size <= 0:
+                continue
+            stem = Path(entry.source_path).stem
+            mjpg_path = local_dir / f"{stem}.mjpg"
+            wav_path = local_dir / f"{stem}.wav"
+            if not mjpg_path.is_file() or not wav_path.is_file():
+                continue
+            try:
+                actual_size = mjpg_path.stat().st_size + wav_path.stat().st_size
+            except OSError:
+                continue
+            if actual_size == expected_size:
+                complete.append(str(mjpg_path))
+        return complete

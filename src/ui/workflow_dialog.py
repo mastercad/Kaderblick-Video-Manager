@@ -31,20 +31,19 @@ from ..workflow import (
 )
 from ..workflow.graph import graph_reachable_types
 from .job_editor import JobEditorDialog
+from .source_icons import source_mode_icon
 
 
 # Kompakt-Beschreibungen für die Übersichtstabelle
 def _summarize_source(job: WorkflowJob) -> str:
-    mode_icons = {"files": "🗃", "folder_scan": "📁", "pi_download": "📷"}
-    icon = mode_icons.get(job.source_mode, "?")
     if job.source_mode == "files":
         n = len(job.files)
-        return f"{icon} {n} Datei{'en' if n != 1 else ''}"
+        return f"{n} Datei{'en' if n != 1 else ''}"
     if job.source_mode == "folder_scan":
         folder = Path(job.source_folder).name if job.source_folder else "–"
-        return f"{icon} {folder}  ({job.file_pattern})"
+        return f"{folder}  ({job.file_pattern})"
     if job.source_mode == "pi_download":
-        return f"{icon} {job.device_name or '–'}"
+        return job.device_name or "–"
     return "?"
 
 
@@ -232,7 +231,9 @@ class WorkflowDialog(QDialog):
             self._job_table.setItem(row, 0, chk)
 
             self._job_table.setItem(row, 1, QTableWidgetItem(job.name))
-            self._job_table.setItem(row, 2, QTableWidgetItem(_summarize_source(job)))
+            source_item = QTableWidgetItem(_summarize_source(job))
+            source_item.setIcon(source_mode_icon(job.source_mode, self._job_table))
+            self._job_table.setItem(row, 2, source_item)
             self._job_table.setItem(row, 3, QTableWidgetItem(_summarize_processing(job)))
             self._job_table.setItem(row, 4, QTableWidgetItem(_summarize_audio(job)))
             self._job_table.setItem(row, 5, QTableWidgetItem(_summarize_youtube(job)))

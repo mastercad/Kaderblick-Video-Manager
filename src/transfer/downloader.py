@@ -1,6 +1,7 @@
 """Download-Logik: Videos von Raspberry Pi Kameras via SFTP/rsync herunterladen."""
 
 import os
+import shlex
 import shutil
 import subprocess
 import time
@@ -33,17 +34,20 @@ _PIPELINE_DEPTH = 256
 #  SSH / SFTP Verbindung
 # ═════════════════════════════════════════════════════════════════
 
-def _connect(device: DeviceSettings):
-    """Baut SSH-Verbindung auf und gibt (SSHClient, SFTPClient) zurück."""
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-
+def _ssh_connect_kwargs(device: DeviceSettings, timeout: int) -> dict:
+    """Build one deterministic authentication configuration per device."""
     kwargs: dict = {
         "hostname": device.ip,
         "port": device.port,
         "username": device.username,
-        "timeout": 30,
+        "timeout": timeout,
     }
+
+    if device.password:
+        kwargs["password"] = device.password
+        kwargs["look_for_keys"] = False
+        kwargs["allow_agent"] = False
+        return kwargs
 
     key_path = os.path.expanduser(device.ssh_key) if device.ssh_key else ""
     if key_path and os.path.exists(key_path):
@@ -53,11 +57,15 @@ def _connect(device: DeviceSettings):
     else:
         kwargs["look_for_keys"] = True
         kwargs["allow_agent"] = True
+    return kwargs
 
-    if device.password:
-        kwargs["password"] = device.password
 
-    client.connect(**kwargs)
+def _connect(device: DeviceSettings):
+    """Baut SSH-Verbindung auf und gibt (SSHClient, SFTPClient) zurück."""
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+
+    client.connect(**_ssh_connect_kwargs(device, timeout=30))
 
     # Keep-Alive alle 30 s – verhindert Timeout bei langen Transfers
     transport = client.get_transport()
@@ -104,23 +112,7 @@ def _ssh_exec(device: DeviceSettings, cmd: str, timeout: int = 20) -> bool:
     client = paramiko.SSHClient()
     client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     try:
-        key_path = os.path.expanduser(device.ssh_key) if device.ssh_key else ""
-        kwargs: dict = {
-            "hostname": device.ip,
-            "port": device.port,
-            "username": device.username,
-            "timeout": timeout,
-        }
-        if key_path and os.path.exists(key_path):
-            kwargs["key_filename"] = key_path
-            kwargs["look_for_keys"] = False
-            kwargs["allow_agent"] = False
-        else:
-            kwargs["look_for_keys"] = True
-            kwargs["allow_agent"] = True
-        if device.password:
-            kwargs["password"] = device.password
-        client.connect(**kwargs)
+        client.connect(**_ssh_connect_kwargs(device, timeout=timeout))
         _, _, stderr = client.exec_command(cmd, timeout=timeout)
         rc = stderr.channel.recv_exit_status()
         return rc == 0
@@ -298,13 +290,36 @@ def _build_ssh_cmd(device: DeviceSettings) -> str:
     ]
     if device.port != 22:
         parts += ["-p", str(device.port)]
-    if device.ssh_key:
+    if device.password:
+        parts += [
+            "-o", "PubkeyAuthentication=no",
+            "-o", "IdentityAgent=none",
+            "-o", "PreferredAuthentications=password",
+            "-o", "KbdInteractiveAuthentication=no",
+            "-o", "PasswordAuthentication=yes",
+            "-o", "NumberOfPasswordPrompts=1",
+        ]
+    elif device.ssh_key:
         key = os.path.expanduser(device.ssh_key)
         parts += ["-i", key]
+        # Nur den explizit konfigurierten Kameraschluessel anbieten. Ohne
+        # diese Begrenzung reicht OpenSSH zusaetzlich alle Agent-Schluessel
+        # ein und der Server kann vor dem Passwort-Fallback abbrechen.
+        parts += ["-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none"]
     # Ohne Passwort: BatchMode verhindert jegliche interaktive Abfrage
     if not device.password:
         parts += ["-o", "BatchMode=yes"]
-    return " ".join(parts)
+    return shlex.join(parts)
+
+
+def _noninteractive_ssh_env() -> dict[str, str]:
+    """Return an environment in which OpenSSH cannot launch a GUI prompt."""
+    env = os.environ.copy()
+    env.pop("SSH_ASKPASS", None)
+    env.pop("DISPLAY", None)
+    env.pop("WAYLAND_DISPLAY", None)
+    env["SSH_ASKPASS_REQUIRE"] = "never"
+    return env
 
 
 def _rsync_download_file(
@@ -364,11 +379,9 @@ def _rsync_download_file(
     if device.password:
         cmd = ["sshpass", "-p", device.password] + cmd
 
-    # Umgebung: SSH_ASKPASS und DISPLAY unterdrücken,
-    # damit SSH niemals ein GUI-Passwort-Dialog öffnet.
-    env = os.environ.copy()
-    env.pop("SSH_ASKPASS", None)
-    env.pop("DISPLAY", None)
+    # OpenSSH darf nie einen grafischen Dialog öffnen. Das gilt auch unter
+    # Wayland; das konfigurierte Passwort wird bereits von sshpass geliefert.
+    env = _noninteractive_ssh_env()
 
     try:
         process = subprocess.Popen(
@@ -502,6 +515,7 @@ def download_device(
     create_device_subdir: bool = True,
     delete_after_download: bool = False,
     selective_bases: Optional[set] = None,
+    raise_on_failure: bool = False,
 ) -> list:
     """
     Lädt alle vollständigen Aufnahmen (.mjpg + .wav) von einem Gerät herunter.
@@ -523,7 +537,10 @@ def download_device(
     try:
         client, sftp = _connect(device)
     except Exception as exc:
-        log_cb(f"[Fehler] Verbindung zu {device.name} fehlgeschlagen: {exc}")
+        message = f"Verbindung zu {device.name} fehlgeschlagen: {exc}"
+        log_cb(f"[Fehler] {message}")
+        if raise_on_failure:
+            raise RuntimeError(message) from exc
         return []
 
     # Transfermethode wählen
@@ -562,11 +579,15 @@ def download_device(
         )
 
     results: list = []
+    failed_bases: list[str] = []
     try:
         try:
             remote_files = sftp.listdir(config.source)
         except Exception as exc:
-            log_cb(f"[Fehler] Kann {config.source} auf {device.name} nicht auflisten: {exc}")
+            message = f"Kann {config.source} auf {device.name} nicht auflisten: {exc}"
+            log_cb(f"[Fehler] {message}")
+            if raise_on_failure:
+                raise RuntimeError(message) from exc
             return []
 
         mjpgs = {os.path.splitext(f)[0] for f in remote_files if f.lower().endswith(".mjpg")}
@@ -643,6 +664,7 @@ def download_device(
                     if delete_after_download:
                         _sftp_delete_recording(sftp, config.source, base, log_cb)
                 else:
+                    failed_bases.append(base)
                     log_cb(f"  [Warnung] {base}: Groessenvergleich fehlgeschlagen")
 
             except _CancelledError:
@@ -650,6 +672,7 @@ def download_device(
                 log_cb("  Abgebrochen (Datei bleibt fuer Fortsetzen erhalten).")
                 break
             except Exception as exc:
+                failed_bases.append(base)
                 log_cb(f"[Fehler] Download von {base}: {exc}")
                 # Bei echten Fehlern partielle Dateien entfernen
                 for p in (local_mjpg, local_wav):
@@ -666,4 +689,9 @@ def download_device(
             pass
 
     log_cb(f"{device.name}: {len(results)} Aufnahme(n) heruntergeladen/vorhanden")
+    if raise_on_failure and failed_bases:
+        failed = ", ".join(failed_bases)
+        raise RuntimeError(
+            f"Download von {device.name} unvollständig oder fehlgeschlagen: {failed}"
+        )
     return results
